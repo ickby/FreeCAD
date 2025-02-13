@@ -22,6 +22,7 @@ macro(SetupSalomeSMESH)
             vtkFiltersExtraction
             vtkFiltersSources
             vtkFiltersGeometry
+            vtkWrappingPythonCore
         )
 
         # check which modules are available
@@ -42,7 +43,7 @@ macro(SetupSalomeSMESH)
                     endif()
                 endforeach()
             else()
-                set(VTK_COMPONENTS "CommonCore;CommonDataModel;FiltersVerdict;IOXML;FiltersCore;FiltersGeneral;IOLegacy;FiltersExtraction;FiltersSources;FiltersGeometry")
+                set(VTK_COMPONENTS "CommonCore;CommonDataModel;FiltersVerdict;IOXML;FiltersCore;FiltersGeneral;IOLegacy;FiltersExtraction;FiltersSources;FiltersGeometry;WrappingPythonCore")
                 list(APPEND VTK_COMPONENTS "IOMPIParallel;ParallelMPI;hdf5;FiltersParallelDIY2;RenderingCore;InteractionStyle;RenderingFreeType;RenderingOpenGL2")
                 foreach(_module ${VTK_COMPONENTS})
                     list (FIND VTK_AVAILABLE_COMPONENTS ${_module} _index)
@@ -63,6 +64,12 @@ macro(SetupSalomeSMESH)
         endif()
 
         set(BUILD_FEM_VTK ON)
+
+        # check if PythonWrapperCore was found
+        if ((${VTK_WrappingPythonCore_FOUND}) OR (${VTK_vtkWrappingPythonCore_FOUND}))
+            add_compile_definitions(BUILD_FEM_VTK_WRAPPER)
+        endif()
+
         if(${VTK_MAJOR_VERSION} LESS 6)
             message( FATAL_ERROR "Found VTK version is <6, this is not compatible" )
         endif()

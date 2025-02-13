@@ -1126,6 +1126,7 @@ def create_all_fem_objects_doc(doc):
         ObjectsFem.makePostVtkFilterCutFunction(doc, vres)
         ObjectsFem.makePostVtkFilterWarp(doc, vres)
         ObjectsFem.makePostVtkFilterContours(doc, vres)
+        ObjectsFem.makePostVtkFilterGlyph(doc, vres)
 
     analysis.addObject(ObjectsFem.makeSolverCalculiXCcxTools(doc))
     analysis.addObject(ObjectsFem.makeSolverCalculix(doc))

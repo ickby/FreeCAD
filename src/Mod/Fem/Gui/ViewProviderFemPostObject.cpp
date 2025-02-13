@@ -51,7 +51,6 @@
 #endif
 
 #include <App/Document.h>
-#include <Base/Console.h>
 #include <Gui/Application.h>
 #include <Gui/Control.h>
 #include <Gui/Document.h>
@@ -185,7 +184,7 @@ ViewProviderFemPostObject::ViewProviderFemPostObject()
     LineWidth.setConstraints(&sizeRange);
     PointSize.setConstraints(&sizeRange);
 
-    sPixmap = "fem-femmesh-from-shape";
+    sPixmap = "FEM_PostPipelineFromResult";
 
     // create the subnodes which do the visualization work
     m_transpType = new SoTransparencyType();
@@ -393,7 +392,9 @@ void ViewProviderFemPostObject::updateVtk()
     }
 
     m_currentAlgorithm->Update();
-    updateProperties();
+    if (!isRestoring()) {
+        updateProperties();
+    }
     update3D();
 }
 
@@ -908,7 +909,9 @@ void ViewProviderFemPostObject::onChanged(const App::Property* prop)
     }
 
     if (prop == &Field && setupPipeline()) {
-        updateProperties();
+        if(!isRestoring()) {
+            updateProperties();
+        }
         WriteColorData(ResetColorBarRange);
     }
     else if (prop == &VectorMode && setupPipeline()) {
@@ -993,7 +996,8 @@ bool ViewProviderFemPostObject::setEdit(int ModNum)
 void ViewProviderFemPostObject::setupTaskDialog(TaskDlgPost* dlg)
 {
     assert(dlg->getView() == this);
-    dlg->appendBox(new TaskPostDisplay(this));
+    auto panel = new TaskPostDisplay(this);
+    dlg->addTaskBox(panel->windowIcon().pixmap(32), panel);
 }
 
 void ViewProviderFemPostObject::unsetEdit(int ModNum)

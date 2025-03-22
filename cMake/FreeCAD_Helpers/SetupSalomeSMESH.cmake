@@ -22,7 +22,6 @@ macro(SetupSalomeSMESH)
             vtkFiltersExtraction
             vtkFiltersSources
             vtkFiltersGeometry
-            vtkWrappingPythonCore
         )
 
         # check which modules are available
@@ -65,9 +64,12 @@ macro(SetupSalomeSMESH)
 
         set(BUILD_FEM_VTK ON)
 
-        # check if PythonWrapperCore was found
-        if ((${VTK_WrappingPythonCore_FOUND}) OR (${VTK_vtkWrappingPythonCore_FOUND}))
+        # check if PythonWrapperCore was found (vtk 9 only)
+        if (${VTK_WrappingPythonCore_FOUND})
             add_compile_definitions(BUILD_FEM_VTK_WRAPPER)
+            message(STATUS "VTK python wrapper: available")
+        else()
+            message(STATUS "VTK python wrapper: NOT available")
         endif()
 
         if(${VTK_MAJOR_VERSION} LESS 6)

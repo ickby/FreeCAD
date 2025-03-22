@@ -102,7 +102,7 @@ void FemPostBranchFilter::setupPipeline()
     // prepare output filter: we make all connections new!
     m_append->RemoveAllInputConnections(0);
 
-    FemPostFilter* filter = NULL;
+    FemPostFilter* filter = nullptr;
     for (auto& obj : objs) {
 
         // prepare the filter: make all connections new
@@ -112,7 +112,7 @@ void FemPostBranchFilter::setupPipeline()
         // handle input modes
         if (Mode.getValue() == Fem::PostGroupMode::Serial) {
             // serial: the next filter gets the previous output, the first one gets our input
-            if (filter == NULL) {
+            if (!filter) {
                 nextFilter->getFilterInput()->SetInputConnection(m_passthrough->GetOutputPort());
             } else {
                 nextFilter->getFilterInput()->SetInputConnection(filter->getFilterOutput()->GetOutputPort());

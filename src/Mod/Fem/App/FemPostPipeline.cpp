@@ -478,7 +478,7 @@ void FemPostPipeline::onChanged(const Property* prop)
             return;
         }
 
-        FemPostFilter* filter = NULL;
+        FemPostFilter* filter = nullptr;
         for (auto& obj : objs) {
 
             // prepare the filter: make all connections new
@@ -494,7 +494,7 @@ void FemPostPipeline::onChanged(const Property* prop)
             }
             else {
                 // serial: the next filter gets the previous output, the first one gets our input
-                if (filter == NULL) {
+                if (!filter) {
                     nextFilter->getFilterInput()->SetInputConnection(
                         m_transform_filter->GetOutputPort(0));
                 }

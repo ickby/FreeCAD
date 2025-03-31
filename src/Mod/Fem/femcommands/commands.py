@@ -37,6 +37,7 @@ from .manager import CommandManager
 from femtools.femutils import expandParentObject
 from femtools.femutils import is_of_type
 from femsolver.settings import get_default_solver
+from femguiutils import post_visualization
 
 # Python command definitions:
 # for C++ command definitions see src/Mod/Fem/Command.cpp
@@ -1189,7 +1190,6 @@ class _PostFilterGlyph(CommandManager):
         self.is_active = "with_vtk_selresult"
         self.do_activated = "add_filter"
 
-
 # the string in add command will be the page name on FreeCAD wiki
 FreeCADGui.addCommand("FEM_Analysis", _Analysis())
 FreeCADGui.addCommand("FEM_ClippingPlaneAdd", _ClippingPlaneAdd())
@@ -1245,3 +1245,7 @@ FreeCADGui.addCommand("FEM_SolverMystran", _SolverMystran())
 FreeCADGui.addCommand("FEM_SolverRun", _SolverRun())
 FreeCADGui.addCommand("FEM_SolverZ88", _SolverZ88())
 FreeCADGui.addCommand("FEM_PostFilterGlyph", _PostFilterGlyph())
+
+# setup all visualization commands (register by importing)
+import femobjects.post_histogram
+post_visualization.setup_commands("FEM_PostVisualization")

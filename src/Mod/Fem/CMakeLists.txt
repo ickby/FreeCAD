@@ -30,7 +30,7 @@ SET(FemBaseModules_SRCS
     coding_conventions.md
     Init.py
     InitGui.py
-    ObjectsFem.py
+    # ObjectsFem.py
     TestFemApp.py
     CreateLabels.py
 )
@@ -176,6 +176,8 @@ SET(FemObjects_SRCS
     femobjects/base_femelement.py
     femobjects/base_femmeshelement.py
     femobjects/base_fempythonobject.py
+    femobjects/base_fempostextractors.py
+    femobjects/base_fempostvisualizations.py
     femobjects/constant_vacuumpermittivity.py
     femobjects/constraint_bodyheatsource.py
     femobjects/constraint_centrif.py
@@ -203,6 +205,8 @@ SET(FemObjects_SRCS
     femobjects/mesh_region.py
     femobjects/mesh_result.py
     femobjects/post_glyphfilter.py
+    femobjects/post_extract1D.py
+    femobjects/post_histogram.py
     femobjects/result_mechanical.py
     femobjects/solver_ccxtools.py
 )
@@ -581,6 +585,7 @@ SET(FemGuiTaskPanels_SRCS
     femtaskpanels/__init__.py
     femtaskpanels/base_femtaskpanel.py
     femtaskpanels/base_femmeshtaskpanel.py
+    femtaskpanels/base_fempostpanel.py
     femtaskpanels/task_constraint_bodyheatsource.py
     femtaskpanels/task_constraint_centrif.py
     femtaskpanels/task_constraint_currentdensity.py
@@ -604,6 +609,8 @@ SET(FemGuiTaskPanels_SRCS
     femtaskpanels/task_mesh_region.py
     femtaskpanels/task_mesh_netgen.py
     femtaskpanels/task_post_glyphfilter.py
+    femtaskpanels/task_post_histogram.py
+    femtaskpanels/task_post_extractor.py
     femtaskpanels/task_result_mechanical.py
     femtaskpanels/task_solver_ccxtools.py
 )
@@ -618,6 +625,10 @@ SET(FemGuiUtils_SRCS
     femguiutils/disambiguate_solid_selection.py
     femguiutils/migrate_gui.py
     femguiutils/selection_widgets.py
+    femguiutils/vtk_table_view.py
+    femguiutils/data_extraction.py
+    femguiutils/extract_link_view.py
+    femguiutils/post_visualization.py
 )
 
 SET(FemGuiViewProvider_SRCS
@@ -627,6 +638,7 @@ SET(FemGuiViewProvider_SRCS
     femviewprovider/view_base_femmaterial.py
     femviewprovider/view_base_femmeshelement.py
     femviewprovider/view_base_femobject.py
+    femviewprovider/view_base_fempostvisualization.py
     femviewprovider/view_constant_vacuumpermittivity.py
     femviewprovider/view_constraint_bodyheatsource.py
     femviewprovider/view_constraint_centrif.py
@@ -654,6 +666,8 @@ SET(FemGuiViewProvider_SRCS
     femviewprovider/view_mesh_region.py
     femviewprovider/view_mesh_result.py
     femviewprovider/view_post_glyphfilter.py
+    femviewprovider/view_post_extract.py
+    femviewprovider/view_post_histogram.py
     femviewprovider/view_result_mechanical.py
     femviewprovider/view_solver_ccxtools.py
 )

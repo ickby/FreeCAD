@@ -30,7 +30,7 @@ SET(FemBaseModules_SRCS
     coding_conventions.md
     Init.py
     InitGui.py
-    # ObjectsFem.py
+    ObjectsFem.py
     TestFemApp.py
     CreateLabels.py
 )
@@ -206,7 +206,9 @@ SET(FemObjects_SRCS
     femobjects/mesh_result.py
     femobjects/post_glyphfilter.py
     femobjects/post_extract1D.py
+    femobjects/post_extract2D.py
     femobjects/post_histogram.py
+    femobjects/post_lineplot.py
     femobjects/result_mechanical.py
     femobjects/solver_ccxtools.py
 )
@@ -610,6 +612,7 @@ SET(FemGuiTaskPanels_SRCS
     femtaskpanels/task_mesh_netgen.py
     femtaskpanels/task_post_glyphfilter.py
     femtaskpanels/task_post_histogram.py
+    femtaskpanels/task_post_lineplot.py
     femtaskpanels/task_post_extractor.py
     femtaskpanels/task_result_mechanical.py
     femtaskpanels/task_solver_ccxtools.py
@@ -668,6 +671,7 @@ SET(FemGuiViewProvider_SRCS
     femviewprovider/view_post_glyphfilter.py
     femviewprovider/view_post_extract.py
     femviewprovider/view_post_histogram.py
+    femviewprovider/view_post_lineplot.py
     femviewprovider/view_result_mechanical.py
     femviewprovider/view_solver_ccxtools.py
 )

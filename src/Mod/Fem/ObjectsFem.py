@@ -652,7 +652,7 @@ def makePostVtkFilterContours(doc, base_vtk_result, name="VtkFilterContours"):
     base_vtk_result.addObject(obj)
     return obj
 
-def makePostVtkFilterGlyph(doc, base_vtk_result, name="Glyph"):
+def makePostFilterGlyph(doc, base_vtk_result, name="Glyph"):
     """makePostVtkFilterGlyph(document, [name]):
     creates a FEM post processing filter that visualizes vector fields with glyphs
     """
@@ -709,6 +709,19 @@ def makePostLineplotFieldData(doc, name="FieldData2D"):
         view_post_lineplot.VPPostLineplotFieldData(obj.ViewObject)
     return obj
 
+def makePostLineplotIndexOverFrames(doc, name="IndexOverFrames2D"):
+    """makePostLineplotIndexOverFrames(document, [name]):
+    creates a FEM post processing data extractor for 2D index data
+    """
+    obj = doc.addObject("App::FeaturePython", name)
+    from femobjects import post_lineplot
+
+    post_lineplot.PostLineplotIndexOverFrames(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_post_lineplot
+        view_post_lineplot.VPPostLineplotIndexOverFrames(obj.ViewObject)
+    return obj
+
 def makePostHistogram(doc, name="Histogram"):
     """makePostHistogram(document, [name]):
     creates a FEM post processing histogram plot
@@ -723,7 +736,7 @@ def makePostHistogram(doc, name="Histogram"):
     return obj
 
 def makePostHistogramFieldData(doc, name="FieldData1D"):
-    """makePostHistogramFieldData1D(document, [name]):
+    """makePostHistogramFieldData(document, [name]):
     creates a FEM post processing data extractor for 1D Field data
     """
     obj = doc.addObject("App::FeaturePython", name)
@@ -733,6 +746,19 @@ def makePostHistogramFieldData(doc, name="FieldData1D"):
     if FreeCAD.GuiUp:
         from femviewprovider import view_post_histogram
         view_post_histogram.VPPostHistogramFieldData(obj.ViewObject)
+    return obj
+
+def makePostHistogramIndexOverFrames(doc, name="IndexOverFrames1D"):
+    """makePostHistogramIndexOverFrames(document, [name]):
+    creates a FEM post processing data extractor for 1D Field data
+    """
+    obj = doc.addObject("App::FeaturePython", name)
+    from femobjects import post_histogram
+
+    post_histogram.PostHistogramIndexOverFrames(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_post_histogram
+        view_post_histogram.VPPostHistogramIndexOverFrames(obj.ViewObject)
     return obj
 
 # ********* solver objects ***********************************************************************

@@ -1247,6 +1247,6 @@ FreeCADGui.addCommand("FEM_SolverZ88", _SolverZ88())
 FreeCADGui.addCommand("FEM_PostFilterGlyph", _PostFilterGlyph())
 
 # setup all visualization commands (register by importing)
-import femobjects.post_histogram
 import femobjects.post_lineplot
+import femobjects.post_histogram
 post_visualization.setup_commands("FEM_PostVisualization")

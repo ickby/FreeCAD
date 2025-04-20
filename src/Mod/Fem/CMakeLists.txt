@@ -209,6 +209,7 @@ SET(FemObjects_SRCS
     femobjects/post_extract2D.py
     femobjects/post_histogram.py
     femobjects/post_lineplot.py
+    femobjects/post_table.py
     femobjects/result_mechanical.py
     femobjects/solver_ccxtools.py
 )
@@ -613,6 +614,7 @@ SET(FemGuiTaskPanels_SRCS
     femtaskpanels/task_post_glyphfilter.py
     femtaskpanels/task_post_histogram.py
     femtaskpanels/task_post_lineplot.py
+    femtaskpanels/task_post_table.py
     femtaskpanels/task_post_extractor.py
     femtaskpanels/task_result_mechanical.py
     femtaskpanels/task_solver_ccxtools.py
@@ -642,6 +644,7 @@ SET(FemGuiViewProvider_SRCS
     femviewprovider/view_base_femmeshelement.py
     femviewprovider/view_base_femobject.py
     femviewprovider/view_base_fempostvisualization.py
+    femviewprovider/view_base_fempostextractors.py
     femviewprovider/view_constant_vacuumpermittivity.py
     femviewprovider/view_constraint_bodyheatsource.py
     femviewprovider/view_constraint_centrif.py
@@ -669,9 +672,9 @@ SET(FemGuiViewProvider_SRCS
     femviewprovider/view_mesh_region.py
     femviewprovider/view_mesh_result.py
     femviewprovider/view_post_glyphfilter.py
-    femviewprovider/view_post_extract.py
     femviewprovider/view_post_histogram.py
     femviewprovider/view_post_lineplot.py
+    femviewprovider/view_post_table.py
     femviewprovider/view_result_mechanical.py
     femviewprovider/view_solver_ccxtools.py
 )

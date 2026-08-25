@@ -28,6 +28,7 @@
 #include <cstdlib>
 #include <map>
 #include <memory>
+#include <set>
 
 #include <SMESHDS_Mesh.hxx>
 #include <SMESH_Mesh.hxx>
@@ -505,18 +506,26 @@ FemMesh* FemVTKTools::readVTKMesh(const char* filename, FemMesh* mesh, const cha
 void exportFemMeshVertices(
     vtkSmartPointer<vtkCellArray>& elemArray,
     std::vector<int>& types,
-    const SMDS_ElemIteratorPtr& aVertexIter
+    const SMDS_ElemIteratorPtr& aVertexIter,
+    const std::set<int>* keepIds = nullptr,
+    std::vector<int>* cellElementIds = nullptr
 )
 {
     Base::Console().log("  Start: VTK mesh builder vertices.\n");
 
     while (aVertexIter->more()) {
         const SMDS_MeshElement* aVertex = aVertexIter->next();
+        if (keepIds && !keepIds->contains(aVertex->GetID())) {
+            continue;
+        }
         if (aVertex->GetEntityType() == SMDSEntity_0D) {
             fillVtkArray<vtkVertex>(elemArray, types, aVertex);
         }
         else {
             throw Base::TypeError("Vertex not yet supported by FreeCAD's VTK mesh builder\n");
+        }
+        if (cellElementIds) {
+            cellElementIds->push_back(aVertex->GetID());
         }
     }
 
@@ -526,13 +535,18 @@ void exportFemMeshVertices(
 void exportFemMeshEdges(
     vtkSmartPointer<vtkCellArray>& elemArray,
     std::vector<int>& types,
-    const SMDS_EdgeIteratorPtr& aEdgeIter
+    const SMDS_EdgeIteratorPtr& aEdgeIter,
+    const std::set<int>* keepIds = nullptr,
+    std::vector<int>* cellElementIds = nullptr
 )
 {
     Base::Console().log("  Start: VTK mesh builder edges.\n");
 
     while (aEdgeIter->more()) {
         const SMDS_MeshEdge* aEdge = aEdgeIter->next();
+        if (keepIds && !keepIds->contains(aEdge->GetID())) {
+            continue;
+        }
         // edge
         if (aEdge->GetEntityType() == SMDSEntity_Edge) {
             fillVtkArray<vtkLine>(elemArray, types, aEdge);
@@ -544,6 +558,9 @@ void exportFemMeshEdges(
         else {
             throw Base::TypeError("Edge not yet supported by FreeCAD's VTK mesh builder\n");
         }
+        if (cellElementIds) {
+            cellElementIds->push_back(aEdge->GetID());
+        }
     }
 
     Base::Console().log("  End: VTK mesh builder edges.\n");
@@ -552,13 +569,18 @@ void exportFemMeshEdges(
 void exportFemMeshFaces(
     vtkSmartPointer<vtkCellArray>& elemArray,
     std::vector<int>& types,
-    const SMDS_FaceIteratorPtr& aFaceIter
+    const SMDS_FaceIteratorPtr& aFaceIter,
+    const std::set<int>* keepIds = nullptr,
+    std::vector<int>* cellElementIds = nullptr
 )
 {
     Base::Console().log("  Start: VTK mesh builder faces.\n");
 
     while (aFaceIter->more()) {
         const SMDS_MeshFace* aFace = aFaceIter->next();
+        if (keepIds && !keepIds->contains(aFace->GetID())) {
+            continue;
+        }
         // triangle
         if (aFace->GetEntityType() == SMDSEntity_Triangle) {
             fillVtkArray<vtkTriangle>(elemArray, types, aFace);
@@ -578,6 +600,9 @@ void exportFemMeshFaces(
         else {
             throw Base::TypeError("Face not yet supported by FreeCAD's VTK mesh builder\n");
         }
+        if (cellElementIds) {
+            cellElementIds->push_back(aFace->GetID());
+        }
     }
 
     Base::Console().log("  End: VTK mesh builder faces.\n");
@@ -586,13 +611,18 @@ void exportFemMeshFaces(
 void exportFemMeshCells(
     vtkSmartPointer<vtkCellArray>& elemArray,
     std::vector<int>& types,
-    const SMDS_VolumeIteratorPtr& aVolIter
+    const SMDS_VolumeIteratorPtr& aVolIter,
+    const std::set<int>* keepIds = nullptr,
+    std::vector<int>* cellElementIds = nullptr
 )
 {
     Base::Console().log("  Start: VTK mesh builder volumes.\n");
 
     while (aVolIter->more()) {
         const SMDS_MeshVolume* aVol = aVolIter->next();
+        if (keepIds && !keepIds->contains(aVol->GetID())) {
+            continue;
+        }
 
         if (aVol->GetEntityType() == SMDSEntity_Tetra) {  // tetra4
             fillVtkArray<vtkTetra>(elemArray, types, aVol);
@@ -621,6 +651,9 @@ void exportFemMeshCells(
         else {
             throw Base::TypeError("Volume not yet supported by FreeCAD's VTK mesh builder\n");
         }
+        if (cellElementIds) {
+            cellElementIds->push_back(aVol->GetID());
+        }
     }
 
     Base::Console().log("  End: VTK mesh builder volumes.\n");
@@ -630,7 +663,8 @@ void FemVTKTools::exportVTKMesh(
     const FemMesh* mesh,
     vtkSmartPointer<vtkUnstructuredGrid> grid,
     bool highest,
-    float scale
+    float scale,
+    std::vector<int>* cellElementIds
 )
 {
 
@@ -666,40 +700,38 @@ void FemVTKTools::exportVTKMesh(
     vtkSmartPointer<vtkCellArray> elemArray = vtkSmartPointer<vtkCellArray>::New();
     std::vector<int> types;
 
+    if (cellElementIds) {
+        cellElementIds->clear();
+    }
+
     if (highest) {
-        // try volumes
+        // Per-entity highest: volumes of solids plus free faces/edges/vertices together.
+        const std::set<int> keepIds = mesh->getHighestElements();
+        const std::set<int>* keep = &keepIds;
+
         SMDS_VolumeIteratorPtr aVolIter = meshDS->volumesIterator();
-        exportFemMeshCells(elemArray, types, aVolIter);
-        // try faces
-        if (elemArray->GetNumberOfCells() == 0) {
-            SMDS_FaceIteratorPtr aFaceIter = meshDS->facesIterator();
-            exportFemMeshFaces(elemArray, types, aFaceIter);
-        }
-        // try edges
-        if (elemArray->GetNumberOfCells() == 0) {
-            SMDS_EdgeIteratorPtr aEdgeIter = meshDS->edgesIterator();
-            exportFemMeshEdges(elemArray, types, aEdgeIter);
-        }
-        // try vertices
-        if (elemArray->GetNumberOfCells() == 0) {
-            SMDS_ElemIteratorPtr aVertexIter = meshDS->elementsIterator(SMDSAbs_0DElement);
-            exportFemMeshVertices(elemArray, types, aVertexIter);
-        }
+        exportFemMeshCells(elemArray, types, aVolIter, keep, cellElementIds);
+        SMDS_FaceIteratorPtr aFaceIter = meshDS->facesIterator();
+        exportFemMeshFaces(elemArray, types, aFaceIter, keep, cellElementIds);
+        SMDS_EdgeIteratorPtr aEdgeIter = meshDS->edgesIterator();
+        exportFemMeshEdges(elemArray, types, aEdgeIter, keep, cellElementIds);
+        SMDS_ElemIteratorPtr aVertexIter = meshDS->elementsIterator(SMDSAbs_0DElement);
+        exportFemMeshVertices(elemArray, types, aVertexIter, keep, cellElementIds);
     }
     else {
         // export all elements
         // vertices
         SMDS_ElemIteratorPtr aVertexIter = meshDS->elementsIterator(SMDSAbs_0DElement);
-        exportFemMeshVertices(elemArray, types, aVertexIter);
+        exportFemMeshVertices(elemArray, types, aVertexIter, nullptr, cellElementIds);
         // edges
         SMDS_EdgeIteratorPtr aEdgeIter = meshDS->edgesIterator();
-        exportFemMeshEdges(elemArray, types, aEdgeIter);
+        exportFemMeshEdges(elemArray, types, aEdgeIter, nullptr, cellElementIds);
         // faces
         SMDS_FaceIteratorPtr aFaceIter = meshDS->facesIterator();
-        exportFemMeshFaces(elemArray, types, aFaceIter);
+        exportFemMeshFaces(elemArray, types, aFaceIter, nullptr, cellElementIds);
         // volumes
         SMDS_VolumeIteratorPtr aVolIter = meshDS->volumesIterator();
-        exportFemMeshCells(elemArray, types, aVolIter);
+        exportFemMeshCells(elemArray, types, aVolIter, nullptr, cellElementIds);
     }
 
     if (elemArray->GetNumberOfCells() > 0) {
@@ -736,9 +768,22 @@ void FemVTKTools::exportVTKCellGroup(
     FemMesh* mesh,
     vtkSmartPointer<vtkDataSet> grid,
     std::string arrayname,
-    std::map<std::string, int> index_map
+    std::map<std::string, int> index_map,
+    const std::vector<int>& cellElementIds
 )
 {
+    if (static_cast<vtkIdType>(cellElementIds.size()) != grid->GetNumberOfCells()) {
+        throw std::runtime_error("VTK group export: cell/element id mapping does not match the grid.");
+    }
+
+    // exportVTKMesh writes cells grouped by element type, so a SMESH element id
+    // is not the cell index. Invert the mapping it reported.
+    std::unordered_map<int, vtkIdType> cellOfElement;
+    cellOfElement.reserve(cellElementIds.size());
+    for (std::size_t i = 0; i < cellElementIds.size(); ++i) {
+        cellOfElement.emplace(cellElementIds[i], static_cast<vtkIdType>(i));
+    }
+
     vtkSmartPointer<vtkAbstractArray> cell_array;
     if (index_map.empty()) {
         auto cell_sarray = vtkNew<vtkStringArray>();
@@ -769,12 +814,12 @@ void FemVTKTools::exportVTKCellGroup(
             auto aElemIter = groupDS->GetElements();
             while (aElemIter->more()) {
                 const SMDS_MeshElement* aElem = aElemIter->next();
-                if (aElem->GetID() > grid->GetNumberOfCells()) {
-                    throw std::runtime_error(
-                        "VTK group export: Cells ids need to be continuous and start with index 1."
-                    );
+                // Elements filtered out of the grid (highest dimension export)
+                // simply have no cell to annotate.
+                auto cell = cellOfElement.find(aElem->GetID());
+                if (cell != cellOfElement.end()) {
+                    cell_sarray->SetValue(cell->second, name);
                 }
-                cell_sarray->SetValue(aElem->GetID() - 1, name);
             }
         }
         cell_array = cell_sarray;
@@ -817,12 +862,10 @@ void FemVTKTools::exportVTKCellGroup(
             auto aElemIter = groupDS->GetElements();
             while (aElemIter->more()) {
                 const SMDS_MeshElement* aElem = aElemIter->next();
-                if (aElem->GetID() > grid->GetNumberOfCells()) {
-                    throw std::runtime_error(
-                        "VTK group export: Cells ids need to be continuous and start with index 1."
-                    );
+                auto cell = cellOfElement.find(aElem->GetID());
+                if (cell != cellOfElement.end()) {
+                    cell_iarray->SetValue(cell->second, id);
                 }
-                cell_iarray->SetValue(aElem->GetID() - 1, id);
             }
         }
         cell_array = cell_iarray;
@@ -847,8 +890,9 @@ void FemVTKTools::writeVTKMeshWithGroups(
     Base::FileInfo f(Filename);
 
     vtkSmartPointer<vtkUnstructuredGrid> grid = vtkSmartPointer<vtkUnstructuredGrid>::New();
-    exportVTKMesh(mesh, grid, highest);
-    exportVTKCellGroup(mesh, grid, group_array, index_map);
+    std::vector<int> cellElementIds;
+    exportVTKMesh(mesh, grid, highest, 1.0, &cellElementIds);
+    exportVTKCellGroup(mesh, grid, group_array, index_map, cellElementIds);
 
     Base::Console().log("Start: writing mesh data ======================\n");
     if (f.hasExtension("vtu")) {

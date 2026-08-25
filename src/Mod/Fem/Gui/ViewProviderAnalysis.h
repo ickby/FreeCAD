@@ -24,6 +24,7 @@
 
 #include <Gui/ViewProviderDocumentObjectGroup.h>
 #include <Gui/ViewProviderFeaturePython.h>
+#include <App/PropertyStandard.h>
 #include <Mod/Fem/FemGlobal.h>
 #include <QCoreApplication>
 
@@ -58,7 +59,21 @@ public:
     /// destructor
     ~ViewProviderFemAnalysis() override;
 
+    /**
+     * Persistable AnalysisViewState subset. Prop_Output|Prop_Hidden so writes
+     * do not touch the document or appear in the property editor.
+     */
+    App::PropertyStringList ViewHiddenElements;
+    App::PropertyStringList ViewClipPlaneNames;
+    App::PropertyStringList ViewClipPlaneData;
+
     void attach(App::DocumentObject*) override;
+    void updateData(const App::Property*) override;
+    /**
+     * attach() runs before the persisted properties are read back, so the view
+     * state has to pick them up once restoring is complete.
+     */
+    void finishRestoring() override;
     bool doubleClicked() override;
 
     std::vector<App::DocumentObject*> claimChildren() const override;

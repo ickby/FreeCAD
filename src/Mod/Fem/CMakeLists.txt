@@ -221,6 +221,7 @@ SET(FemObjects_SRCS
     femobjects/material_common.py
     femobjects/material_mechanicalnonlinear.py
     femobjects/material_reinforced.py
+    femobjects/geometry_base.py
     femobjects/mesh_boundarylayer.py
     femobjects/mesh_gmsh.py
     femobjects/mesh_group.py
@@ -393,6 +394,7 @@ SET(FemTestsApp_SRCS
     femtest/app/test_mesh.py
     femtest/app/test_object.py
     femtest/app/test_open.py
+    femtest/app/test_preprocess.py
     femtest/app/test_result.py
     femtest/app/test_solver_elmer.py
     femtest/app/test_solver_mystran.py
@@ -710,6 +712,7 @@ SET(FemGuiTaskPanels_SRCS
     femtaskpanels/task_element_geometry1D.py
     femtaskpanels/task_element_geometry2D.py
     femtaskpanels/task_element_rotation1D.py
+    femtaskpanels/task_geometry.py
     femtaskpanels/task_material_common.py
     femtaskpanels/task_material_reinforced.py
     femtaskpanels/task_mesh_boundarylayer.py
@@ -751,6 +754,7 @@ SET(FemGuiUtils_SRCS
     femguiutils/disambiguate_solid_selection.py
     femguiutils/migrate_gui.py
     femguiutils/selection_widgets.py
+    femguiutils/view_panel.py
 )
 
 if(BUILD_FEM_VTK_PYTHON)
@@ -786,6 +790,7 @@ SET(FemGuiViewProvider_SRCS
     femviewprovider/view_element_fluid1D.py
     femviewprovider/view_element_geometry1D.py
     femviewprovider/view_element_geometry2D.py
+    femviewprovider/view_geometry_base.py
     femviewprovider/view_element_rotation1D.py
     femviewprovider/view_material_common.py
     femviewprovider/view_material_mechanicalnonlinear.py

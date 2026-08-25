@@ -51,6 +51,8 @@
 #include "FemMeshPy.h"
 #include "FemMeshShapeNetgenObject.h"
 #include "FemMeshShapeObject.h"
+#include "FemMeshShapeGroup.h"
+#include "FemGeometry.h"
 #include "FemResultObject.h"
 #include "FemSetElementNodesObject.h"
 #include "FemSetElementsObject.h"
@@ -167,6 +169,10 @@ PyMOD_INIT_FUNC(Fem)
     Fem::FemMeshShapeBaseObjectPython         ::init();
     Fem::FemMeshShapeObject                   ::init();
     Fem::FemMeshShapeNetgenObject             ::init();
+    Fem::FemMeshShapeGroup                    ::init();
+    Fem::FemMeshShapeGroupPython              ::init();
+    Fem::FemGeometry                          ::init();
+    Fem::FemGeometryPython                    ::init();
     Fem::PropertyFemMesh                      ::init();
 
     Fem::FemResultObject                      ::init();

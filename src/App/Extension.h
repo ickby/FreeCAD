@@ -197,6 +197,16 @@ public:
      */
     virtual PyObject* getExtensionPyObject();
 
+    /**
+     * @brief Called after initExtension when the extension is added from Python.
+     *
+     * Use this for setup that must run when attach()/extensionAttach has already
+     * completed (Python adds extensions after the view provider is attached).
+     * C++ creation and file reload use the normal initExtension path only.
+     * The call happens after initExtension, so the extended object is set.
+     */
+    virtual void initPythonExtension()
+    {}
 
     /** @name Access properties
      *

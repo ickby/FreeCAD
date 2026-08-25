@@ -309,6 +309,7 @@ public:
     /// called when the selection changes for the view provider
     void onSelectionChanged(const SelectionChanges& changes) override
     {
+        ViewProviderT::onSelectionChanged(changes);
         return imp->onSelectionChanged(changes);
     }
     bool getElementPicked(const SoPickedPoint* pp, std::string& subname) const override

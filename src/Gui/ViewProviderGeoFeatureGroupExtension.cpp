@@ -166,6 +166,14 @@ void ViewProviderGeoFeatureGroupExtension::extensionUpdateData(const App::Proper
     }
 }
 
+void ViewProviderGeoFeatureGroupExtension::initPythonExtension()
+{
+    // When the extension is added from Python, the view provider's attach() method
+    // has already run, so extensionAttach is never called. Register the Group
+    // display mask mode that extensionAttach would normally set up.
+    getExtendedViewProvider()->addDisplayMaskMode(pcGroupChildren, "Group");
+}
+
 namespace Gui
 {
 EXTENSION_PROPERTY_SOURCE_TEMPLATE(

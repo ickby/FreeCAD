@@ -71,6 +71,8 @@ public:
 
     void extensionUpdateData(const App::Property*) override;
 
+    void initPythonExtension() override;
+
 protected:
     SoSeparator* pcGroupFront;
     SoSeparator* pcGroupBack;

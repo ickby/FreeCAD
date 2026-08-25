@@ -95,6 +95,12 @@ class CommandManager:
             active = self.vtk_result_selected()
         elif self.is_active == "with_part_feature":
             active = FreeCADGui.ActiveDocument is not None and self.part_feature_selected()
+        elif self.is_active == "with_analysis_geometry_or_part":
+            # New workflow: analysis already has FemGeometry → no selection needed.
+            # Legacy: a Part feature must be selected to mesh.
+            active = FreeCADGui.ActiveDocument is not None and (
+                self.analysis_has_geometry() or self.part_feature_selected()
+            )
         elif self.is_active == "with_femmesh":
             active = FreeCADGui.ActiveDocument is not None and self.femmesh_selected()
         elif self.is_active == "with_gmsh_femmesh":
@@ -150,6 +156,8 @@ class CommandManager:
             self.add_obj_on_gui_selobj_expand_noset_edit(self.__class__.__name__.lstrip("_"))
         elif self.do_activated == "add_filter_set_edit":
             self.add_filter_set_edit(self.__class__.__name__.lstrip("_"))
+        elif self.do_activated == "add_geometry_set_edit":
+            self.add_geometry_set_edit(self.__class__.__name__.lstrip("_"))
         # in all other cases Activated is implemented it the command class
 
     def results_present(self):
@@ -189,6 +197,14 @@ class CommandManager:
             return True
         else:
             return False
+
+    def analysis_has_geometry(self):
+        analysis = FemGui.getActiveAnalysis()
+        if analysis is None or not self.active_analysis_in_active_doc():
+            return False
+        from femtools import membertools
+
+        return bool(membertools.get_member(analysis, "Fem::FemGeometry"))
 
     def femmesh_selected(self):
         sel = FreeCADGui.Selection.getSelection()
@@ -426,3 +442,31 @@ class CommandManager:
         FreeCADGui.doCommand(
             "FreeCADGui.ActiveDocument.setEdit(FreeCAD.ActiveDocument.ActiveObject.Name)"
         )
+
+    def add_geometry_set_edit(self, geometrytype):
+        """Add a geometry tool under the analysis GeometryGroup and open edit."""
+        from femtools import membertools
+
+        analysis = FemGui.getActiveAnalysis()
+        groups = membertools.get_member(analysis, "Fem::GeometryGroup")
+
+        FreeCAD.ActiveDocument.openTransaction(f"Create Fem{geometrytype}")
+        FreeCADGui.addModule("ObjectsFem")
+        FreeCADGui.addModule("FemGui")
+        FreeCADGui.addModule("femtools.membertools")
+        FreeCADGui.doCommand("_analysis = FemGui.getActiveAnalysis()")
+
+        if groups:
+            FreeCADGui.doCommand(
+                "_group = femtools.membertools.get_member(" "_analysis, 'Fem::GeometryGroup')[0]"
+            )
+        else:
+            FreeCADGui.doCommand("_group = ObjectsFem.makeGeometryGroup(FreeCAD.ActiveDocument)")
+            FreeCADGui.doCommand("_analysis.addObject(_group)")
+
+        FreeCADGui.doCommand(
+            f"geometry_obj = _group.addObject("
+            f"ObjectsFem.make{geometrytype}(FreeCAD.ActiveDocument))[0]"
+        )
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(geometry_obj.Name)")

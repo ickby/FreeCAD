@@ -54,6 +54,40 @@ def makeAnalysis(doc, name="Analysis"):
     return obj
 
 
+def makeGeometryGroup(doc, name="Geometry"):
+    """makeGeometryGroup(document, [name]):
+    makes a FemGeometryPython object with GeometryGroup proxy"""
+    obj = doc.addObject("Fem::FemGeometryPython", name)
+    from femobjects import geometry_base
+
+    geometry_base.GeometryGroup(obj)
+    if FreeCAD.GuiUp:
+        try:
+            from femviewprovider import view_geometry_base
+
+            view_geometry_base.VPGeometryGroup(obj.ViewObject)
+        except ImportError:
+            pass
+    return obj
+
+
+def makeGeometryImport(doc, name="GeometryImport"):
+    """makeGeometryImport(document, [name]):
+    makes a FemGeometryPython object with GeometryImport proxy"""
+    obj = doc.addObject("Fem::FemGeometryPython", name)
+    from femobjects import geometry_base
+
+    geometry_base.GeometryImport(obj)
+    if FreeCAD.GuiUp:
+        try:
+            from femviewprovider import view_geometry_base
+
+            view_geometry_base.VPGeometryImport(obj.ViewObject)
+        except ImportError:
+            pass
+    return obj
+
+
 # ********* constant objects *********************************************************************
 def makeConstantVacuumPermittivity(doc, name="ConstantVacuumPermittivity"):
     """makeConstantVacuumPermittivity(document, [name]):
@@ -487,6 +521,28 @@ def makeMaterialSolid(doc, name="MaterialSolid"):
 
 
 # ********* mesh objects *************************************************************************
+def makeMeshShapeGroup(doc, name="Mesh", geometry=None, analysis=None):
+    """makeMeshShapeGroup(document, [name], [geometry], [analysis]):
+    creates a FemMeshShapeGroup. Child mesh objects must be added to the group
+    (group.addObject), never to analysis.Group — solvers iterate analysis.Group
+    non-recursively and would see too many meshes.
+    """
+    obj = doc.addObject("Fem::FemMeshShapeGroup", name)
+    if geometry is not None:
+        obj.Shape = geometry
+    if analysis is not None:
+        analysis.addObject(obj)
+    return obj
+
+
+def addMeshToShapeGroup(mesh_group, mesh_obj):
+    """addMeshToShapeGroup(mesh_group, mesh_obj):
+    adds a mesh object into the FemMeshShapeGroup (not into analysis.Group).
+    """
+    mesh_group.addObject(mesh_obj)
+    return mesh_obj
+
+
 def makeMeshBoundaryLayer(doc, base_mesh, name="MeshBoundaryLayer"):
     """makeMeshBoundaryLayer(document, base_mesh, [name]):
     creates a FEM mesh BoundaryLayer object to define boundary layer properties"""

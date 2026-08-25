@@ -50,6 +50,17 @@ FemMeshShapeBaseObject::FemMeshShapeBaseObject()
     );
 
     Shape.setScope(LinkScope::Global);
+
+    ADD_PROPERTY_TYPE(
+        Components,
+        (nullptr),
+        "FEM Mesh",
+        Prop_None,
+        "FemGeometry components (ComponentN subnames) covered by this mesh. "
+        "Used by the new preprocessing workflow; legacy meshes keep using Shape."
+    );
+
+    Components.setScope(LinkScope::Global);
 }
 
 FemMeshShapeBaseObject::~FemMeshShapeBaseObject() = default;
@@ -90,7 +101,11 @@ PROPERTY_SOURCE_TEMPLATE(Fem::FemMeshShapeBaseObjectPython, Fem::FemMeshShapeBas
 template<>
 const char* Fem::FemMeshShapeBaseObjectPython::getViewProviderName() const
 {
+#ifdef FC_USE_VTK
+    return "FemGui::ViewProviderFemMeshShapePreprocessPython";
+#else
     return "FemGui::ViewProviderFemMeshShapeBasePython";
+#endif
 }
 
 template<>

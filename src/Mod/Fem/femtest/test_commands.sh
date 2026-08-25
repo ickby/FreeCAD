@@ -70,6 +70,12 @@ make -j 4 && ./bin/FreeCADCmd -t femtest.app.test_mesh.TestMeshEleTetra10.test_t
 make -j 4 && ./bin/FreeCADCmd -t femtest.app.test_mesh.TestMeshGroups.test_add_groups
 make -j 4 && ./bin/FreeCADCmd -t femtest.app.test_mesh.TestMeshGroups.test_delete_groups
 make -j 4 && ./bin/FreeCADCmd -t femtest.app.test_mesh.TestMeshGroups.test_add_group_elements
+
+# preprocessing foundation
+make -j 4 && ./bin/FreeCADCmd -t femtest.app.test_preprocess
+make -j 4 && ./bin/FreeCADCmd -t femtest.app.test_preprocess.TestFemGeometry
+make -j 4 && ./bin/FreeCADCmd -t femtest.app.test_preprocess.TestMeshMerge
+make -j 4 && ./bin/FreeCADCmd -t femtest.app.test_preprocess.TestExportHighest
 make -j 4 && ./bin/FreeCADCmd -t femtest.app.test_object.TestObjectCreate.test_femobjects_make
 make -j 4 && ./bin/FreeCADCmd -t femtest.app.test_object.TestObjectType.test_femobjects_type
 make -j 4 && ./bin/FreeCADCmd -t femtest.app.test_object.TestObjectType.test_femobjects_isoftype

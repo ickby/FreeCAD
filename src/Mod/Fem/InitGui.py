@@ -93,5 +93,15 @@ class FemWorkbench(Workbench):
         # see https://forum.freecad.org/viewtopic.php?f=10&t=43300
         return "FemGui::Workbench"
 
+    def Activated(self):
+        import femguiutils.view_panel as vp
+
+        vp.setup_visualization_panel()
+
+    def Deactivated(self):
+        import femguiutils.view_panel as vp
+
+        vp.unsetup_visualization_panel()
+
 
 FreeCADGui.addWorkbench(FemWorkbench())

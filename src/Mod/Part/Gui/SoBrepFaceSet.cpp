@@ -147,7 +147,12 @@ static void renderOverlayFaces(
     const uint32_t packed = color.getPackedValue(0.0f);
     SoLazyElement::setPacked(state, faceSet, 1, &packed, false);
 
-    faceSet->coordIndex.setValues(0, static_cast<int32_t>(coordIndex.size()), coordIndex.data());
+    // setValues() does not shrink the field, so rewrite the overlay index array
+    // to the exact size to avoid stale faces from the previous overlay render.
+    faceSet->coordIndex.setNum(static_cast<int>(coordIndex.size()));
+    int32_t* indices = faceSet->coordIndex.startEditing();
+    std::copy(coordIndex.begin(), coordIndex.end(), indices);
+    faceSet->coordIndex.finishEditing();
     faceSet->GLRender(action);
 
     state->pop();

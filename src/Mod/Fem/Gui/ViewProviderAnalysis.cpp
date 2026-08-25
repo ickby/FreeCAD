@@ -55,6 +55,7 @@
 
 #include "TaskDlgAnalysis.h"
 #include "ViewProviderAnalysis.h"
+#include "AnalysisViewState.h"
 
 
 using namespace FemGui;
@@ -102,14 +103,63 @@ PROPERTY_SOURCE(FemGui::ViewProviderFemAnalysis, Gui::ViewProviderDocumentObject
 ViewProviderFemAnalysis::ViewProviderFemAnalysis()
 {
     sPixmap = "FEM_Analysis";
+
+    constexpr auto persistFlags = App::PropertyType(App::Prop_Output | App::Prop_Hidden);
+    ADD_PROPERTY_TYPE(
+        ViewHiddenElements,
+        (std::vector<std::string>()),
+        "ViewState",
+        persistFlags,
+        "Persisted hidden geometry/mesh element names"
+    );
+    ADD_PROPERTY_TYPE(
+        ViewClipPlaneNames,
+        (std::vector<std::string>()),
+        "ViewState",
+        persistFlags,
+        "Persisted clip plane names"
+    );
+    ADD_PROPERTY_TYPE(
+        ViewClipPlaneData,
+        (std::vector<std::string>()),
+        "ViewState",
+        persistFlags,
+        "Persisted clip plane data (origin + direction)"
+    );
 }
 
-ViewProviderFemAnalysis::~ViewProviderFemAnalysis() = default;
+ViewProviderFemAnalysis::~ViewProviderFemAnalysis()
+{
+    if (auto* obj = freecad_cast<Fem::FemAnalysis*>(getObject())) {
+        AnalysisViewState::destroyForAnalysis(obj);
+    }
+}
 
 void ViewProviderFemAnalysis::attach(App::DocumentObject* obj)
 {
     Gui::ViewProviderDocumentObjectGroup::attach(obj);
     extension.attach(this);
+
+    if (auto* analysis = freecad_cast<Fem::FemAnalysis*>(obj)) {
+        // Ensure view state exists and is loaded from persisted properties
+        AnalysisViewState::forAnalysis(analysis);
+    }
+}
+
+void ViewProviderFemAnalysis::updateData(const App::Property* prop)
+{
+    Gui::ViewProviderDocumentObjectGroup::updateData(prop);
+}
+
+void ViewProviderFemAnalysis::finishRestoring()
+{
+    Gui::ViewProviderDocumentObjectGroup::finishRestoring();
+
+    if (auto* analysis = freecad_cast<Fem::FemAnalysis*>(getObject())) {
+        if (auto* state = AnalysisViewState::forAnalysis(analysis)) {
+            state->loadFromViewProvider(this);
+        }
+    }
 }
 
 void ViewProviderFemAnalysis::highlightView(Gui::ViewProviderDocumentObject* view)

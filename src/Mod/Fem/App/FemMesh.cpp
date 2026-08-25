@@ -23,8 +23,12 @@
  ***************************************************************************/
 
 #include <Python.h>
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
+#include <string_view>
 
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
@@ -69,6 +73,7 @@
 #include <Mod/Mesh/App/Core/Iterator.h>
 
 #include "FemMesh.h"
+#include "FemGeometry.h"
 #include <FemMeshPy.h>
 
 #ifdef FC_USE_VTK
@@ -135,6 +140,155 @@ FemMesh& FemMesh::operator=(const FemMesh& mesh)
         copyMeshData(mesh);
     }
     return *this;
+}
+
+void FemMesh::appendMeshData(
+    const FemMesh& mesh,
+    const std::string& sourceName,
+    std::vector<std::string>* cellSources
+)
+{
+    // Do not overwrite this->_Mtrx with mesh._Mtrx — each child's placement is
+    // applied to node coordinates so the accumulated mesh stays in the group frame.
+
+    SMESHDS_Mesh* srcMeshDS = mesh.myMesh->GetMeshDS();
+    SMESHDS_Mesh* appendMeshDS = this->myMesh->GetMeshDS();
+    SMESH_MeshEditor editor(this->myMesh);
+
+    const Base::Matrix4D childTrsf = mesh.getTransform();
+    const bool applyTrsf = (childTrsf != Base::Matrix4D());
+
+    SMDS_ElemIteratorPtr srcElemIt = srcMeshDS->elementsIterator();
+    SMDS_NodeIteratorPtr srcNodeIt = srcMeshDS->nodesIterator();
+
+    std::map<int, const SMDS_MeshNode*> node_map;
+    while (srcNodeIt->more()) {
+        const SMDS_MeshNode* node = srcNodeIt->next();
+        double x = node->X();
+        double y = node->Y();
+        double z = node->Z();
+        if (applyTrsf) {
+            Base::Vector3d p(x, y, z);
+            p = childTrsf * p;
+            x = p.x;
+            y = p.y;
+            z = p.z;
+        }
+        auto newNode = appendMeshDS->AddNode(x, y, z);
+        node_map[node->GetID()] = newNode;
+    }
+
+    std::map<int, const SMDS_MeshElement*> element_map;
+    while (srcElemIt->more()) {
+        const SMDS_MeshElement* elem = srcElemIt->next();
+
+        std::vector<const SMDS_MeshNode*> nodes;
+        nodes.resize(elem->NbNodes());
+        SMDS_ElemIteratorPtr nIt = elem->nodesIterator();
+        for (int iN = 0; nIt->more(); ++iN) {
+            auto srcNode = static_cast<const SMDS_MeshNode*>(nIt->next());
+            nodes[iN] = node_map[srcNode->GetID()];
+        }
+
+        SMDS_MeshElement* new_element = nullptr;
+        if (elem->GetType() != SMDSAbs_Node) {
+            switch (elem->GetEntityType()) {
+                case SMDSEntity_Polyhedra:
+#if SMESH_VERSION_MAJOR >= 9
+                    new_element = editor.GetMeshDS()->AddPolyhedralVolume(
+                        nodes,
+                        static_cast<const SMDS_MeshVolume*>(elem)->GetQuantities()
+                    );
+#else
+                    new_element = editor.GetMeshDS()->AddPolyhedralVolume(
+                        nodes,
+                        static_cast<const SMDS_VtkVolume*>(elem)->GetQuantities()
+                    );
+#endif
+                    element_map[elem->GetID()] = new_element;
+                    break;
+                case SMDSEntity_Ball: {
+                    SMESH_MeshEditor::ElemFeatures elemFeat;
+                    elemFeat.Init(static_cast<const SMDS_BallElement*>(elem)->GetDiameter());
+                    new_element = editor.AddElement(nodes, elemFeat);
+                    element_map[elem->GetID()] = new_element;
+                    break;
+                }
+                default: {
+                    SMESH_MeshEditor::ElemFeatures elemFeat(elem->GetType(), elem->IsPoly());
+                    new_element = editor.AddElement(nodes, elemFeat);
+                    element_map[elem->GetID()] = new_element;
+                    break;
+                }
+            }
+            if (cellSources && new_element) {
+                cellSources->push_back(sourceName);
+            }
+        }
+    }
+
+    // Union groups by name (and type); do not create duplicate same-named groups.
+    SMESH_Mesh::GroupIteratorPtr gIt = mesh.myMesh->GetGroups();
+    while (gIt->more()) {
+        SMESH_Group* group = gIt->next();
+        const SMESHDS_GroupBase* groupDS = group->GetGroupDS();
+
+        SMDSAbs_ElementType groupType = groupDS->GetType();
+        if (groupType != SMDSAbs_Node && appendMeshDS->GetMeshInfo().NbElements(groupType) == 0) {
+            continue;
+        }
+
+        std::vector<const SMDS_MeshElement*> groupElems;
+        SMDS_ElemIteratorPtr eIt = groupDS->GetElements();
+        const SMDS_MeshElement* foundElem = nullptr;
+        if (groupType == SMDSAbs_Node) {
+            while (eIt->more()) {
+                if ((foundElem = node_map[eIt->next()->GetID()])) {
+                    groupElems.push_back(foundElem);
+                }
+            }
+        }
+        else {
+            while (eIt->more()) {
+                if ((foundElem = element_map[eIt->next()->GetID()])) {
+                    groupElems.push_back(foundElem);
+                }
+            }
+        }
+
+        if (groupElems.empty()) {
+            continue;
+        }
+
+        SMESH_Group* targetGroup = nullptr;
+        for (int id : this->myMesh->GetGroupIds()) {
+            SMESH_Group* existing = this->myMesh->GetGroup(id);
+            if (existing && existing->GetGroupDS()
+                && existing->GetGroupDS()->GetType() == groupType
+                && existing->GetName() && group->GetName()
+                && std::strcmp(existing->GetName(), group->GetName()) == 0) {
+                targetGroup = existing;
+                break;
+            }
+        }
+
+        if (!targetGroup) {
+            int aId = -1;
+            targetGroup = this->myMesh->AddGroup(groupType, group->GetName(), aId);
+        }
+
+        if (targetGroup) {
+            SMESHDS_Group* newGroupDS = dynamic_cast<SMESHDS_Group*>(targetGroup->GetGroupDS());
+            if (newGroupDS) {
+                SMDS_MeshGroup& smdsGroup = newGroupDS->SMDSGroup();
+                for (auto it : groupElems) {
+                    smdsGroup.Add(it);
+                }
+            }
+        }
+    }
+
+    appendMeshDS->Modified();
 }
 
 void FemMesh::copyMeshData(const FemMesh& mesh)
@@ -795,44 +949,63 @@ std::list<int> FemMesh::getNodeElements(int id, SMDSAbs_ElementType type) const
     return result;
 }
 
+namespace
+{
+
+/**
+ * True when some element of ownerType contains every node of elem, i.e. elem is
+ * a sub-element ("skin") of a higher dimensional element.
+ *
+ * Uses the node inverse-element iterators, so the cost is proportional to the
+ * number of elements adjacent to elem's first node rather than to the total
+ * element count.
+ */
+bool isSubElementOf(const SMDS_MeshElement* elem, SMDSAbs_ElementType ownerType)
+{
+    if (!elem) {
+        return false;
+    }
+    const int nbNodes = elem->NbNodes();
+    if (nbNodes < 1) {
+        return false;
+    }
+    const SMDS_MeshNode* first = elem->GetNode(0);
+    if (!first) {
+        return false;
+    }
+
+    SMDS_ElemIteratorPtr ownerIt = first->GetInverseElementIterator(ownerType);
+    while (ownerIt->more()) {
+        const SMDS_MeshElement* owner = ownerIt->next();
+        if (!owner || owner == elem) {
+            continue;
+        }
+        bool containsAll = true;
+        for (int i = 1; i < nbNodes; ++i) {
+            const SMDS_MeshNode* node = elem->GetNode(i);
+            if (!node || owner->GetNodeIndex(node) < 0) {
+                containsAll = false;
+                break;
+            }
+        }
+        if (containsAll) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 std::set<int> FemMesh::getEdgesOnly() const
 {
     std::set<int> resultIDs;
 
-    // edges
+    // Edges that are not an edge of any face.
     SMDS_EdgeIteratorPtr aEdgeIter = myMesh->GetMeshDS()->edgesIterator();
     while (aEdgeIter->more()) {
         const SMDS_MeshEdge* aEdge = aEdgeIter->next();
-        std::list<int> enodes = getElementNodes(aEdge->GetID());
-        std::set<int> aEdgeNodes(enodes.begin(), enodes.end());  // convert list to set
-        bool edgeBelongsToAFace = false;
-
-        // faces
-        SMDS_FaceIteratorPtr aFaceIter = myMesh->GetMeshDS()->facesIterator();
-        while (aFaceIter->more()) {
-            const SMDS_MeshFace* aFace = aFaceIter->next();
-            std::list<int> fnodes = getElementNodes(aFace->GetID());
-            std::set<int> aFaceNodes(fnodes.begin(), fnodes.end());  // convert list to set
-
-            // if aEdgeNodes is not a subset of any aFaceNodes --> aEdge does not belong to any Face
-            std::vector<int> inodes;
-            std::set_intersection(
-                aFaceNodes.begin(),
-                aFaceNodes.end(),
-                aEdgeNodes.begin(),
-                aEdgeNodes.end(),
-                std::back_inserter(inodes)
-            );
-            std::set<int> intersection_nodes(
-                inodes.begin(),
-                inodes.end()
-            );  // convert vector to set
-            if (aEdgeNodes == intersection_nodes) {
-                edgeBelongsToAFace = true;
-                break;
-            }
-        }
-        if (!edgeBelongsToAFace) {
+        if (!isSubElementOf(aEdge, SMDSAbs_Face)) {
             resultIDs.insert(aEdge->GetID());
         }
     }
@@ -842,71 +1015,208 @@ std::set<int> FemMesh::getEdgesOnly() const
 
 std::set<int> FemMesh::getFacesOnly() const
 {
-    // How it works ATM:
-    // for each face
-    //     get the face nodes
-    //     for each volume
-    //         get the volume nodes
-    //         if the face nodes are a subset of the volume nodes
-    //             add the face to the volume faces and break
-    //     if face doesn't belong to a volume
-    //         add it to faces only
-    //
-    // This means it is iterated over a lot of volumes many times, this is quite expensive!
-    //
-    // TODO make this faster
-    // Idea:
-    // for each volume
-    //     get the faces and add them to the volume faces
-    // for each face
-    //     if not in volume faces
-    //     add it to the faces only
-    //
-    // but the volume faces do not seem to know their global mesh ID, I could not find any method in
-    // SMESH
-
     std::set<int> resultIDs;
 
-    // faces
+    // Faces whose nodes are not all contained in some volume.
     SMDS_FaceIteratorPtr aFaceIter = myMesh->GetMeshDS()->facesIterator();
     while (aFaceIter->more()) {
         const SMDS_MeshFace* aFace = aFaceIter->next();
-        std::list<int> fnodes = getElementNodes(aFace->GetID());
-        std::set<int> aFaceNodes(fnodes.begin(), fnodes.end());  // convert list to set
-        bool faceBelongsToAVolume = false;
-
-        // volumes
-        SMDS_VolumeIteratorPtr aVolIter = myMesh->GetMeshDS()->volumesIterator();
-        while (aVolIter->more()) {
-            const SMDS_MeshVolume* aVol = aVolIter->next();
-            std::list<int> vnodes = getElementNodes(aVol->GetID());
-            std::set<int> aVolNodes(vnodes.begin(), vnodes.end());  // convert list to set
-
-            // if aFaceNodes is not a subset of any aVolNodes --> aFace does not belong to any
-            // Volume
-            std::vector<int> inodes;
-            std::set_intersection(
-                aVolNodes.begin(),
-                aVolNodes.end(),
-                aFaceNodes.begin(),
-                aFaceNodes.end(),
-                std::back_inserter(inodes)
-            );
-            std::set<int> intersection_nodes(
-                inodes.begin(),
-                inodes.end()
-            );  // convert vector to set
-            if (aFaceNodes == intersection_nodes) {
-                faceBelongsToAVolume = true;
-                break;
-            }
-        }
-        if (!faceBelongsToAVolume) {
+        if (!isSubElementOf(aFace, SMDSAbs_Volume)) {
             resultIDs.insert(aFace->GetID());
         }
     }
 
     return resultIDs;
+}
+
+namespace
+{
+
+int smeshElementDimension(const SMDS_MeshElement* elem)
+{
+    if (!elem) {
+        return -1;
+    }
+    switch (elem->GetType()) {
+        case SMDSAbs_Volume:
+            return 3;
+        case SMDSAbs_Face:
+            return 2;
+        case SMDSAbs_Edge:
+            return 1;
+        case SMDSAbs_0DElement:
+            return 0;
+        default:
+            return -1;
+    }
+}
+
+/** True if name matches SolidN / FaceN / EdgeN / VertexN (global entity group contract). */
+bool parseEntityGroupName(const char* name)
+{
+    if (!name) {
+        return false;
+    }
+    std::string_view n(name);
+    std::string_view prefix;
+    for (std::string_view candidate : {"Solid", "Face", "Edge", "Vertex"}) {
+        if (n.starts_with(candidate)) {
+            prefix = candidate;
+            break;
+        }
+    }
+    if (prefix.empty()) {
+        return false;
+    }
+    const auto rest = n.substr(prefix.size());
+    return !rest.empty()
+        && std::all_of(rest.begin(), rest.end(), [](unsigned char c) { return std::isdigit(c); });
+}
+
+}  // namespace
+
+std::set<int> FemMesh::getHighestElements(const FemGeometry* geometry) const
+{
+    const SMESHDS_Mesh* meshDS = myMesh->GetMeshDS();
+
+    // Element id -> entity group name from Solid*/Face*/Edge*/Vertex* groups.
+    std::map<int, std::string> elemEntity;
+    if (geometry) {
+        for (int gid : myMesh->GetGroupIds()) {
+            SMESH_Group* group = myMesh->GetGroup(gid);
+            if (!group || !group->GetGroupDS() || !group->GetName()) {
+                continue;
+            }
+            if (!parseEntityGroupName(group->GetName())) {
+                continue;
+            }
+            SMDS_ElemIteratorPtr eIt = group->GetGroupDS()->GetElements();
+            while (eIt->more()) {
+                const SMDS_MeshElement* elem = eIt->next();
+                if (elem && elem->GetType() != SMDSAbs_Node) {
+                    elemEntity[elem->GetID()] = group->GetName();
+                }
+            }
+        }
+    }
+
+    // Effective dimension bitmask per entity, computed once per entity rather
+    // than once per element. "Achieved" is tracked per *owner* (a solid owns
+    // its faces and edges), which is what makes the skin of a solid come out as
+    // not-highest while a free shell of the same dimension does.
+    std::map<std::string, int> achievedOfOwner;
+    if (geometry) {
+        for (const auto& [eid, entity] : elemEntity) {
+            const int dim = smeshElementDimension(meshDS->FindElement(eid));
+            if (dim < 0) {
+                continue;
+            }
+            auto owners = geometry->getEntityOwners(entity);
+            if (owners.empty()) {
+                owners.push_back(entity);
+            }
+            for (const auto& owner : owners) {
+                auto it = achievedOfOwner.find(owner);
+                if (it == achievedOfOwner.end() || dim > it->second) {
+                    achievedOfOwner[owner] = dim;
+                }
+            }
+        }
+    }
+
+    std::map<std::string, int> maskOfEntity;
+    auto entityMask = [&](const std::string& entity) {
+        auto cached = maskOfEntity.find(entity);
+        if (cached != maskOfEntity.end()) {
+            return cached->second;
+        }
+        int mask = 0;
+        auto owners = geometry->getEntityOwners(entity);
+        if (owners.empty()) {
+            owners.push_back(entity);
+        }
+        for (const auto& owner : owners) {
+            int dim = geometry->getAnalysisDimension(owner);
+            auto ait = achievedOfOwner.find(owner);
+            // The mesher may not have reached the declared dimension (a solid
+            // meshed with surface elements only). Fall back to what it achieved
+            // so the elements are still exported.
+            if (ait != achievedOfOwner.end() && ait->second >= 0 && (dim < 0 || ait->second < dim)) {
+                dim = ait->second;
+            }
+            if (dim >= 0 && dim <= 3) {
+                mask |= (1 << dim);
+            }
+        }
+        // Embedded shell / rebar: an override on the entity itself counts even
+        // when the entity is owned by a solid.
+        const auto& overrides = geometry->DimensionOverride.getValue();
+        auto oit = overrides.find(entity);
+        if (oit != overrides.end() && !oit->second.empty()) {
+            try {
+                const int dim = std::stoi(oit->second);
+                if (dim >= 0 && dim <= 3) {
+                    mask |= (1 << dim);
+                }
+            }
+            catch (const std::exception&) {
+                Base::Console().warning(
+                    "FemMesh: invalid DimensionOverride for '%s': '%s'\n",
+                    entity.c_str(),
+                    oit->second.c_str()
+                );
+            }
+        }
+        maskOfEntity[entity] = mask;
+        return mask;
+    };
+
+    // Topology rule, used for every element the geometry says nothing about.
+    // Volumes are always highest; a face, edge or 0D element is highest only
+    // when it is not the skin of something of higher dimension.
+    auto keepByTopology = [](const SMDS_MeshElement* elem) {
+        switch (elem->GetType()) {
+            case SMDSAbs_Volume:
+                return true;
+            case SMDSAbs_Face:
+                return !isSubElementOf(elem, SMDSAbs_Volume);
+            case SMDSAbs_Edge:
+                return !isSubElementOf(elem, SMDSAbs_Face) && !isSubElementOf(elem, SMDSAbs_Volume);
+            case SMDSAbs_0DElement:
+                return !isSubElementOf(elem, SMDSAbs_Edge) && !isSubElementOf(elem, SMDSAbs_Face)
+                    && !isSubElementOf(elem, SMDSAbs_Volume);
+            default:
+                return false;
+        }
+    };
+
+    std::set<int> result;
+    SMDS_ElemIteratorPtr elemIt = meshDS->elementsIterator();
+    while (elemIt->more()) {
+        const SMDS_MeshElement* elem = elemIt->next();
+        if (!elem || elem->GetType() == SMDSAbs_Node) {
+            continue;
+        }
+        const int dim = smeshElementDimension(elem);
+        if (dim < 0) {
+            continue;
+        }
+
+        auto entity = elemEntity.find(elem->GetID());
+        if (entity == elemEntity.end()) {
+            // No declared dimension available for this element: never drop it
+            // silently, decide from the mesh topology alone.
+            if (keepByTopology(elem)) {
+                result.insert(elem->GetID());
+            }
+            continue;
+        }
+
+        if (entityMask(entity->second) & (1 << dim)) {
+            result.insert(elem->GetID());
+        }
+    }
+    return result;
 }
 
 namespace
@@ -1968,8 +2278,15 @@ void FemMesh::writeABAQUS(
     // get volumes
     ElementsMap elementsMapVol;  // empty volumes map
     SMDS_VolumeIteratorPtr aVolIter = myMesh->GetMeshDS()->volumesIterator();
+    std::set<int> highestIds;
+    if (elemParam == 1) {
+        highestIds = getHighestElements();
+    }
     while (aVolIter->more()) {
         const SMDS_MeshVolume* aVol = aVolIter->next();
+        if (elemParam == 1 && !highestIds.contains(aVol->GetID())) {
+            continue;
+        }
         std::pair<int, std::vector<int>> apair;
         apair.first = aVol->GetID();
         int numNodes = aVol->NbNodes();
@@ -1984,11 +2301,9 @@ void FemMesh::writeABAQUS(
     }
 
     // get faces
-    ElementsMap elementsMapFac;  // empty faces map used for elemParam = 1
-                                 // and elementsMapVol is not empty
-    if ((elemParam == 0) || (elemParam == 1 && elementsMapVol.empty())) {
-        // for elemParam = 1 we only fill the elementsMapFac if the elmentsMapVol is empty
-        // we're going to fill the elementsMapFac with all faces
+    ElementsMap elementsMapFac;
+    if (elemParam == 0) {
+        // all faces
         SMDS_FaceIteratorPtr aFaceIter = myMesh->GetMeshDS()->facesIterator();
         while (aFaceIter->more()) {
             const SMDS_MeshFace* aFace = aFaceIter->next();
@@ -2005,8 +2320,29 @@ void FemMesh::writeABAQUS(
             }
         }
     }
-    if (elemParam == 2) {
-        // we're going to fill the elementsMapFac with the facesOnly
+    else if (elemParam == 1) {
+        // per-entity highest: free faces / shell entities alongside volumes
+        SMDS_FaceIteratorPtr aFaceIter = myMesh->GetMeshDS()->facesIterator();
+        while (aFaceIter->more()) {
+            const SMDS_MeshFace* aFace = aFaceIter->next();
+            if (!highestIds.contains(aFace->GetID())) {
+                continue;
+            }
+            std::pair<int, std::vector<int>> apair;
+            apair.first = aFace->GetID();
+            int numNodes = aFace->NbNodes();
+            std::map<int, std::string>::iterator it = faceTypeMap.find(numNodes);
+            if (it != faceTypeMap.end()) {
+                const std::vector<int>& order = elemOrderMap[it->second];
+                for (int jt : order) {
+                    apair.second.push_back(aFace->GetNode(jt)->GetID());
+                }
+                elementsMapFac[it->second].insert(apair);
+            }
+        }
+    }
+    else if (elemParam == 2) {
+        // faces not belonging to any volume
         std::set<int> facesOnly = getFacesOnly();
         for (int itfa : facesOnly) {
             std::pair<int, std::vector<int>> apair;
@@ -2025,11 +2361,8 @@ void FemMesh::writeABAQUS(
     }
 
     // get edges
-    ElementsMap elementsMapEdg;  // empty edges map used for elemParam == 1
-                                 // and either elementMapVol or elementsMapFac are not empty
-    if ((elemParam == 0) || (elemParam == 1 && elementsMapVol.empty() && elementsMapFac.empty())) {
-        // for elemParam = 1 we only fill the elementsMapEdg if the elmentsMapVol
-        // and elmentsMapFac are empty we're going to fill the elementsMapEdg with all edges
+    ElementsMap elementsMapEdg;
+    if (elemParam == 0) {
         SMDS_EdgeIteratorPtr aEdgeIter = myMesh->GetMeshDS()->edgesIterator();
         while (aEdgeIter->more()) {
             const SMDS_MeshEdge* aEdge = aEdgeIter->next();
@@ -2046,8 +2379,27 @@ void FemMesh::writeABAQUS(
             }
         }
     }
-    if (elemParam == 2) {
-        // we're going to fill the elementsMapEdg with the edgesOnly
+    else if (elemParam == 1) {
+        SMDS_EdgeIteratorPtr aEdgeIter = myMesh->GetMeshDS()->edgesIterator();
+        while (aEdgeIter->more()) {
+            const SMDS_MeshEdge* aEdge = aEdgeIter->next();
+            if (!highestIds.contains(aEdge->GetID())) {
+                continue;
+            }
+            std::pair<int, std::vector<int>> apair;
+            apair.first = aEdge->GetID();
+            int numNodes = aEdge->NbNodes();
+            std::map<int, std::string>::iterator it = edgeTypeMap.find(numNodes);
+            if (it != edgeTypeMap.end()) {
+                const std::vector<int>& order = elemOrderMap[it->second];
+                for (int jt : order) {
+                    apair.second.push_back(aEdge->GetNode(jt)->GetID());
+                }
+                elementsMapEdg[it->second].insert(apair);
+            }
+        }
+    }
+    else if (elemParam == 2) {
         std::set<int> edgesOnly = getEdgesOnly();
         for (int ited : edgesOnly) {
             std::pair<int, std::vector<int>> apair;

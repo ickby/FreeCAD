@@ -25,7 +25,10 @@
 #pragma once
 
 #include <list>
+#include <map>
 #include <memory>
+#include <set>
+#include <string>
 #include <vector>
 
 #include <SMDSAbs_ElementType.hxx>
@@ -47,6 +50,8 @@ class TopoDS_Solid;
 
 namespace Fem
 {
+
+class FemGeometry;
 
 enum class ABAQUS_VolumeVariant
 {
@@ -155,6 +160,18 @@ public:
     std::set<int> getEdgesOnly() const;
     /// retrieving IDs of faces not belonging to any volume
     std::set<int> getFacesOnly() const;
+
+    /**
+     * Element IDs kept by the per-entity "highest" export filter (elemParam=1 / highest=true).
+     *
+     * With FemGeometry and Solid/Face/Edge/Vertex entity groups: keep cell e when
+     * getEntityDimensionMask(entity(e)) has bit celldim(e) set (same rule as Stage 6 dimmask).
+     * Without geometry: if entity groups exist, keep cells at the max cell dimension of their
+     * entity group, dropping Face/Edge/Vertex cells that are topologically owned by higher
+     * elements (free-face / free-edge rule). If no entity groups: volumes + getFacesOnly +
+     * getEdgesOnly (+ free 0D when nothing else).
+     */
+    std::set<int> getHighestElements(const FemGeometry* geometry = nullptr) const;
     //@}
 
     /** @name Placement control */
@@ -240,6 +257,20 @@ public:
         bool highest = true
     );
     void writeZ88(const std::string& FileName) const;
+
+    /**
+     * Append another mesh's nodes, elements and groups into this mesh.
+     * Child placement is applied to node coordinates (group frame stays identity).
+     * Groups with the same name and type are unioned, not duplicated.
+     * New nodes/elements get contiguous IDs assigned by SMESH.
+     * If sourceName and cellSources are set, each new element appends sourceName
+     * to cellSources (provenance).
+     */
+    void appendMeshData(
+        const FemMesh& mesh,
+        const std::string& sourceName = {},
+        std::vector<std::string>* cellSources = nullptr
+    );
 
 private:
     void copyMeshData(const FemMesh&);

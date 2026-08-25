@@ -26,6 +26,9 @@ generate_from_py(ViewProviderFemMesh)
 generate_from_py(ViewProviderFemPostPipeline)
 generate_from_py(ViewProviderFemPostFilter)
 generate_from_py(ViewProviderShapeExtension)
+if(BUILD_FEM_VTK)
+    generate_from_py(ViewProviderFemGeometry)
+endif(BUILD_FEM_VTK)
 
 SET(Python_SRCS
     ViewProviderFemConstraint.pyi
@@ -42,6 +45,8 @@ if(BUILD_FEM_VTK)
         ViewProviderFemPostPipelinePyImp.cpp
         ViewProviderFemPostFilter.pyi
         ViewProviderFemPostFilterPyImp.cpp
+        ViewProviderFemGeometry.pyi
+        ViewProviderFemGeometryPyImp.cpp
     )
 endif(BUILD_FEM_VTK)
 
@@ -199,6 +204,8 @@ SET(FemGui_SRCS_ViewProvider
     ViewProviderFemMeshShape.h
     ViewProviderFemMeshShapeNetgen.cpp
     ViewProviderFemMeshShapeNetgen.h
+    ViewProviderFemMeshGroup.cpp
+    ViewProviderFemMeshGroup.h
     ViewProviderAnalysis.cpp
     ViewProviderAnalysis.h
     ViewProviderSolver.cpp
@@ -323,6 +330,11 @@ SET(FemGui_SRCS_Module
     AbaqusHighlighter.h
     ActiveAnalysisObserver.cpp
     ActiveAnalysisObserver.h
+    AnalysisViewState.cpp
+    AnalysisViewState.h
+    AnalysisViewStatePy.cpp
+    AnalysisViewStatePy.h
+    FemViewTypes.h
     Command.cpp
     FemGuiTools.cpp
     FemGuiTools.h
@@ -340,6 +352,12 @@ SOURCE_GROUP("Module" FILES ${FemGui_SRCS_Module})
 
 if(BUILD_FEM_VTK)
     SET(FemGui_SRCS_Post
+        Classification.h
+        Classification.cpp
+        FemVisibilityMask.h
+        FemVisibilityMask.cpp
+        FemMeshRenderer.h
+        FemMeshRenderer.cpp
         ViewProviderFemPostObject.h
         ViewProviderFemPostObject.cpp
         ViewProviderFemPostPipeline.h
@@ -350,8 +368,13 @@ if(BUILD_FEM_VTK)
         ViewProviderFemPostFunction.cpp
         ViewProviderFemPostFilter.h
         ViewProviderFemPostFilter.cpp
+        ViewProviderFemGeometry.h
+        ViewProviderFemGeometry.cpp
+        ViewProviderFemMeshShapePreprocess.h
+        ViewProviderFemMeshShapePreprocess.cpp
     )
     SOURCE_GROUP("PostObjects" FILES ${FemGui_SRCS_Post})
+    list(APPEND FemGui_LIBS TKIVtk)
 endif(BUILD_FEM_VTK)
 
 SET(FemGui_SRCS
@@ -480,6 +503,8 @@ SET(FemGuiPythonUI_SRCS
     Resources/ui/PostLineplotFieldAppEdit.ui
     Resources/ui/PostLineplotIndexAppEdit.ui
     Resources/ui/PostTableFieldViewEdit.ui
+    Resources/ui/ViewSettingsWidget.ui
+    Resources/ui/ViewClipWidget.ui
 )
 
 ADD_CUSTOM_TARGET(FemPythonUi ALL

@@ -36,6 +36,7 @@ import FreeCADGui
 from FreeCAD import Qt
 
 from .manager import CommandManager
+from femtools import membertools
 from femtools.femutils import expandParentObject
 from femtools.femutils import is_of_type
 from femsolver.settings import get_default_solver
@@ -93,6 +94,20 @@ class _Analysis(CommandManager):
             FreeCAD.ActiveDocument.commitTransaction()
 
         FreeCAD.ActiveDocument.recompute()
+
+
+class _GeometryImport(CommandManager):
+    "The FEM_GeometryImport command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.pixmap = "fem-post-geo-box"
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_GeometryImport", "Import Geometry")
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_GeometryImport", "Imports geometry into the active analysis"
+        )
+        self.is_active = "with_analysis"
+        self.do_activated = "add_geometry_set_edit"
 
 
 class _ClippingPlaneAdd(CommandManager):
@@ -565,6 +580,21 @@ class _Examples(CommandManager):
         FreeCADGui.doCommand("femexamples.examplesgui.show_examplegui()")
 
 
+class _ViewPanel(CommandManager):
+    "The FEM_ViewPanel command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.pixmap = "FemWorkbench"
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_ViewPanel", "FEM View")
+        self.tooltip = Qt.QT_TRANSLATE_NOOP("FEM_ViewPanel", "Show or hide the FEM View dock panel")
+        self.is_active = "always"
+
+    def Activated(self):
+        FreeCADGui.addModule("femguiutils.view_panel")
+        FreeCADGui.doCommand("femguiutils.view_panel.toggle_visualization_panel()")
+
+
 class _MaterialEditor(CommandManager):
     "The FEM_MaterialEditor command definition"
 
@@ -784,44 +814,70 @@ class _MeshGmshFromShape(CommandManager):
         self.tooltip = Qt.QT_TRANSLATE_NOOP(
             "FEM_MeshGmshFromShape", "Creates a FEM mesh from a shape by Gmsh mesher"
         )
-        self.is_active = "with_part_feature"
+        self.is_active = "with_analysis_geometry_or_part"
 
     def Activated(self):
-        # a mesh could be made with and without an analysis,
-        # we're going to check not for an analysis in command manager module
         FreeCAD.ActiveDocument.openTransaction("Create FEM mesh by Gmsh")
         mesh_obj_name = "FEMMeshGmsh"
-        # if requested by some people add Preference for this
-        # mesh_obj_name = self.selobj.Name + "_Mesh"
         FreeCADGui.addModule("ObjectsFem")
+        FreeCADGui.addModule("femtools.membertools")
         FreeCADGui.doCommand(
             "ObjectsFem.makeMeshGmsh(FreeCAD.ActiveDocument, '" + mesh_obj_name + "')"
         )
-        FreeCADGui.doCommand(
-            "FreeCAD.ActiveDocument.ActiveObject.Shape = FreeCAD.ActiveDocument.{}".format(
-                self.selobj.Name
-            )
-        )
         FreeCADGui.doCommand("FreeCAD.ActiveDocument.ActiveObject.ElementOrder = '2nd'")
-        # SecondOrderLinear gives much better meshes in the regard of
-        # nonpositive jacobians but on curved faces the constraint nodes
-        # will no longer found thus standard will be False
-        # https://forum.freecad.org/viewtopic.php?t=41738
-        # https://forum.freecad.org/viewtopic.php?f=18&t=45260&start=20#p389494
         FreeCADGui.doCommand("FreeCAD.ActiveDocument.ActiveObject.SecondOrderLinear = False")
 
-        # Gmsh mesh object could be added without an active analysis
-        # but if there is an active analysis move it in there
         import FemGui
 
-        if FemGui.getActiveAnalysis():
+        analysis = FemGui.getActiveAnalysis()
+        if analysis:
             FreeCADGui.addModule("FemGui")
+            FreeCADGui.doCommand("_analysis = FemGui.getActiveAnalysis()")
+            FreeCADGui.doCommand("_mesh = FreeCAD.ActiveDocument.ActiveObject")
+
+            geoms = membertools.get_member(analysis, "Fem::FemGeometry")
+            mesh_groups = membertools.get_member(analysis, "Fem::FemMeshShapeGroup")
+
+            if geoms:
+                # Prefer the analysis geometry; Components=[] means all components.
+                FreeCADGui.doCommand(
+                    "_geom = femtools.membertools.get_member(" "_analysis, 'Fem::FemGeometry')[0]"
+                )
+                if mesh_groups:
+                    FreeCADGui.doCommand(
+                        "femtools.membertools.get_member("
+                        "_analysis, 'Fem::FemMeshShapeGroup')[0].addObject(_mesh)"
+                    )
+                else:
+                    FreeCADGui.doCommand(
+                        "_meshgroup = ObjectsFem.makeMeshShapeGroup("
+                        "FreeCAD.ActiveDocument, geometry=_geom, analysis=_analysis)"
+                    )
+                    FreeCADGui.doCommand("_meshgroup.addObject(_mesh)")
+                FreeCADGui.doCommand("_mesh.Components = (_geom, [])")
+            else:
+                if mesh_groups:
+                    FreeCADGui.doCommand(
+                        "femtools.membertools.get_member("
+                        "_analysis, 'Fem::FemMeshShapeGroup')[0].addObject(_mesh)"
+                    )
+                else:
+                    FreeCADGui.doCommand("_analysis.addObject(_mesh)")
+                FreeCADGui.doCommand(f"_mesh.Shape = FreeCAD.ActiveDocument.{self.selobj.Name}")
+            # Open the mesh task panel — not the mesh group (ActiveObject after makeMeshShapeGroup).
+            FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(_mesh.Name)")
             FreeCADGui.doCommand(
-                "FemGui.getActiveAnalysis().addObject(FreeCAD.ActiveDocument.ActiveObject)"
+                "FemGui.getAnalysisViewState(_analysis).setActiveStage('Mesh')"
             )
-        FreeCADGui.doCommand(
-            "FreeCADGui.ActiveDocument.setEdit(FreeCAD.ActiveDocument.ActiveObject.Name)"
-        )
+        else:
+            FreeCADGui.doCommand(
+                "FreeCAD.ActiveDocument.ActiveObject.Shape = FreeCAD.ActiveDocument.{}".format(
+                    self.selobj.Name
+                )
+            )
+            FreeCADGui.doCommand(
+                "FreeCADGui.ActiveDocument.setEdit(FreeCAD.ActiveDocument.ActiveObject.Name)"
+            )
         FreeCADGui.Selection.clearSelection()
 
 
@@ -846,7 +902,7 @@ class _MeshNetgenFromShape(CommandManager):
             "FEM_MeshNetgenFromShape",
             "Creates a FEM mesh from a solid or face shape by Netgen internal mesher",
         )
-        self.is_active = "with_part_feature"
+        self.is_active = "with_analysis_geometry_or_part"
 
     def Activated(self):
         # a mesh could be made with and without an analysis,
@@ -854,9 +910,8 @@ class _MeshNetgenFromShape(CommandManager):
         netgen_prefs = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/Netgen")
         FreeCAD.ActiveDocument.openTransaction("Create FEM mesh Netgen")
         mesh_obj_name = "FEMMeshNetgen"
-        # if requested by some people add Preference for this
-        # mesh_obj_name = sel[0].Name + "_Mesh"
         FreeCADGui.addModule("ObjectsFem")
+        FreeCADGui.addModule("femtools.membertools")
         if netgen_prefs.GetBool("UseLegacyNetgen", 1):
             FreeCADGui.doCommand(
                 "ObjectsFem.makeMeshNetgenLegacy(FreeCAD.ActiveDocument, '" + mesh_obj_name + "')"
@@ -867,25 +922,58 @@ class _MeshNetgenFromShape(CommandManager):
             )
             FreeCADGui.doCommand("FreeCAD.ActiveDocument.ActiveObject.EndStep = 'OptimizeVolume'")
 
-        FreeCADGui.doCommand(
-            "FreeCAD.ActiveDocument.ActiveObject.Shape = FreeCAD.ActiveDocument.{}".format(
-                self.selobj.Name
-            )
-        )
         FreeCADGui.doCommand("FreeCAD.ActiveDocument.ActiveObject.Fineness = 'Moderate'")
 
-        # Netgen mesh object could be added without an active analysis
-        # but if there is an active analysis move it in there
         import FemGui
 
-        if FemGui.getActiveAnalysis():
+        analysis = FemGui.getActiveAnalysis()
+        if analysis:
             FreeCADGui.addModule("FemGui")
+            FreeCADGui.doCommand("_analysis = FemGui.getActiveAnalysis()")
+            FreeCADGui.doCommand("_mesh = FreeCAD.ActiveDocument.ActiveObject")
+
+            geoms = membertools.get_member(analysis, "Fem::FemGeometry")
+            mesh_groups = membertools.get_member(analysis, "Fem::FemMeshShapeGroup")
+
+            if geoms:
+                FreeCADGui.doCommand(
+                    "_geom = femtools.membertools.get_member(" "_analysis, 'Fem::FemGeometry')[0]"
+                )
+                if mesh_groups:
+                    FreeCADGui.doCommand(
+                        "femtools.membertools.get_member("
+                        "_analysis, 'Fem::FemMeshShapeGroup')[0].addObject(_mesh)"
+                    )
+                else:
+                    FreeCADGui.doCommand(
+                        "_meshgroup = ObjectsFem.makeMeshShapeGroup("
+                        "FreeCAD.ActiveDocument, geometry=_geom, analysis=_analysis)"
+                    )
+                    FreeCADGui.doCommand("_meshgroup.addObject(_mesh)")
+                FreeCADGui.doCommand("_mesh.Components = (_geom, [])")
+            else:
+                FreeCADGui.doCommand(f"_mesh.Shape = FreeCAD.ActiveDocument.{self.selobj.Name}")
+                if mesh_groups:
+                    FreeCADGui.doCommand(
+                        "femtools.membertools.get_member("
+                        "_analysis, 'Fem::FemMeshShapeGroup')[0].addObject(_mesh)"
+                    )
+                else:
+                    FreeCADGui.doCommand("_analysis.addObject(_mesh)")
+            # Open the mesh task panel — not the mesh group (ActiveObject after makeMeshShapeGroup).
+            FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(_mesh.Name)")
             FreeCADGui.doCommand(
-                "FemGui.getActiveAnalysis().addObject(FreeCAD.ActiveDocument.ActiveObject)"
+                "FemGui.getAnalysisViewState(_analysis).setActiveStage('Mesh')"
             )
-        FreeCADGui.doCommand(
-            "FreeCADGui.ActiveDocument.setEdit(FreeCAD.ActiveDocument.ActiveObject.Name)"
-        )
+        else:
+            FreeCADGui.doCommand(
+                "FreeCAD.ActiveDocument.ActiveObject.Shape = FreeCAD.ActiveDocument.{}".format(
+                    self.selobj.Name
+                )
+            )
+            FreeCADGui.doCommand(
+                "FreeCADGui.ActiveDocument.setEdit(FreeCAD.ActiveDocument.ActiveObject.Name)"
+            )
         FreeCADGui.Selection.clearSelection()
         # a recompute immediately starts meshing when task panel is opened, this is not intended
 
@@ -1381,6 +1469,7 @@ class _CompSolvers(CommandManager):
 
 # the string in add command will be the page name on FreeCAD wiki
 FreeCADGui.addCommand("FEM_Analysis", _Analysis())
+FreeCADGui.addCommand("FEM_GeometryImport", _GeometryImport())
 FreeCADGui.addCommand("FEM_ClippingPlaneAdd", _ClippingPlaneAdd())
 FreeCADGui.addCommand("FEM_ClippingPlaneRemoveAll", _ClippingPlaneRemoveAll())
 FreeCADGui.addCommand("FEM_ConstantVacuumPermittivity", _ConstantVacuumPermittivity())
@@ -1411,6 +1500,7 @@ FreeCADGui.addCommand("FEM_EquationMagnetodynamic", _EquationMagnetodynamic())
 FreeCADGui.addCommand("FEM_EquationMagnetodynamic2D", _EquationMagnetodynamic2D())
 FreeCADGui.addCommand("FEM_EquationStaticCurrent", _EquationStaticCurrent())
 FreeCADGui.addCommand("FEM_Examples", _Examples())
+FreeCADGui.addCommand("FEM_ViewPanel", _ViewPanel())
 FreeCADGui.addCommand("FEM_MaterialEditor", _MaterialEditor())
 FreeCADGui.addCommand("FEM_MaterialFluid", _MaterialFluid())
 FreeCADGui.addCommand("FEM_MaterialMechanicalNonlinear", _MaterialMechanicalNonlinear())

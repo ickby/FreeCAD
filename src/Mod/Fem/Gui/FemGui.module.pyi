@@ -26,6 +26,18 @@ def getActiveAnalysis() -> DocumentObject | None:
     """Return the active FEM analysis object, if one is currently set."""
     ...
 
+def addActiveAnalysisObserver(obj: object, /) -> None:
+    """Register an object for active-analysis change notifications."""
+    ...
+
+def removeActiveAnalysisObserver(obj: object, /) -> None:
+    """Remove a previously registered active-analysis observer."""
+    ...
+
+def getAnalysisViewState(analysis: DocumentObject | None = None, /) -> object | None:
+    """Return the runtime AnalysisViewState for the given or active analysis."""
+    ...
+
 @overload
 def open(name: str, /) -> None:
     """Open one Abaqus or Python input file in the FEM editor."""

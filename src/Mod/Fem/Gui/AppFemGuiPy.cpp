@@ -26,6 +26,7 @@
 
 
 #include <App/DocumentObjectPy.h>
+#include <Base/Tools.h>
 #include <Gui/BitmapFactory.h>
 #include <Gui/Document.h>
 #include <Gui/EditorView.h>
@@ -36,6 +37,8 @@
 
 #include "AbaqusHighlighter.h"
 #include "ActiveAnalysisObserver.h"
+#include "AnalysisViewState.h"
+#include "AnalysisViewStatePy.h"
 
 
 namespace FemGui
@@ -46,6 +49,8 @@ public:
     Module()
         : Py::ExtensionModule<Module>("FemGui")
     {
+        AnalysisViewStatePy::init_type();
+
         add_varargs_method(
             "setActiveAnalysis",
             &Module::setActiveAnalysis,
@@ -55,6 +60,23 @@ public:
             "getActiveAnalysis",
             &Module::getActiveAnalysis,
             "getActiveAnalysis() -- Returns the Analysis object in work."
+        );
+        add_varargs_method(
+            "addActiveAnalysisObserver",
+            &Module::addActiveAnalysisObserver,
+            "addActiveAnalysisObserver(object) -- Register for active-analysis updates "
+            "(slotActiveFemAnalysisUpdated)."
+        );
+        add_varargs_method(
+            "removeActiveAnalysisObserver",
+            &Module::removeActiveAnalysisObserver,
+            "removeActiveAnalysisObserver(object) -- Remove a previously registered observer."
+        );
+        add_varargs_method(
+            "getAnalysisViewState",
+            &Module::getAnalysisViewState,
+            "getAnalysisViewState([AnalysisObject]) -- Runtime AnalysisViewState for the "
+            "given or active analysis."
         );
         add_varargs_method(
             "open",
@@ -126,6 +148,54 @@ private:
             );
         }
         return Py::None();
+    }
+    Py::Object addActiveAnalysisObserver(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        if (PyArg_ParseTuple(args.ptr(), "O", &object) && object) {
+            FemGui::ActiveAnalysisObserver::instance()->addPythonCallback(Py::Object(object));
+        }
+        return Py::None();
+    }
+    Py::Object removeActiveAnalysisObserver(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        if (PyArg_ParseTuple(args.ptr(), "O", &object) && object) {
+            FemGui::ActiveAnalysisObserver::instance()->removePythonCallback(Py::Object(object));
+        }
+        return Py::None();
+    }
+    Py::Object getAnalysisViewState(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        if (!PyArg_ParseTuple(args.ptr(), "|O!", &(App::DocumentObjectPy::Type), &object)) {
+            throw Py::Exception();
+        }
+
+        Fem::FemAnalysis* analysis = nullptr;
+        if (object) {
+            App::DocumentObject* obj
+                = static_cast<App::DocumentObjectPy*>(object)->getDocumentObjectPtr();
+            analysis = Base::freecad_cast<Fem::FemAnalysis*>(obj);
+            if (!analysis) {
+                throw Py::Exception(
+                    Base::PyExc_FC_GeneralError,
+                    "Object must be of type Fem::FemAnalysis"
+                );
+            }
+        }
+        else if (FemGui::ActiveAnalysisObserver::instance()->hasActiveObject()) {
+            analysis = FemGui::ActiveAnalysisObserver::instance()->getActiveObject();
+        }
+
+        if (!analysis) {
+            return Py::None();
+        }
+        auto* state = AnalysisViewState::forAnalysis(analysis);
+        if (!state) {
+            return Py::None();
+        }
+        return AnalysisViewStatePy::create(state);
     }
     Py::Object open(const Py::Tuple& args)
     {

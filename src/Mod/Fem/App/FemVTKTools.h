@@ -50,23 +50,34 @@ public:
     static void importVTKCellGroup(vtkSmartPointer<vtkDataSet> grid, FemMesh* mesh, std::string arrayname);
 
     // extract data from FreCAD FEM mesh and fill a vtkUnstructuredGrid instance with that data. Set
-    // `highest` to false to export all elements levels.
+    // `highest` to false to export all elements levels. When true, uses per-entity highest
+    // filtering (volumes of solids plus free faces/edges), not a global dimension fallback.
+    //
+    // Cells are grouped by element type, so their order does not follow the SMESH
+    // element ids. Pass `cellElementIds` to receive the SMESH element id of every
+    // written cell; that mapping is required by exportVTKCellGroup.
     static void exportVTKMesh(
         const FemMesh* mesh,
         vtkSmartPointer<vtkUnstructuredGrid> grid,
         bool highest = true,
-        float scale = 1.0
+        float scale = 1.0,
+        std::vector<int>* cellElementIds = nullptr
     );
 
     // Build a VTK cell array from FemMesh groups and attach it to the grid.
     // If index_map is empty, write group names as strings. Otherwise write the
     // mapped integer id for each group; groups not present in index_map are
     // skipped (sentinel -1), so refinement/analysis groups are not mis-attributed.
+    //
+    // `cellElementIds` must be the mapping returned by exportVTKMesh for this grid.
+    // Group elements that are not part of the grid (filtered out by `highest`) are
+    // ignored.
     static void exportVTKCellGroup(
         FemMesh* mesh,
         vtkSmartPointer<vtkDataSet> grid,
         std::string arrayname,
-        std::map<std::string, int> index_map
+        std::map<std::string, int> index_map,
+        const std::vector<int>& cellElementIds
     );
 
     // extract data from vtkUnstructuredGrid object and fill a FreeCAD FEM result object with that

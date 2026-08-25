@@ -43,6 +43,7 @@
 #include "ViewProviderFemMesh.h"
 #include "ViewProviderFemMeshShape.h"
 #include "ViewProviderFemMeshShapeNetgen.h"
+#include "ViewProviderFemMeshGroup.h"
 #include "ViewProviderSetElements.h"
 #include "ViewProviderSetElementNodes.h"
 #include "ViewProviderSetFaces.h"
@@ -77,6 +78,8 @@
 # include "ViewProviderFemPostPipeline.h"
 # include "ViewProviderFemPostBranchFilter.h"
 # include "ViewProviderShapeExtension.h"
+# include "ViewProviderFemGeometry.h"
+# include "ViewProviderFemMeshShapePreprocess.h"
 #endif
 
 
@@ -145,6 +148,8 @@ PyMOD_INIT_FUNC(FemGui)
     FemGui::ViewProviderFemMeshShapeBasePython                  ::init();
     FemGui::ViewProviderFemMeshShape                            ::init();
     FemGui::ViewProviderFemMeshShapeNetgen                      ::init();
+    FemGui::ViewProviderFemMeshGroup                            ::init();
+    FemGui::ViewProviderFemMeshGroupPython                      ::init();
     FemGui::PropertyFemMeshItem                                 ::init();
 
     FemGui::ViewProviderSetElements                             ::init();
@@ -190,6 +195,11 @@ PyMOD_INIT_FUNC(FemGui)
     FemGui::ViewProviderFemPostCylinderFunction                 ::init();
     FemGui::ViewProviderFemPostPlaneFunction                    ::init();
     FemGui::ViewProviderFemPostSphereFunction                   ::init();
+
+    FemGui::ViewProviderFemGeometry                             ::init();
+    FemGui::ViewProviderFemGeometryPython                       ::init();
+    FemGui::ViewProviderFemMeshShapePreprocess                  ::init();
+    FemGui::ViewProviderFemMeshShapePreprocessPython            ::init();
 #endif
 
 

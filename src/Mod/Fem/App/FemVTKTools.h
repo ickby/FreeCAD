@@ -56,6 +56,17 @@ public:
         float scale = 1.0
     );
 
+    // Build a VTK cell array from FemMesh groups and attach it to the grid.
+    // If index_map is empty, write group names as strings. Otherwise write the
+    // mapped integer id for each group; groups not present in index_map are
+    // skipped (sentinel -1), so refinement/analysis groups are not mis-attributed.
+    static void exportVTKCellGroup(
+        FemMesh* mesh,
+        vtkSmartPointer<vtkDataSet> grid,
+        std::string arrayname,
+        std::map<std::string, int> index_map
+    );
+
     // extract data from vtkUnstructuredGrid object and fill a FreeCAD FEM result object with that
     // data (needed by readResult)
     static void importFreeCADResult(vtkSmartPointer<vtkDataSet> dataset, App::DocumentObject* result);

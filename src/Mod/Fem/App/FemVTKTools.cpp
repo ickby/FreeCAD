@@ -42,6 +42,7 @@
 #include <vtkFloatArray.h>
 #include <vtkHexahedron.h>
 #include <vtkIdList.h>
+#include <vtkIntArray.h>
 #include <vtkLine.h>
 #include <vtkMultiBlockDataSet.h>
 #include <vtkPointData.h>
@@ -731,29 +732,18 @@ void FemVTKTools::writeVTKMesh(const char* filename, const FemMesh* mesh, bool h
     Base::Console().log("    %f: Done \n", Base::TimeElapsed::diffTimeF(Start, Base::TimeElapsed()));
 }
 
-void FemVTKTools::writeVTKMeshWithGroups(
-    std::string Filename,
+void FemVTKTools::exportVTKCellGroup(
     FemMesh* mesh,
-    std::string group_array,
-    std::map<std::string, int> index_map,
-    bool highest
+    vtkSmartPointer<vtkDataSet> grid,
+    std::string arrayname,
+    std::map<std::string, int> index_map
 )
 {
-    Base::TimeElapsed Start;
-    Base::Console().log(
-        "Start: write VTK unstructuredGrid from FemMesh including groups======================\n"
-    );
-    Base::FileInfo f(Filename);
-
-    vtkSmartPointer<vtkUnstructuredGrid> grid = vtkSmartPointer<vtkUnstructuredGrid>::New();
-    exportVTKMesh(mesh, grid, highest);
-
-    // add the groups array!
     vtkSmartPointer<vtkAbstractArray> cell_array;
     if (index_map.empty()) {
         auto cell_sarray = vtkNew<vtkStringArray>();
         cell_sarray->SetNumberOfComponents(1);
-        cell_sarray->SetName(group_array.c_str());
+        cell_sarray->SetName(arrayname.c_str());
         cell_sarray->SetNumberOfTuples(grid->GetNumberOfCells());
 
         auto smesh = mesh->getSMesh();
@@ -792,7 +782,7 @@ void FemVTKTools::writeVTKMeshWithGroups(
     else {
         auto cell_iarray = vtkNew<vtkIntArray>();
         cell_iarray->SetNumberOfComponents(1);
-        cell_iarray->SetName(group_array.c_str());
+        cell_iarray->SetName(arrayname.c_str());
         cell_iarray->SetNumberOfTuples(grid->GetNumberOfCells());
         for (int i = 0; i < grid->GetNumberOfCells(); i++) {
             cell_iarray->SetValue(i, -1);
@@ -816,8 +806,14 @@ void FemVTKTools::writeVTKMeshWithGroups(
                 continue;
             }
 
-            // Traverse the full group
-            auto id = index_map[group->GetName()];
+            // Only assign ids for groups present in index_map (shape entities).
+            // operator[] would insert missing keys with value 0 and mis-attribute
+            // refinement/analysis groups to the first solid.
+            auto it = index_map.find(group->GetName());
+            if (it == index_map.end()) {
+                continue;
+            }
+            auto id = it->second;
             auto aElemIter = groupDS->GetElements();
             while (aElemIter->more()) {
                 const SMDS_MeshElement* aElem = aElemIter->next();
@@ -834,6 +830,25 @@ void FemVTKTools::writeVTKMeshWithGroups(
 
     // set the cell group data to the grid
     grid->GetCellData()->AddArray(cell_array);
+}
+
+void FemVTKTools::writeVTKMeshWithGroups(
+    std::string Filename,
+    FemMesh* mesh,
+    std::string group_array,
+    std::map<std::string, int> index_map,
+    bool highest
+)
+{
+    Base::TimeElapsed Start;
+    Base::Console().log(
+        "Start: write VTK unstructuredGrid from FemMesh including groups======================\n"
+    );
+    Base::FileInfo f(Filename);
+
+    vtkSmartPointer<vtkUnstructuredGrid> grid = vtkSmartPointer<vtkUnstructuredGrid>::New();
+    exportVTKMesh(mesh, grid, highest);
+    exportVTKCellGroup(mesh, grid, group_array, index_map);
 
     Base::Console().log("Start: writing mesh data ======================\n");
     if (f.hasExtension("vtu")) {

@@ -246,6 +246,7 @@ PyObject* ExtensionContainerPy::addExtension(PyObject* args)
 
     GetApplication().signalBeforeAddingDynamicExtension(*getExtensionContainerPtr(), typeId);
     ext->initExtension(getExtensionContainerPtr());
+    ext->initPythonExtension();
 
     // The PyTypeObject is shared by all instances of this type and therefore
     // we have to add new methods only once.

@@ -21,12 +21,17 @@
  ***************************************************************************/
 
 
+#include <algorithm>
+
+#include <Base/Console.h>
+#include <Base/Interpreter.h>
 #include <Gui/Application.h>
 #include <Gui/Document.h>
 #include <Gui/ViewProviderDocumentObject.h>
 #include <Mod/Fem/App/FemAnalysis.h>
 
 #include "ActiveAnalysisObserver.h"
+#include "AnalysisViewState.h"
 
 
 using namespace FemGui;
@@ -55,11 +60,14 @@ void ActiveAnalysisObserver::setActiveObject(Fem::FemAnalysis* fem)
             activeDocument->getViewProvider(activeObject)
         );
         attachDocument(doc);
+        // Ensure view state exists for the newly active analysis
+        AnalysisViewState::forAnalysis(fem);
     }
     else {
         activeObject = nullptr;
         activeView = nullptr;
     }
+    emitCallbacks();
 }
 
 Fem::FemAnalysis* ActiveAnalysisObserver::getActiveObject() const
@@ -83,17 +91,65 @@ void ActiveAnalysisObserver::slotDeletedDocument(const App::Document& Doc)
 {
     App::Document* d = getDocument();
     if (d == &Doc) {
+        if (activeObject) {
+            AnalysisViewState::destroyForAnalysis(activeObject);
+        }
         activeObject = nullptr;
         activeDocument = nullptr;
         activeView = nullptr;
         detachDocument();
+        emitCallbacks();
     }
 }
 
 void ActiveAnalysisObserver::slotDeletedObject(const App::DocumentObject& Obj)
 {
     if (activeObject == &Obj) {
+        AnalysisViewState::destroyForAnalysis(activeObject);
         activeObject = nullptr;
         activeView = nullptr;
+        emitCallbacks();
+    }
+}
+
+void ActiveAnalysisObserver::addPythonCallback(Py::Object obj)
+{
+    callbacks.push_back(obj);
+}
+
+void ActiveAnalysisObserver::removePythonCallback(Py::Object obj)
+{
+    callbacks.erase(std::remove(callbacks.begin(), callbacks.end(), obj), callbacks.end());
+}
+
+void ActiveAnalysisObserver::emitCallbacks()
+{
+    Base::PyGILStateLocker lock;
+    try {
+        std::string slot = "slotActiveFemAnalysisUpdated";
+        Py::Tuple args(1);
+        if (activeObject) {
+            args.setItem(0, Py::asObject(activeObject->getPyObject()));
+        }
+        else {
+            args.setItem(0, Py::None());
+        }
+        for (auto& obj : callbacks) {
+            Py::Object callable;
+            if (PyObject_HasAttrString(obj.ptr(), slot.c_str())) {
+                callable = obj.getAttr(slot);
+            }
+            else if (obj.isCallable()) {
+                callable = obj;
+            }
+            else {
+                continue;
+            }
+            Base::pyCall(callable.ptr(), args.ptr());
+        }
+    }
+    catch (Py::Exception&) {
+        Base::PyException e;
+        e.reportException();
     }
 }

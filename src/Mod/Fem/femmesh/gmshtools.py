@@ -39,6 +39,7 @@ import FreeCAD
 from FreeCAD import Console
 from FreeCAD import Units
 
+import Part
 import Fem
 from . import meshtools
 from . import transfinitetools as tft
@@ -68,8 +69,24 @@ class GmshTools(ObjectTools):
         return self._field_counter
 
     def load_properties(self):
-        # part to mesh
-        self.part_obj = self.obj.Shape
+        # part / geometry to mesh — prefer Components (FemGeometry) over legacy Shape
+        self.geometry_obj = None
+        self.component_subs = []
+        self.global_shape = None
+        self.export_shape = None
+        self.local_to_global = {}
+        self.group_physicals = []
+
+        # Netgen and legacy mesh objects have no Components property
+        comps = getattr(self.obj, "Components", None)
+
+        if comps:
+            # PropertyLinkSub → (DocumentObject, [subnames])
+            self.geometry_obj = comps[0]
+            self.component_subs = list(comps[1]) if len(comps) > 1 else []
+            self.part_obj = self.geometry_obj
+        else:
+            self.part_obj = self.obj.Shape
 
         # clmax, CharacteristicLengthMax: float, 0.0 = 1e+22
         self.clmax = self.obj.CharacteristicLengthMax.Value
@@ -285,10 +302,14 @@ class GmshTools(ObjectTools):
         else:
             fem_mesh.read(self.temp_file_mesh)
 
-        self.obj.FemMesh = fem_mesh
+        # Name the groups before handing the mesh to the property: renaming and
+        # adding groups afterwards mutates the mesh in place without notifying
+        # the property, so view providers would keep the numeric Gmsh tags as
+        # entity names instead of Solid1/Face2/...
+        self.rename_groups(fem_mesh)
+        self.postprocess_groups(fem_mesh)
 
-        self.rename_groups()
-        self.postprocess_groups()
+        self.obj.FemMesh = fem_mesh
 
     def create_mesh(self):
         # for backward compatibility only
@@ -398,20 +419,187 @@ class GmshTools(ObjectTools):
         Console.PrintMessage("  " + self.gmsh_bin + "\n")
 
     def get_group_data(self):
-        # mesh group objects.
-        geom = self.obj.Shape.getPropertyOfGeometry()
-        self.group_elements = {
-            "Vertex": len(geom.Vertexes),
-            "Edge": len(geom.Edges),
-            "Face": len(geom.Faces),
-            "Solid": len(geom.Solids),
-        }
+        """Build Physical groups keyed by **global** geometry entity names.
 
-    def postprocess_groups(self):
+        Meshing a Components sub-selection exports a local-numbered sub-shape;
+        local→global mapping is derived once via TopoShape.findSubShape on a
+        held global TopoShape. Declared analysis dimension selects which entity
+        types receive Physical statements.
+        """
+        self._resolve_export_geometry()
+        self.group_indices = {}
+        self.group_physicals = []
+
+        max_dim = self._physical_max_dimension()
+        type_specs = (
+            ("Solid", "Volume", 3),
+            ("Face", "Surface", 2),
+            ("Edge", "Line", 1),
+            ("Vertex", "Point", 0),
+        )
+
+        phy_tag = 0
+        for prefix, phy_shape, min_dim in type_specs:
+            if max_dim < min_dim:
+                continue
+            locals_of_type = []
+            for local_name in self.local_to_global:
+                if local_name.startswith(prefix) and local_name[len(prefix) :].isdigit():
+                    locals_of_type.append(local_name)
+            locals_of_type.sort(key=lambda n: int(n[len(prefix) :]))
+
+            for local_name in locals_of_type:
+                global_name = self.local_to_global[local_name]
+                local_idx = int(local_name[len(prefix) :])
+                phy_tag += 1
+                self.group_indices[global_name] = phy_tag
+                self.group_physicals.append(
+                    {
+                        "global": global_name,
+                        "phy_shape": phy_shape,
+                        "local_idx": local_idx,
+                        "tag": phy_tag,
+                    }
+                )
+
+        # Keep group_elements as name→tag for postprocess_groups / VTK path gating
+        self.group_elements = dict(self.group_indices)
+
+    def _physical_max_dimension(self):
+        """Highest analysis dimension that should receive Physical groups."""
+        # Explicit mesh ElementDimension wins
+        if self.obj.ElementDimension in ("3D", "2D", "1D"):
+            try:
+                return int(self.dimension)
+            except (TypeError, ValueError):
+                pass
+
+        dims = []
+        if self.geometry_obj is not None:
+            names = self._selected_toplevel_names()
+            for name in names:
+                d = self.geometry_obj.getAnalysisDimension(name)
+                if d is not None and d >= 0:
+                    dims.append(d)
+        if dims:
+            return max(dims)
+
+        try:
+            return int(self.dimension)
+        except (TypeError, ValueError):
+            return 3
+
+    def _selected_toplevel_names(self):
+        if self.geometry_obj is None:
+            return []
+        names = []
+        if not self.component_subs:
+            for i in range(self.geometry_obj.getComponentCount()):
+                names.extend(self.geometry_obj.getToplevelElements(i))
+            return names
+        for sub in self.component_subs:
+            if sub.startswith("Component"):
+                try:
+                    idx = int(sub[len("Component") :]) - 1
+                except ValueError:
+                    continue
+                names.extend(self.geometry_obj.getToplevelElements(idx))
+            else:
+                names.append(sub)
+        return names
+
+    def _resolve_export_geometry(self):
+        """Prepare export_shape and local_to_global using one held global TopoShape."""
+        self.local_to_global = {}
+
+        if self.geometry_obj is not None:
+            # Hold ONE global TopoShape — findSubShape is cache-backed per instance
+            self.global_shape = self.geometry_obj.Shape
+            if not self.component_subs:
+                self.export_shape = self.global_shape
+                self._map_identity_local_to_global(self.export_shape)
+                return
+
+            shapes = []
+            for sub in self.component_subs:
+                if sub.startswith("Component"):
+                    try:
+                        idx = int(sub[len("Component") :]) - 1
+                    except ValueError:
+                        continue
+                    for name in self.geometry_obj.getToplevelElements(idx):
+                        sh = self.global_shape.getElement(name)
+                        if sh is not None and not sh.isNull():
+                            shapes.append(sh)
+                else:
+                    sh = self.global_shape.getElement(sub)
+                    if sh is not None and not sh.isNull():
+                        shapes.append(sh)
+
+            if not shapes:
+                Console.PrintError(
+                    "Gmsh: Components sub-selection produced no shapes; "
+                    "falling back to full geometry.\n"
+                )
+                self.export_shape = self.global_shape
+                self._map_identity_local_to_global(self.export_shape)
+                return
+
+            if len(shapes) == 1:
+                self.export_shape = shapes[0]
+            else:
+                self.export_shape = Part.makeCompound(shapes)
+            self._build_local_to_global_map()
+            return
+
+        # Legacy Shape link (Part feature etc.)
+        self.global_shape = self.part_obj.getPropertyOfGeometry()
+        self.export_shape = self.global_shape
+        self._map_identity_local_to_global(self.export_shape)
+
+    def _map_identity_local_to_global(self, shape):
+        """Full-geometry export: local Gmsh indices already match global names."""
+        for i in range(len(shape.Solids)):
+            self.local_to_global[f"Solid{i + 1}"] = f"Solid{i + 1}"
+        for i in range(len(shape.Faces)):
+            self.local_to_global[f"Face{i + 1}"] = f"Face{i + 1}"
+        for i in range(len(shape.Edges)):
+            self.local_to_global[f"Edge{i + 1}"] = f"Edge{i + 1}"
+        for i in range(len(shape.Vertexes)):
+            self.local_to_global[f"Vertex{i + 1}"] = f"Vertex{i + 1}"
+
+    def _build_local_to_global_map(self):
+        """Map mesher-local entity names to global names via findSubShape."""
+        exported = self.export_shape
+        global_ts = self.global_shape
+
+        def map_entities(subs, prefix):
+            for i, sub in enumerate(subs):
+                local_name = f"{prefix}{i + 1}"
+                # findSubShape raises when the sub-shape is not part of the
+                # global shape, which is exactly the unmappable case below.
+                try:
+                    found = global_ts.findSubShape(sub)
+                except (ValueError, RuntimeError, FreeCAD.Base.FreeCADError):
+                    found = None
+                if found and found[1] > 0:
+                    self.local_to_global[local_name] = f"{found[0]}{found[1]}"
+                else:
+                    Console.PrintWarning(
+                        f"Gmsh: could not map local {local_name} to global geometry\n"
+                    )
+
+        map_entities(exported.Solids, "Solid")
+        map_entities(exported.Faces, "Face")
+        map_entities(exported.Edges, "Edge")
+        map_entities(exported.Vertexes, "Vertex")
+
+    def postprocess_groups(self, fem_mesh=None):
         # The created groups are for shape elements only: vertex, face, edge and solid
         # From those we need to create new groups for the analysis features
 
-        fem_mesh = self.obj.FemMesh
+        if fem_mesh is None:
+            fem_mesh = self.obj.FemMesh
 
         if not self.obj.MeshGroupList:
             # print("  No mesh group objects.")
@@ -465,10 +653,14 @@ class GmshTools(ObjectTools):
                 else:
                     Console.PrintError("  A group with this name exists already.\n")
 
-    def rename_groups(self):
-        # salomemesh adds a suffix to the names of element groups if there are also nodes
-        #  in the groups in the .unv file. This method removes the suffix
-        fem_mesh = self.obj.FemMesh
+    def rename_groups(self, fem_mesh=None):
+        """Safety net: VTK loads groups by numeric tag; map tags → global names.
+
+        When group_indices already uses global names (Stage 10 contract), this
+        is the only rename needed. UNV suffix cleanup remains for legacy files.
+        """
+        if fem_mesh is None:
+            fem_mesh = self.obj.FemMesh
         reg_exp = re.compile(r"(?P<item>(Edge|Face|Solid)\d+)_(?!Nodes)\w+$")
         for i in fem_mesh.Groups:
             grp = fem_mesh.getGroupName(i)
@@ -476,15 +668,13 @@ class GmshTools(ObjectTools):
             if m:
                 fem_mesh.renameGroup(i, m.group("item"))
 
-        # if we load gmsh groups via vtk file the names got lost, we have only numbers.
-        # we need to rename them correctly.
-        for group in self.group_indices:
-            index = self.group_indices[group]
-            old_name = str(index)
-            for gidx in fem_mesh.Groups:
-                if fem_mesh.getGroupName(gidx) == old_name:
-                    fem_mesh.renameGroup(gidx, group)
-                    break
+        # Gmsh writes the physical tag as the group name; map it back to the
+        # global geometry entity name the tag was allocated for.
+        name_of_tag = {str(tag): name for name, tag in self.group_indices.items()}
+        for gidx in fem_mesh.Groups:
+            name = name_of_tag.get(fem_mesh.getGroupName(gidx))
+            if name:
+                fem_mesh.renameGroup(gidx, name)
 
     def version(self):
         self.get_gmsh_command()
@@ -1439,43 +1629,18 @@ class GmshTools(ObjectTools):
             self.transfinite_surface_settings.append(setting)
 
     def write_groups(self, geo):
-        # find shape type and index from group elements and isolate them from possible prefix
-        # for example: "PartObject.Solid2" -> shape: Solid, index: 2
-        # we use the element index of FreeCAD which starts with 1 (example: "Face1"),
-        # same as Gmsh. For unit test we need them to have a fixed order
+        # Explicit per-entity Physical statements keyed by global geometry names.
+        # Tag-to-global-name is no longer a fixed SolidN ↔ local-i offset.
+        if not self.group_physicals:
+            return
 
-        phy_tag = 0
-        self.group_indices = {}
-
-        if self.group_elements:
-            # print("  We are going to have to find elements to make mesh groups for.")
-            geo.write("// group data\n")
-            for group in sorted(self.group_elements):
-
-                element_count = self.group_elements[group]
-
-                match group:
-                    case "Solid":
-                        phy_shape = "Volume"
-                    case "Face":
-                        phy_shape = "Surface"
-                    case "Edge":
-                        phy_shape = "Line"
-                    case "Vertex":
-                        phy_shape = "Point"
-
-                geo.write(f"For i In {{1:{element_count} }}\n")
-                geo.write(
-                    f'\tPhysical {phy_shape}(Sprintf("{group}%g", i), {phy_tag}+i) = {{i}};\n'
-                )
-                geo.write("EndFor\n")
-
-                # store physical tags for later rename
-                for i in range(element_count):
-                    self.group_indices[group + str(i + 1)] = phy_tag + 1
-                    phy_tag += 1
-
-            geo.write("\n")
+        geo.write("// group data (global geometry entity names)\n")
+        for g in self.group_physicals:
+            geo.write(
+                f'Physical {g["phy_shape"]}("{g["global"]}", {g["tag"]})'
+                f' = {{{g["local_idx"]}}};\n'
+            )
+        geo.write("\n")
 
     def write_boundary_layer(self, geo):
         # currently single body is supported
@@ -1600,11 +1765,14 @@ class GmshTools(ObjectTools):
         geo.write("\n")
 
     def write_part_file(self):
-        global_pla = self.part_obj.getGlobalPlacement()
-        geom = self.part_obj.getPropertyOfGeometry()
-        # get partner shape
-        geom_trans = geom.transformed(FreeCAD.Placement().Matrix)
-        geom_trans.Placement = global_pla
+        if self.export_shape is None:
+            self._resolve_export_geometry()
+
+        # The export shape carries its own placement, so bake that into the
+        # geometry first and only then move it to the global placement.
+        placement_obj = self.geometry_obj if self.geometry_obj is not None else self.part_obj
+        geom_trans = self.export_shape.transformed(FreeCAD.Placement().Matrix)
+        geom_trans.Placement = placement_obj.getGlobalPlacement()
         geom_trans.exportBrep(self.temp_file_geometry)
 
     def write_geo(self):
@@ -1843,9 +2011,12 @@ class GmshTools(ObjectTools):
             else:
                 fem_mesh.read(self.temp_file_mesh)
 
+            # See update_properties(): group names must be final before the
+            # property is set, otherwise view providers cache the numeric tags.
+            self.rename_groups(fem_mesh)
+            self.postprocess_groups(fem_mesh)
+
             self.obj.FemMesh = fem_mesh
-            self.rename_groups()
-            self.postprocess_groups()
 
             Console.PrintMessage("  New mesh was added to the mesh object.\n")
         else:

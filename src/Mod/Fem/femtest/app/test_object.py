@@ -243,6 +243,8 @@ class TestObjectType(unittest.TestCase):
         self.assertEqual(
             "Fem::ElementRotation1D", type_of_obj(ObjectsFem.makeElementRotation1D(doc))
         )
+        self.assertEqual("Fem::GeometryGroup", type_of_obj(ObjectsFem.makeGeometryGroup(doc)))
+        self.assertEqual("Fem::GeometryImport", type_of_obj(ObjectsFem.makeGeometryImport(doc)))
         materialsolid = ObjectsFem.makeMaterialSolid(doc)
         self.assertEqual("Fem::MaterialCommon", type_of_obj(ObjectsFem.makeMaterialFluid(doc)))
         self.assertEqual("Fem::MaterialCommon", type_of_obj(materialsolid))
@@ -260,6 +262,9 @@ class TestObjectType(unittest.TestCase):
         )
         self.assertEqual("Fem::MeshGroup", type_of_obj(ObjectsFem.makeMeshGroup(doc, mesh)))
         self.assertEqual("Fem::MeshRegion", type_of_obj(ObjectsFem.makeMeshRegion(doc, mesh)))
+        # FemMeshShapeGroup is a plain C++ object without a proxy, so type_of_obj
+        # falls back to the FreeCAD type name.
+        self.assertEqual("Fem::FemMeshShapeGroup", type_of_obj(ObjectsFem.makeMeshShapeGroup(doc)))
         self.assertEqual("Fem::MeshDistance", type_of_obj(ObjectsFem.makeMeshDistance(doc, mesh)))
         self.assertEqual("Fem::MeshShape", type_of_obj(ObjectsFem.makeMeshShape(doc, mesh)))
         self.assertEqual(
@@ -438,6 +443,8 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(is_of_type(ObjectsFem.makeElementGeometry1D(doc), "Fem::ElementGeometry1D"))
         self.assertTrue(is_of_type(ObjectsFem.makeElementGeometry2D(doc), "Fem::ElementGeometry2D"))
         self.assertTrue(is_of_type(ObjectsFem.makeElementRotation1D(doc), "Fem::ElementRotation1D"))
+        self.assertTrue(is_of_type(ObjectsFem.makeGeometryGroup(doc), "Fem::GeometryGroup"))
+        self.assertTrue(is_of_type(ObjectsFem.makeGeometryImport(doc), "Fem::GeometryImport"))
         materialsolid = ObjectsFem.makeMaterialSolid(doc)
         self.assertTrue(is_of_type(ObjectsFem.makeMaterialFluid(doc), "Fem::MaterialCommon"))
         self.assertTrue(is_of_type(materialsolid, "Fem::MaterialCommon"))
@@ -457,6 +464,7 @@ class TestObjectType(unittest.TestCase):
         )
         self.assertTrue(is_of_type(ObjectsFem.makeMeshGroup(doc, mesh), "Fem::MeshGroup"))
         self.assertTrue(is_of_type(ObjectsFem.makeMeshRegion(doc, mesh), "Fem::MeshRegion"))
+        self.assertTrue(is_of_type(ObjectsFem.makeMeshShapeGroup(doc), "Fem::FemMeshShapeGroup"))
         self.assertTrue(is_of_type(ObjectsFem.makeMeshDistance(doc, mesh), "Fem::MeshDistance"))
         self.assertTrue(is_of_type(ObjectsFem.makeMeshShape(doc, mesh), "Fem::MeshShape"))
         self.assertTrue(is_of_type(ObjectsFem.makeMeshManipulate(doc, mesh), "Fem::MeshManipulate"))
@@ -778,6 +786,18 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(is_derived_from(rotation1d, "Fem::FeaturePython"))
         self.assertTrue(is_derived_from(rotation1d, "Fem::ElementRotation1D"))
 
+        # GeometryGroup
+        geometry_group = ObjectsFem.makeGeometryGroup(doc)
+        self.assertTrue(is_derived_from(geometry_group, "App::DocumentObject"))
+        self.assertTrue(is_derived_from(geometry_group, "Fem::FemGeometryPython"))
+        self.assertTrue(is_derived_from(geometry_group, "Fem::GeometryGroup"))
+
+        # GeometryImport
+        geometry_import = ObjectsFem.makeGeometryImport(doc)
+        self.assertTrue(is_derived_from(geometry_import, "App::DocumentObject"))
+        self.assertTrue(is_derived_from(geometry_import, "Fem::FemGeometryPython"))
+        self.assertTrue(is_derived_from(geometry_import, "Fem::GeometryImport"))
+
         # Material Fluid
         material_fluid = ObjectsFem.makeMaterialFluid(doc)
         self.assertTrue(is_derived_from(material_fluid, "App::DocumentObject"))
@@ -819,6 +839,12 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(is_derived_from(mesh_group, "App::DocumentObject"))
         self.assertTrue(is_derived_from(mesh_group, "Fem::FeaturePython"))
         self.assertTrue(is_derived_from(mesh_group, "Fem::MeshGroup"))
+
+        # FemMeshShapeGroup
+        mesh_shape_group = ObjectsFem.makeMeshShapeGroup(doc)
+        self.assertTrue(is_derived_from(mesh_shape_group, "App::DocumentObject"))
+        self.assertTrue(is_derived_from(mesh_shape_group, "Fem::FemMeshObject"))
+        self.assertTrue(is_derived_from(mesh_shape_group, "Fem::FemMeshShapeGroup"))
 
         # MeshRegion
         mesh_region = ObjectsFem.makeMeshRegion(doc, mesh_gmsh)
@@ -1089,6 +1115,8 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(ObjectsFem.makeElementGeometry1D(doc).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeElementGeometry2D(doc).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeElementRotation1D(doc).isDerivedFrom("Fem::FeaturePython"))
+        self.assertTrue(ObjectsFem.makeGeometryGroup(doc).isDerivedFrom("Fem::FemGeometryPython"))
+        self.assertTrue(ObjectsFem.makeGeometryImport(doc).isDerivedFrom("Fem::FemGeometryPython"))
         materialsolid = ObjectsFem.makeMaterialSolid(doc)
         self.assertTrue(
             ObjectsFem.makeMaterialFluid(doc).isDerivedFrom("App::MaterialObjectPython")
@@ -1109,6 +1137,7 @@ class TestObjectType(unittest.TestCase):
         )
         self.assertTrue(ObjectsFem.makeMeshGroup(doc, mesh).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeMeshRegion(doc, mesh).isDerivedFrom("Fem::FeaturePython"))
+        self.assertTrue(ObjectsFem.makeMeshShapeGroup(doc).isDerivedFrom("Fem::FemMeshShapeGroup"))
         self.assertTrue(ObjectsFem.makeMeshDistance(doc, mesh).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeMeshShape(doc, mesh).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(
@@ -1249,6 +1278,9 @@ def create_all_fem_objects_doc(doc):
     analysis.addObject(ObjectsFem.makeElementGeometry2D(doc))
     analysis.addObject(ObjectsFem.makeElementRotation1D(doc))
 
+    analysis.addObject(ObjectsFem.makeGeometryGroup(doc))
+    analysis.addObject(ObjectsFem.makeGeometryImport(doc))
+
     analysis.addObject(ObjectsFem.makeMaterialFluid(doc))
     mat = analysis.addObject(ObjectsFem.makeMaterialSolid(doc))[0]
     analysis.addObject(ObjectsFem.makeMaterialMechanicalNonlinear(doc, mat))
@@ -1258,6 +1290,7 @@ def create_all_fem_objects_doc(doc):
     ObjectsFem.makeMeshBoundaryLayer(doc, msh)
     ObjectsFem.makeMeshGroup(doc, msh)
     ObjectsFem.makeMeshRegion(doc, msh)
+    ObjectsFem.makeMeshShapeGroup(doc, analysis=analysis)
     ObjectsFem.makeMeshDistance(doc, msh)
     ObjectsFem.makeMeshShape(doc, msh)
     ObjectsFem.makeMeshManipulate(doc, msh)

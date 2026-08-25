@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (c) 2013 Werner Mayer <wmayer[at]users.sourceforge.net>     *
+ *   Copyright (c) 2026 Stefan Tröger <stefantroeger@gmx.net>              *
  *                                                                         *
  *   This file is part of the FreeCAD CAx development system.              *
  *                                                                         *
@@ -20,59 +20,54 @@
  *                                                                         *
  ***************************************************************************/
 
-
 #pragma once
 
-#include <vector>
+#include <Gui/ViewProviderDocumentObjectGroup.h>
+#include <Gui/ViewProviderFeaturePython.h>
+#include <Mod/Fem/FemGlobal.h>
 
-#include <App/DocumentObserver.h>
-#include <CXX/Objects.hxx>
-#include <Gui/Tree.h>
-
-namespace Gui
-{
-class Document;
-class ViewProviderDocumentObject;
-}  // namespace Gui
-
-namespace Fem
-{
-class FemAnalysis;
-}
+#include "AnalysisViewState.h"
 
 namespace FemGui
 {
 
-class ActiveAnalysisObserver: public App::DocumentObserver
+/**
+ * Thin view provider for FemMeshShapeGroup.
+ *
+ * Claims children and aggregates stage-aware visibility. Does not own scene
+ * graph mesh content — per-object mesh VPs render via FemMeshRenderer.
+ *
+ * Mesh children should call FemMeshRenderer::applyVisibilityMask() with
+ * AnalysisViewState filters and FemMeshRenderer::setClassification() with
+ * AnalysisViewState::classification() (Stages 6–7).
+ */
+class FemGuiExport ViewProviderFemMeshGroup: public Gui::ViewProviderDocumentObjectGroup
 {
+    PROPERTY_HEADER_WITH_OVERRIDE(FemGui::ViewProviderFemMeshGroup);
+
 public:
-    static ActiveAnalysisObserver* instance();
+    ViewProviderFemMeshGroup();
+    ~ViewProviderFemMeshGroup() override;
 
-    void setActiveObject(Fem::FemAnalysis*);
-    Fem::FemAnalysis* getActiveObject() const;
-    bool hasActiveObject() const;
-    void highlightActiveObject(const Gui::HighlightMode&, bool);
+    void attach(App::DocumentObject* pcObject) override;
+    void updateData(const App::Property*) override;
+    void onChanged(const App::Property* prop) override;
 
-    /** Python subscribers receive slotActiveFemAnalysisUpdated(analysis_or_None). */
-    void addPythonCallback(Py::Object obj);
-    void removePythonCallback(Py::Object obj);
+    std::vector<std::string> getDisplayModes() const override;
+    void setDisplayMode(const char* ModeName) override;
 
-private:
-    ActiveAnalysisObserver();
-    ~ActiveAnalysisObserver() override;
+    /// Hide / show children according to AnalysisViewState active stage.
+    void updateStageVisibility();
 
-    void slotDeletedDocument(const App::Document& Doc) override;
-    void slotDeletedObject(const App::DocumentObject& Obj) override;
-
-    void emitCallbacks();
+protected:
+    Fem::FemAnalysis* findAnalysis() const;
+    void connectViewState();
+    void syncChildViewStates();
 
 private:
-    static ActiveAnalysisObserver* inst;
-    Fem::FemAnalysis* activeObject {nullptr};
-    Gui::ViewProviderDocumentObject* activeView {nullptr};
-    Gui::Document* activeDocument {nullptr};
-
-    std::vector<Py::Object> callbacks;
+    AnalysisViewState::Connection m_viewStateConn;
 };
+
+using ViewProviderFemMeshGroupPython = Gui::ViewProviderFeaturePythonT<ViewProviderFemMeshGroup>;
 
 }  // namespace FemGui

@@ -53,6 +53,8 @@ using namespace FemGui;
     qApp->translate("Workbench", "&Electromagnetic Boundary Conditions");
     qApp->translate("Workbench", "Geometrical Analysis Features");
     qApp->translate("Workbench", "&Geometrical Analysis Features");
+    qApp->translate("Workbench", "Geometry preprocessing");
+    qApp->translate("Workbench", "&Geometry preprocessing");
     qApp->translate("Workbench", "Mechanical Boundary Conditions and Loads");
     qApp->translate("Workbench", "&Mechanical Boundary Conditions and Loads");
     qApp->translate("Workbench", "Thermal Boundary Conditions and Loads");
@@ -111,6 +113,10 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
            << "FEM_ElementRotation1D"
            << "FEM_ElementGeometry2D"
            << "FEM_ElementFluid1D";
+
+    Gui::ToolBarItem* geometry = new Gui::ToolBarItem(root);
+    geometry->setCommand("Geometry preprocessing");
+    *geometry << "FEM_GeometryImport";
 
     Gui::ToolBarItem* electromag = new Gui::ToolBarItem(root);
     electromag->setCommand("Electromagnetic Boundary Conditions");
@@ -207,7 +213,8 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
 
     Gui::ToolBarItem* utils = new Gui::ToolBarItem(root);
     utils->setCommand("Utilities");
-    *utils << "FEM_ClippingPlaneAdd"
+    *utils << "FEM_ViewPanel"
+           << "FEM_ClippingPlaneAdd"
            << "FEM_ClippingPlaneRemoveAll"
            << "FEM_Examples";
 
@@ -233,6 +240,10 @@ Gui::MenuItem* Workbench::setupMenuBar() const
              << "FEM_ElementRotation1D"
              << "FEM_ElementGeometry2D"
              << "FEM_ElementFluid1D";
+
+    Gui::MenuItem* geomprep = new Gui::MenuItem;
+    geomprep->setCommand("&Geometry preprocessing");
+    *geomprep << "FEM_GeometryImport";
 
     Gui::MenuItem* elec = new Gui::MenuItem;
     elec->setCommand("&Electromagnetic Boundary Conditions");
@@ -293,8 +304,8 @@ Gui::MenuItem* Workbench::setupMenuBar() const
     root->insertItem(item, model);
     model->setCommand("M&odel");
     *model << "FEM_Analysis"
-           << "Separator" << material << elegeom << "Separator" << elec << fluid << geom << mech
-           << thermal
+           << "Separator" << material << elegeom << geomprep << "Separator" << elec << fluid
+           << geom << mech << thermal
            << "Separator"
            //        << nosolver
            //        << "Separator"
@@ -361,7 +372,8 @@ Gui::MenuItem* Workbench::setupMenuBar() const
     Gui::MenuItem* utils = new Gui::MenuItem;
     root->insertItem(item, utils);
     utils->setCommand("Utilities");
-    *utils << "FEM_ClippingPlaneAdd"
+    *utils << "FEM_ViewPanel"
+           << "FEM_ClippingPlaneAdd"
            << "FEM_ClippingPlaneRemoveAll"
            << "FEM_Examples";
 

@@ -22,6 +22,8 @@
 
 #pragma once
 
+#include <App/PropertyLinks.h>
+
 #include "FemMeshObject.h"
 
 
@@ -37,12 +39,23 @@ public:
     FemMeshShapeBaseObject();
     ~FemMeshShapeBaseObject() override;
 
+    /** Legacy geometry link (Part feature). Kept as PropertyLink for document compatibility. */
     App::PropertyLink Shape;
+
+    /**
+     * New-style component assignment onto FemGeometry using ComponentN subnames.
+     * Coexists with Shape; new workflow uses Components, legacy keeps Shape.
+     */
+    App::PropertyLinkSub Components;
 
     /// returns the type name of the ViewProvider
     const char* getViewProviderName() const override
     {
+#ifdef FC_USE_VTK
+        return "FemGui::ViewProviderFemMeshShapePreprocess";
+#else
         return "FemGui::ViewProviderFemMeshShapeBase";
+#endif
     }
 };
 

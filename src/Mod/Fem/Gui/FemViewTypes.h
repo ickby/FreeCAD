@@ -1,5 +1,5 @@
 /***************************************************************************
- *   Copyright (c) 2013 Werner Mayer <wmayer[at]users.sourceforge.net>     *
+ *   Copyright (c) 2026 Stefan Tröger <stefantroeger@gmx.net>              *
  *                                                                         *
  *   This file is part of the FreeCAD CAx development system.              *
  *                                                                         *
@@ -20,59 +20,55 @@
  *                                                                         *
  ***************************************************************************/
 
-
 #pragma once
 
-#include <vector>
-
-#include <App/DocumentObserver.h>
-#include <CXX/Objects.hxx>
-#include <Gui/Tree.h>
-
-namespace Gui
-{
-class Document;
-class ViewProviderDocumentObject;
-}  // namespace Gui
-
-namespace Fem
-{
-class FemAnalysis;
-}
+#include <Base/Vector3D.h>
+#include <Mod/Fem/FemGlobal.h>
 
 namespace FemGui
 {
 
-class ActiveAnalysisObserver: public App::DocumentObserver
+/** Clipping plane used by mesh and geometry view providers. */
+struct FemGuiExport ClippingPlane
 {
-public:
-    static ActiveAnalysisObserver* instance();
+    Base::Vector3d Origin;
+    Base::Vector3d Direction;
 
-    void setActiveObject(Fem::FemAnalysis*);
-    Fem::FemAnalysis* getActiveObject() const;
-    bool hasActiveObject() const;
-    void highlightActiveObject(const Gui::HighlightMode&, bool);
+    bool operator==(const ClippingPlane& other) const
+    {
+        return Origin == other.Origin && Direction == other.Direction;
+    }
+    bool operator!=(const ClippingPlane& other) const
+    {
+        return !(*this == other);
+    }
+};
 
-    /** Python subscribers receive slotActiveFemAnalysisUpdated(analysis_or_None). */
-    void addPythonCallback(Py::Object obj);
-    void removePythonCallback(Py::Object obj);
+/** Display dimension mode for mesh rendering. */
+enum class DimensionMode
+{
+    Highest = 0,
+    Volume,
+    Surface,
+    Curve,
+    Point
+};
 
-private:
-    ActiveAnalysisObserver();
-    ~ActiveAnalysisObserver() override;
+/** Preprocessing / result stage shown in the FEM View panel. */
+enum class ActiveStage
+{
+    Geometry = 0,
+    Mesh,
+    Result  ///< reserved for later post-processing unification
+};
 
-    void slotDeletedDocument(const App::Document& Doc) override;
-    void slotDeletedObject(const App::DocumentObject& Obj) override;
-
-    void emitCallbacks();
-
-private:
-    static ActiveAnalysisObserver* inst;
-    Fem::FemAnalysis* activeObject {nullptr};
-    Gui::ViewProviderDocumentObject* activeView {nullptr};
-    Gui::Document* activeDocument {nullptr};
-
-    std::vector<Py::Object> callbacks;
+/** Colour mode is stage-scoped; valid values depend on ActiveStage. */
+enum class ColorMode
+{
+    Subelement = 0,
+    Toplevel,
+    Material,
+    CellType
 };
 
 }  // namespace FemGui

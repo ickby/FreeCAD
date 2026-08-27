@@ -34,8 +34,6 @@ __url__ = "https://www.freecad.org"
 #  \ingroup FEM
 #  \brief view provider for mechanical ResultObjectPython
 
-import FreeCADGui
-
 from PySide import QtGui
 from femtaskpanels import task_result_mechanical
 from . import view_base_femconstraint
@@ -57,7 +55,7 @@ class VPResultMechanical(view_base_femconstraint.VPBaseFemConstraint):
         )
 
     def unsetEdit(self, vobj, mode=0):
-        FreeCADGui.Control.closeDialog()
+        super().unsetEdit(vobj, mode)
         # hide the mesh if it was not visible
         if not self.visibility:
             self.Object.Mesh.ViewObject.hide()

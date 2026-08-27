@@ -82,13 +82,17 @@ public:
     Py::Object connectChanged(const Py::Tuple&);
     Py::Object disconnectChanged(const Py::Tuple&);
 
-    AnalysisViewState* getViewStatePtr() const
-    {
-        return m_state;
-    }
-
 private:
     void emitPythonCallbacks();
+
+    /**
+     * The wrapped state, or nullptr once it is gone.
+     *
+     * Python objects outlive their analysis -- a panel row may still hold one
+     * after the document was closed -- so the raw pointer is checked against
+     * the registry instead of being trusted.
+     */
+    AnalysisViewState* state() const;
 
     AnalysisViewState* m_state {nullptr};
     AnalysisViewState::Connection m_changedConn;

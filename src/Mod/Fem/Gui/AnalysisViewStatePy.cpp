@@ -246,6 +246,11 @@ AnalysisViewStatePy::~AnalysisViewStatePy()
     m_pyCallbacks.clear();
 }
 
+AnalysisViewState* AnalysisViewStatePy::state() const
+{
+    return AnalysisViewState::isAlive(m_state) ? m_state : nullptr;
+}
+
 Py::Object AnalysisViewStatePy::repr()
 {
     std::ostringstream s;
@@ -275,10 +280,10 @@ Py::Object AnalysisViewStatePy::getActiveStage(const Py::Tuple& args)
     if (args.size() != 0) {
         throw Py::TypeError("getActiveStage() takes no arguments");
     }
-    if (!m_state) {
+    if (!state()) {
         return Py::None();
     }
-    return Py::String(stageToString(m_state->activeStage()));
+    return Py::String(stageToString(state()->activeStage()));
 }
 
 Py::Object AnalysisViewStatePy::setActiveStage(const Py::Tuple& args)
@@ -287,8 +292,8 @@ Py::Object AnalysisViewStatePy::setActiveStage(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "s", &name)) {
         throw Py::Exception();
     }
-    if (m_state) {
-        m_state->setActiveStage(stageFromString(name));
+    if (state()) {
+        state()->setActiveStage(stageFromString(name));
     }
     return Py::None();
 }
@@ -296,10 +301,10 @@ Py::Object AnalysisViewStatePy::setActiveStage(const Py::Tuple& args)
 Py::Object AnalysisViewStatePy::getDimensionMode(const Py::Tuple& args)
 {
     (void)args;
-    if (!m_state) {
+    if (!state()) {
         return Py::None();
     }
-    return Py::String(dimensionToString(m_state->dimensionMode()));
+    return Py::String(dimensionToString(state()->dimensionMode()));
 }
 
 Py::Object AnalysisViewStatePy::setDimensionMode(const Py::Tuple& args)
@@ -308,8 +313,8 @@ Py::Object AnalysisViewStatePy::setDimensionMode(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "s", &name)) {
         throw Py::Exception();
     }
-    if (m_state) {
-        m_state->setDimensionMode(dimensionFromString(name));
+    if (state()) {
+        state()->setDimensionMode(dimensionFromString(name));
     }
     return Py::None();
 }
@@ -317,10 +322,10 @@ Py::Object AnalysisViewStatePy::setDimensionMode(const Py::Tuple& args)
 Py::Object AnalysisViewStatePy::getWireframe(const Py::Tuple& args)
 {
     (void)args;
-    if (!m_state) {
+    if (!state()) {
         return Py::Boolean(false);
     }
-    return Py::Boolean(m_state->wireframe());
+    return Py::Boolean(state()->wireframe());
 }
 
 Py::Object AnalysisViewStatePy::setWireframe(const Py::Tuple& args)
@@ -333,13 +338,13 @@ Py::Object AnalysisViewStatePy::setWireframe(const Py::Tuple& args)
         if (!PyArg_ParseTuple(args.ptr(), "i", &ival)) {
             throw Py::Exception();
         }
-        if (m_state) {
-            m_state->setWireframe(ival != 0);
+        if (state()) {
+            state()->setWireframe(ival != 0);
         }
         return Py::None();
     }
-    if (m_state) {
-        m_state->setWireframe(PyObject_IsTrue(value) != 0);
+    if (state()) {
+        state()->setWireframe(PyObject_IsTrue(value) != 0);
     }
     return Py::None();
 }
@@ -347,10 +352,10 @@ Py::Object AnalysisViewStatePy::setWireframe(const Py::Tuple& args)
 Py::Object AnalysisViewStatePy::getOverlay(const Py::Tuple& args)
 {
     (void)args;
-    if (!m_state) {
+    if (!state()) {
         return Py::Boolean(false);
     }
-    return Py::Boolean(m_state->overlay());
+    return Py::Boolean(state()->overlay());
 }
 
 Py::Object AnalysisViewStatePy::setOverlay(const Py::Tuple& args)
@@ -363,13 +368,13 @@ Py::Object AnalysisViewStatePy::setOverlay(const Py::Tuple& args)
         if (!PyArg_ParseTuple(args.ptr(), "i", &ival)) {
             throw Py::Exception();
         }
-        if (m_state) {
-            m_state->setOverlay(ival != 0);
+        if (state()) {
+            state()->setOverlay(ival != 0);
         }
         return Py::None();
     }
-    if (m_state) {
-        m_state->setOverlay(PyObject_IsTrue(value) != 0);
+    if (state()) {
+        state()->setOverlay(PyObject_IsTrue(value) != 0);
     }
     return Py::None();
 }
@@ -377,10 +382,10 @@ Py::Object AnalysisViewStatePy::setOverlay(const Py::Tuple& args)
 Py::Object AnalysisViewStatePy::getColorMode(const Py::Tuple& args)
 {
     (void)args;
-    if (!m_state) {
+    if (!state()) {
         return Py::None();
     }
-    return Py::String(colorModeToString(m_state->colorMode()));
+    return Py::String(colorModeToString(state()->colorMode()));
 }
 
 Py::Object AnalysisViewStatePy::setColorMode(const Py::Tuple& args)
@@ -389,8 +394,8 @@ Py::Object AnalysisViewStatePy::setColorMode(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "s", &name)) {
         throw Py::Exception();
     }
-    if (m_state) {
-        m_state->setColorMode(colorModeFromString(name));
+    if (state()) {
+        state()->setColorMode(colorModeFromString(name));
     }
     return Py::None();
 }
@@ -401,10 +406,10 @@ Py::Object AnalysisViewStatePy::isElementHidden(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "s", &name)) {
         throw Py::Exception();
     }
-    if (!m_state) {
+    if (!state()) {
         return Py::Boolean(false);
     }
-    return Py::Boolean(m_state->isElementHidden(name));
+    return Py::Boolean(state()->isElementHidden(name));
 }
 
 Py::Object AnalysisViewStatePy::setElementHidden(const Py::Tuple& args)
@@ -414,8 +419,8 @@ Py::Object AnalysisViewStatePy::setElementHidden(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "sO", &name, &hidden)) {
         throw Py::Exception();
     }
-    if (m_state) {
-        m_state->setElementHidden(name, PyObject_IsTrue(hidden) != 0);
+    if (state()) {
+        state()->setElementHidden(name, PyObject_IsTrue(hidden) != 0);
     }
     return Py::None();
 }
@@ -424,8 +429,8 @@ Py::Object AnalysisViewStatePy::getHiddenElements(const Py::Tuple& args)
 {
     (void)args;
     Py::List list;
-    if (m_state) {
-        for (const auto& e : m_state->hiddenElements()) {
+    if (state()) {
+        for (const auto& e : state()->hiddenElements()) {
             list.append(Py::String(e));
         }
     }
@@ -438,7 +443,7 @@ Py::Object AnalysisViewStatePy::setHiddenElements(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "O", &seq)) {
         throw Py::Exception();
     }
-    if (!m_state) {
+    if (!state()) {
         return Py::None();
     }
     std::set<std::string> elements;
@@ -446,7 +451,7 @@ Py::Object AnalysisViewStatePy::setHiddenElements(const Py::Tuple& args)
     for (Py::Sequence::size_type i = 0; i < sequence.size(); ++i) {
         elements.insert(Py::Object(sequence[i]).as_string());
     }
-    m_state->setHiddenElements(elements);
+    state()->setHiddenElements(elements);
     return Py::None();
 }
 
@@ -456,10 +461,10 @@ Py::Object AnalysisViewStatePy::isCellTypeHidden(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "s", &name)) {
         throw Py::Exception();
     }
-    if (!m_state) {
+    if (!state()) {
         return Py::Boolean(false);
     }
-    return Py::Boolean(m_state->isCellTypeHidden(name));
+    return Py::Boolean(state()->isCellTypeHidden(name));
 }
 
 Py::Object AnalysisViewStatePy::setCellTypeHidden(const Py::Tuple& args)
@@ -469,8 +474,8 @@ Py::Object AnalysisViewStatePy::setCellTypeHidden(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "sO", &name, &hidden)) {
         throw Py::Exception();
     }
-    if (m_state) {
-        m_state->setCellTypeHidden(name, PyObject_IsTrue(hidden) != 0);
+    if (state()) {
+        state()->setCellTypeHidden(name, PyObject_IsTrue(hidden) != 0);
     }
     return Py::None();
 }
@@ -479,8 +484,8 @@ Py::Object AnalysisViewStatePy::getHiddenCellTypes(const Py::Tuple& args)
 {
     (void)args;
     Py::List list;
-    if (m_state) {
-        for (const auto& e : m_state->hiddenCellTypes()) {
+    if (state()) {
+        for (const auto& e : state()->hiddenCellTypes()) {
             list.append(Py::String(e));
         }
     }
@@ -503,11 +508,11 @@ Py::Object AnalysisViewStatePy::setClipPlane(const Py::Tuple& args)
         )) {
         throw Py::Exception();
     }
-    if (m_state) {
+    if (state()) {
         ClippingPlane plane;
         plane.Origin = *static_cast<Base::VectorPy*>(origin)->getVectorPtr();
         plane.Direction = *static_cast<Base::VectorPy*>(direction)->getVectorPtr();
-        m_state->setClipPlane(name, plane);
+        state()->setClipPlane(name, plane);
     }
     return Py::None();
 }
@@ -518,8 +523,8 @@ Py::Object AnalysisViewStatePy::removeClipPlane(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "s", &name)) {
         throw Py::Exception();
     }
-    if (m_state) {
-        m_state->removeClipPlane(name);
+    if (state()) {
+        state()->removeClipPlane(name);
     }
     return Py::None();
 }
@@ -528,8 +533,8 @@ Py::Object AnalysisViewStatePy::getClipPlanes(const Py::Tuple& args)
 {
     (void)args;
     Py::Dict dict;
-    if (m_state) {
-        for (const auto& entry : m_state->clipPlanes()) {
+    if (state()) {
+        for (const auto& entry : state()->clipPlanes()) {
             Py::Tuple pair(2);
             pair.setItem(0, Py::asObject(new Base::VectorPy(entry.second.Origin)));
             pair.setItem(1, Py::asObject(new Base::VectorPy(entry.second.Direction)));
@@ -543,10 +548,10 @@ Py::Object AnalysisViewStatePy::getCategories(const Py::Tuple& args)
 {
     (void)args;
     Py::List list;
-    if (!m_state) {
+    if (!state()) {
         return list;
     }
-    for (const auto& cat : m_state->categories()) {
+    for (const auto& cat : state()->categories()) {
         Py::Dict d;
         d.setItem("key", Py::String(cat.key));
         d.setItem("label", Py::String(cat.label));
@@ -567,10 +572,10 @@ Py::Object AnalysisViewStatePy::categoryOfElement(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "s", &name)) {
         throw Py::Exception();
     }
-    if (!m_state) {
+    if (!state()) {
         return Py::Long(-1);
     }
-    const Classification* cls = m_state->classification();
+    const Classification* cls = state()->classification();
     if (!cls) {
         return Py::Long(-1);
     }
@@ -581,8 +586,8 @@ Py::Object AnalysisViewStatePy::getUnderAchievedElements(const Py::Tuple& args)
 {
     (void)args;
     Py::List list;
-    if (m_state) {
-        for (const auto& e : m_state->underAchievedElements()) {
+    if (state()) {
+        for (const auto& e : state()->underAchievedElements()) {
             list.append(Py::String(e));
         }
     }
@@ -592,8 +597,8 @@ Py::Object AnalysisViewStatePy::getUnderAchievedElements(const Py::Tuple& args)
 Py::Object AnalysisViewStatePy::beginUpdate(const Py::Tuple& args)
 {
     (void)args;
-    if (m_state) {
-        m_state->beginUpdate();
+    if (state()) {
+        state()->beginUpdate();
     }
     return Py::None();
 }
@@ -601,8 +606,8 @@ Py::Object AnalysisViewStatePy::beginUpdate(const Py::Tuple& args)
 Py::Object AnalysisViewStatePy::endUpdate(const Py::Tuple& args)
 {
     (void)args;
-    if (m_state) {
-        m_state->endUpdate();
+    if (state()) {
+        state()->endUpdate();
     }
     return Py::None();
 }
@@ -617,8 +622,10 @@ Py::Object AnalysisViewStatePy::connectChanged(const Py::Tuple& args)
         throw Py::TypeError("connectChanged expects a callable");
     }
     m_pyCallbacks.emplace_back(callable);
-    if (!m_changedConn.connected() && m_state) {
-        m_changedConn = m_state->connectChanged([this]() { emitPythonCallbacks(); });
+    if (!m_changedConn.connected()) {
+        if (auto* live = state()) {
+            m_changedConn = live->connectChanged([this]() { emitPythonCallbacks(); });
+        }
     }
     return Py::None();
 }

@@ -35,6 +35,7 @@ import FreeCAD
 import Fem
 from freecad import utils
 from femtools.objecttools import ObjectTools
+from . import meshcomponents
 
 
 class NetgenTools(ObjectTools):
@@ -77,17 +78,13 @@ class NetgenTools(ObjectTools):
         super().__init__(obj)
         self.fem_mesh = None
         self.mesh_params = {}
+        self.components = meshcomponents.ComponentGeometry(obj, label="Netgen")
 
     def write_geom(self):
-        global_pla = self.obj.Shape.getGlobalPlacement()
-        geom = self.obj.Shape.getPropertyOfGeometry()
-        # get partner shape
-        geom_trans = geom.transformed(FreeCAD.Placement().Matrix)
-        geom_trans.Placement = global_pla
         self.brep_file = os.path.join(self.obj.WorkingDirectory, "shape.brep")
         self.result_file = os.path.join(self.obj.WorkingDirectory, "result.npy")
         self.model_file = os.path.join(self.obj.WorkingDirectory, "code.py")
-        geom_trans.exportBrep(self.brep_file)
+        self.components.placed_export_shape().exportBrep(self.brep_file)
 
     def prepare(self):
         self.write_geom()
@@ -289,17 +286,15 @@ run_netgen(**{kwds})
         fem_mesh.addFaceList(*netgen_result["Faces"])
         fem_mesh.addVolumeList(*netgen_result["Volumes"])
 
-        for g in groups["Edges"]:
-            grp_id = fem_mesh.addGroup("Edge" + str(g[0]), "Edge")
-            fem_mesh.addGroupElements(grp_id, g[1])
-
-        for g in groups["Faces"]:
-            grp_id = fem_mesh.addGroup("Face" + str(g[0]), "Face")
-            fem_mesh.addGroupElements(grp_id, g[1])
-
-        for g in groups["Solids"]:
-            grp_id = fem_mesh.addGroup("Solid" + str(g[0]), "Volume")
-            fem_mesh.addGroupElements(grp_id, g[1])
+        # Netgen numbers the entities of the exported shape, which is only a part
+        # of the geometry when components are selected. Groups carry the names of
+        # the geometry, so the numbering has to be mapped back.
+        for kind, group_type in (("Edges", "Edge"), ("Faces", "Face"), ("Solids", "Volume")):
+            prefix = "Solid" if kind == "Solids" else group_type
+            for g in groups[kind]:
+                name = self.components.global_name(f"{prefix}{g[0]}")
+                grp_id = fem_mesh.addGroup(name, group_type)
+                fem_mesh.addGroupElements(grp_id, g[1])
 
         return fem_mesh
 
@@ -399,14 +394,27 @@ run_netgen(**{kwds})
         for reg in self.obj.MeshRefinementList:
             if reg.Suppressed:
                 continue
+            l = reg.CharacteristicLength.getValueAs("mm").Value
             for s, sub_list in reg.References:
-                if s.isDerivedFrom("App::GeoFeature") and isinstance(
+                if s == self.components.geometry_obj:
+                    # Refinement on the meshed geometry: the reference names the
+                    # geometry entities, Netgen needs the exported numbering.
+                    entities = []
+                    for sub in sub_list:
+                        local = self.components.local_name(sub)
+                        if local is None:
+                            continue
+                        entity_type, index = meshcomponents.split_element_name(local)
+                        if entity_type:
+                            entities.append((entity_type, index))
+                    if entities:
+                        result.append((entities, l))
+                elif s.isDerivedFrom("App::GeoFeature") and isinstance(
                     s.getPropertyOfGeometry(), PartShape
                 ):
                     geom = s.getPropertyOfGeometry()
                     sub_obj = [s.getSubObject(_) for _ in sub_list]
                     sub_sh = geom.findSubShape(sub_obj)
-                    l = reg.CharacteristicLength.getValueAs("mm").Value
                     result.append((sub_sh, l))
         return result
 

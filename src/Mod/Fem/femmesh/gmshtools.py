@@ -43,6 +43,7 @@ from FreeCAD import Units
 
 import Part
 import Fem
+from . import meshcomponents
 from . import meshtools
 from . import transfinitetools as tft
 from . import adaptivetools as adt
@@ -72,23 +73,14 @@ class GmshTools(ObjectTools):
 
     def load_properties(self):
         # part / geometry to mesh — prefer Components (FemGeometry) over legacy Shape
-        self.geometry_obj = None
-        self.component_subs = []
+        self.components = meshcomponents.ComponentGeometry(self.obj, label="Gmsh")
+        self.geometry_obj = self.components.geometry_obj
+        self.component_subs = self.components.component_subs
+        self.part_obj = self.components.part_obj
         self.global_shape = None
         self.export_shape = None
         self.local_to_global = {}
         self.group_physicals = []
-
-        # Netgen and legacy mesh objects have no Components property
-        comps = getattr(self.obj, "Components", None)
-
-        if comps:
-            # PropertyLinkSub → (DocumentObject, [subnames])
-            self.geometry_obj = comps[0]
-            self.component_subs = list(comps[1]) if len(comps) > 1 else []
-            self.part_obj = self.geometry_obj
-        else:
-            self.part_obj = self.obj.Shape
 
         # clmax, CharacteristicLengthMax: float, 0.0 = 1e+22
         self.clmax = self.obj.CharacteristicLengthMax.Value
@@ -492,109 +484,14 @@ class GmshTools(ObjectTools):
             return 3
 
     def _selected_toplevel_names(self):
-        if self.geometry_obj is None:
-            return []
-        names = []
-        if not self.component_subs:
-            for i in range(self.geometry_obj.getComponentCount()):
-                names.extend(self.geometry_obj.getToplevelElements(i))
-            return names
-        for sub in self.component_subs:
-            if sub.startswith("Component"):
-                try:
-                    idx = int(sub[len("Component") :]) - 1
-                except ValueError:
-                    continue
-                names.extend(self.geometry_obj.getToplevelElements(idx))
-            else:
-                names.append(sub)
-        return names
+        return self.components.toplevel_names()
 
     def _resolve_export_geometry(self):
         """Prepare export_shape and local_to_global using one held global TopoShape."""
-        self.local_to_global = {}
-
-        if self.geometry_obj is not None:
-            # Hold ONE global TopoShape — findSubShape is cache-backed per instance
-            self.global_shape = self.geometry_obj.Shape
-            if not self.component_subs:
-                self.export_shape = self.global_shape
-                self._map_identity_local_to_global(self.export_shape)
-                return
-
-            shapes = []
-            for sub in self.component_subs:
-                if sub.startswith("Component"):
-                    try:
-                        idx = int(sub[len("Component") :]) - 1
-                    except ValueError:
-                        continue
-                    for name in self.geometry_obj.getToplevelElements(idx):
-                        sh = self.global_shape.getElement(name)
-                        if sh is not None and not sh.isNull():
-                            shapes.append(sh)
-                else:
-                    sh = self.global_shape.getElement(sub)
-                    if sh is not None and not sh.isNull():
-                        shapes.append(sh)
-
-            if not shapes:
-                Console.PrintError(
-                    "Gmsh: Components sub-selection produced no shapes; "
-                    "falling back to full geometry.\n"
-                )
-                self.export_shape = self.global_shape
-                self._map_identity_local_to_global(self.export_shape)
-                return
-
-            if len(shapes) == 1:
-                self.export_shape = shapes[0]
-            else:
-                self.export_shape = Part.makeCompound(shapes)
-            self._build_local_to_global_map()
-            return
-
-        # Legacy Shape link (Part feature etc.)
-        self.global_shape = self.part_obj.getPropertyOfGeometry()
-        self.export_shape = self.global_shape
-        self._map_identity_local_to_global(self.export_shape)
-
-    def _map_identity_local_to_global(self, shape):
-        """Full-geometry export: local Gmsh indices already match global names."""
-        for i in range(len(shape.Solids)):
-            self.local_to_global[f"Solid{i + 1}"] = f"Solid{i + 1}"
-        for i in range(len(shape.Faces)):
-            self.local_to_global[f"Face{i + 1}"] = f"Face{i + 1}"
-        for i in range(len(shape.Edges)):
-            self.local_to_global[f"Edge{i + 1}"] = f"Edge{i + 1}"
-        for i in range(len(shape.Vertexes)):
-            self.local_to_global[f"Vertex{i + 1}"] = f"Vertex{i + 1}"
-
-    def _build_local_to_global_map(self):
-        """Map mesher-local entity names to global names via findSubShape."""
-        exported = self.export_shape
-        global_ts = self.global_shape
-
-        def map_entities(subs, prefix):
-            for i, sub in enumerate(subs):
-                local_name = f"{prefix}{i + 1}"
-                # findSubShape raises when the sub-shape is not part of the
-                # global shape, which is exactly the unmappable case below.
-                try:
-                    found = global_ts.findSubShape(sub)
-                except (ValueError, RuntimeError, FreeCAD.Base.FreeCADError):
-                    found = None
-                if found and found[1] > 0:
-                    self.local_to_global[local_name] = f"{found[0]}{found[1]}"
-                else:
-                    Console.PrintWarning(
-                        f"Gmsh: could not map local {local_name} to global geometry\n"
-                    )
-
-        map_entities(exported.Solids, "Solid")
-        map_entities(exported.Faces, "Face")
-        map_entities(exported.Edges, "Edge")
-        map_entities(exported.Vertexes, "Vertex")
+        self.components.resolve()
+        self.global_shape = self.components.global_shape
+        self.export_shape = self.components.export_shape
+        self.local_to_global = self.components.local_to_global
 
     def postprocess_groups(self, fem_mesh=None):
         # The created groups are for shape elements only: vertex, face, edge and solid
@@ -1770,12 +1667,7 @@ class GmshTools(ObjectTools):
         if self.export_shape is None:
             self._resolve_export_geometry()
 
-        # The export shape carries its own placement, so bake that into the
-        # geometry first and only then move it to the global placement.
-        placement_obj = self.geometry_obj if self.geometry_obj is not None else self.part_obj
-        geom_trans = self.export_shape.transformed(FreeCAD.Placement().Matrix)
-        geom_trans.Placement = placement_obj.getGlobalPlacement()
-        geom_trans.exportBrep(self.temp_file_geometry)
+        self.components.placed_export_shape().exportBrep(self.temp_file_geometry)
 
     def write_geo(self):
         temp_dir = os.path.dirname(self.model_file)

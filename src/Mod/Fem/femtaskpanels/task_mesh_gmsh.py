@@ -144,6 +144,6 @@ class _Observer(base_femlogtaskpanel._WorkerObserver):
 
     def slotChangedObject(self, observed, prop):
         super().slotChangedObject(observed, prop)
-        # check if shape changes
-        if observed == self.task.obj and prop == "Shape":
+        # check if the geometry to mesh changes
+        if observed == self.task.obj and prop in ("Shape", "Components"):
             self.task.prepared = False

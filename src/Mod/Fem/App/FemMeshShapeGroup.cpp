@@ -43,6 +43,7 @@
 #include "FemGeometry.h"
 #include "FemMesh.h"
 #include "FemMeshShapeGroup.h"
+#include "FemMeshShapeGroupPy.h"
 
 
 using namespace Fem;
@@ -196,81 +197,92 @@ int componentIndexFromSubname(const std::string& sub)
 }
 }  // namespace
 
-std::string FemMeshShapeGroup::validateComponents(bool* hasOverlap) const
+FemMeshShapeGroup::ComponentClaims FemMeshShapeGroup::collectComponentClaims() const
 {
-    if (hasOverlap) {
-        *hasOverlap = false;
-    }
-
-    FemGeometry* geometry = nullptr;
+    ComponentClaims claims;
     if (auto* shapeObj = Shape.getValue()) {
-        geometry = Base::freecad_cast<FemGeometry*>(shapeObj);
+        claims.geometry = Base::freecad_cast<FemGeometry*>(shapeObj);
     }
-
-    std::set<int> covered;  // 1-based ComponentN
-    // Component index -> mesh object that claims it (for adjacency checks).
-    std::map<int, const FemMeshShapeBaseObject*> componentOwner;
-    std::ostringstream overlap;
-    bool overlapFound = false;
 
     for (auto* obj : Group.getValues()) {
         auto* mesh = Base::freecad_cast<FemMeshShapeBaseObject*>(obj);
         if (!mesh) {
             continue;
         }
-        auto* linked = mesh->Components.getValue();
-        if (!linked) {
-            continue;
-        }
-        auto* geo = Base::freecad_cast<FemGeometry*>(linked);
+        auto* geo = Base::freecad_cast<FemGeometry*>(mesh->Components.getValue());
         if (!geo) {
             continue;
         }
-        if (!geometry) {
-            geometry = geo;
+        if (!claims.geometry) {
+            claims.geometry = geo;
         }
-        else if (geometry != geo) {
-            return "All mesh Components must reference the same FemGeometry";
+        else if (claims.geometry != geo) {
+            claims.mixedGeometry = true;
+            return claims;
         }
 
+        // Empty sub-values means the mesh covers all components of the linked
+        // geometry (same convention as the Gmsh/Netgen commands).
+        std::vector<int> indices;
         const auto subs = mesh->Components.getSubValues();
-        // Empty sub-values means the mesh covers all components of the linked geometry
-        // (same convention as the Gmsh/Netgen commands).
         if (subs.empty()) {
-            const auto n = static_cast<int>(geo->getComponents().size());
-            for (int idx = 1; idx <= n; ++idx) {
-                if (covered.contains(idx)) {
-                    overlapFound = true;
-                    if (overlap.tellp() > 0) {
-                        overlap << ", ";
-                    }
-                    overlap << "Component" << idx << " (" << objectName(mesh) << ")";
-                }
-                else {
-                    covered.insert(idx);
-                    componentOwner[idx] = mesh;
+            const auto count = static_cast<int>(geo->getComponents().size());
+            for (int idx = 1; idx <= count; ++idx) {
+                indices.push_back(idx);
+            }
+        }
+        else {
+            for (const auto& sub : subs) {
+                const int idx = componentIndexFromSubname(sub);
+                if (idx >= 1) {
+                    indices.push_back(idx);
                 }
             }
-            continue;
         }
 
-        for (const auto& sub : subs) {
-            const int idx = componentIndexFromSubname(sub);
-            if (idx < 1) {
-                continue;
-            }
-            if (covered.contains(idx)) {
-                overlapFound = true;
-                if (overlap.tellp() > 0) {
-                    overlap << ", ";
-                }
-                overlap << "Component" << idx << " (" << objectName(mesh) << ")";
+        for (int idx : indices) {
+            if (claims.owner.contains(idx)) {
+                claims.conflicts.emplace_back(idx, mesh);
             }
             else {
-                covered.insert(idx);
-                componentOwner[idx] = mesh;
+                claims.owner[idx] = mesh;
             }
         }
+    }
+
+    return claims;
+}
+
+std::map<int, App::DocumentObject*> FemMeshShapeGroup::getComponentOwners() const
+{
+    std::map<int, App::DocumentObject*> owners;
+    for (const auto& [idx, mesh] : collectComponentClaims().owner) {
+        owners[idx] = const_cast<FemMeshShapeBaseObject*>(mesh);
+    }
+    return owners;
+}
+
+std::string FemMeshShapeGroup::validateComponents(bool* hasOverlap) const
+{
+    if (hasOverlap) {
+        *hasOverlap = false;
+    }
+
+    const ComponentClaims claims = collectComponentClaims();
+    if (claims.mixedGeometry) {
+        return "All mesh Components must reference the same FemGeometry";
+    }
+
+    FemGeometry* geometry = claims.geometry;
+    const auto& componentOwner = claims.owner;
+    const bool overlapFound = !claims.conflicts.empty();
+
+    std::ostringstream overlap;
+    for (const auto& [idx, mesh] : claims.conflicts) {
+        if (overlap.tellp() > 0) {
+            overlap << ", ";
+        }
+        overlap << "Component" << idx << " (" << objectName(mesh) << ")";
     }
 
     if (hasOverlap) {
@@ -286,7 +298,7 @@ std::string FemMeshShapeGroup::validateComponents(bool* hasOverlap) const
         const auto n = static_cast<int>(geometry->getComponents().size());
         std::ostringstream uncovered;
         for (int i = 1; i <= n; ++i) {
-            if (!covered.contains(i)) {
+            if (!componentOwner.contains(i)) {
                 if (uncovered.tellp() > 0) {
                     uncovered << ", ";
                 }
@@ -318,7 +330,7 @@ std::string FemMeshShapeGroup::validateComponents(bool* hasOverlap) const
             std::vector<Bnd_Box> bounds;
         };
         std::map<int, ComponentShapes> componentShapes;
-        for (int idx : covered) {
+        for (const auto& [idx, mesh] : componentOwner) {
             ComponentShapes entry;
             // Component indices are 1-based; FemGeometry cache is 0-based.
             for (const auto& shape : geometry->getComponent(static_cast<componentIdType>(idx - 1))) {
@@ -339,13 +351,17 @@ std::string FemMeshShapeGroup::validateComponents(bool* hasOverlap) const
             }
         }
 
-        std::vector<int> indices(covered.begin(), covered.end());
+        std::vector<int> indices;
+        indices.reserve(componentOwner.size());
+        for (const auto& [idx, mesh] : componentOwner) {
+            indices.push_back(idx);
+        }
         for (std::size_t i = 0; i < indices.size(); ++i) {
             for (std::size_t j = i + 1; j < indices.size(); ++j) {
                 const int a = indices[i];
                 const int b = indices[j];
-                auto* meshA = componentOwner[a];
-                auto* meshB = componentOwner[b];
+                const auto* meshA = componentOwner.at(a);
+                const auto* meshB = componentOwner.at(b);
                 if (!meshA || !meshB || meshA == meshB) {
                     continue;
                 }
@@ -458,6 +474,15 @@ void FemMeshShapeGroup::rebuildMergedMesh()
 }
 
 
+PyObject* FemMeshShapeGroup::getPyObject()
+{
+    if (PythonObject.is(Py::_None())) {
+        PythonObject = Py::Object(new FemMeshShapeGroupPy(this), true);
+    }
+    return Py::new_reference_to(PythonObject);
+}
+
+
 // Python feature ---------------------------------------------------------
 
 namespace App
@@ -475,7 +500,7 @@ template<>
 PyObject* Fem::FemMeshShapeGroupPython::getPyObject()
 {
     if (PythonObject.is(Py::_None())) {
-        PythonObject = Py::asObject(new App::FeaturePythonPyT<App::GeoFeaturePy>(this));
+        PythonObject = Py::asObject(new App::FeaturePythonPyT<Fem::FemMeshShapeGroupPy>(this));
     }
     return Py::new_reference_to(PythonObject);
 }

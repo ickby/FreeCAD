@@ -51,10 +51,10 @@ class VPMeshNetgen(view_base_femobject.VPBaseFemObject):
         return ":/icons/FEM_MeshNetgenFromShape.svg"
 
     def setEdit(self, vobj, mode):
-        # hide all FEM meshes and VTK FemPost* objects
-        for obj in vobj.Object.Document.Objects:
-            if obj.isDerivedFrom("Fem::FemMeshObject") or obj.isDerivedFrom("Fem::FemPostObject"):
-                obj.ViewObject.hide()
+        # hide all other FEM meshes and VTK FemPost* objects
+        self.hidden_while_editing = view_base_femobject.hide_while_editing(
+            vobj, view_base_femobject.HIDE_WHILE_MESH_EDITING
+        )
         # show the mesh we like to edit
         self.ViewObject.show()
         # show task panel

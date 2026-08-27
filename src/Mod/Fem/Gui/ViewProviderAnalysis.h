@@ -109,6 +109,14 @@ public:
 
     void removeView(Gui::ViewProviderDocumentObject*);
 
+    /**
+     * Scene graph parent for the clip plane handles, created on first use.
+     *
+     * The handles live next to the display mode switch so they stay visible
+     * and interactive independent of the analysis display mode.
+     */
+    SoSeparator* getClipPlaneRoot();
+
     /** @name Drag and drop */
     //@{
     /// Returns true if the view provider generally supports dragging objects
@@ -131,6 +139,7 @@ protected:
 
 private:
     ViewProviderFemHighlighter extension;
+    Gui::CoinPtr<SoSeparator> clipPlaneRoot;
 };
 
 using ViewProviderFemAnalysisPython = Gui::ViewProviderFeaturePythonT<ViewProviderFemAnalysis>;

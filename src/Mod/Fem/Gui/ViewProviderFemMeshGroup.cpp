@@ -152,11 +152,6 @@ void ViewProviderFemMeshGroup::syncChildViewStates()
 
 void ViewProviderFemMeshGroup::updateStageVisibility()
 {
-    auto* obj = getObject();
-    if (!obj) {
-        return;
-    }
-
     bool meshStage = true;
     if (auto* analysis = findAnalysis()) {
         if (auto* state = AnalysisViewState::forAnalysis(analysis)) {
@@ -172,28 +167,11 @@ void ViewProviderFemMeshGroup::updateStageVisibility()
         return;
     }
 
+    // Children keep their own visibility, a mesh the user hid stays hidden over
+    // stage switches. Only the group is put back, it draws nothing itself but a
+    // hidden group blocks the stage.
     if (!Visibility.getValue()) {
         Visibility.setValue(true);
-    }
-
-    auto* doc = Gui::Application::Instance->getDocument(obj->getDocument());
-    if (!doc) {
-        return;
-    }
-
-    auto* group = Base::freecad_cast<Fem::FemMeshShapeGroup*>(obj);
-    if (!group) {
-        return;
-    }
-
-    for (auto* child : group->Group.getValues()) {
-        if (!child) {
-            continue;
-        }
-        auto* vp = Base::freecad_cast<Gui::ViewProviderDocumentObject*>(doc->getViewProvider(child));
-        if (vp && !vp->Visibility.getValue()) {
-            vp->Visibility.setValue(true);
-        }
     }
 }
 

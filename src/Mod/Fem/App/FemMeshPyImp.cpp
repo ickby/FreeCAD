@@ -1822,6 +1822,22 @@ PyObject* FemMeshPy::addGroupElements(PyObject* args) const
     Py_Return;
 }
 
+PyObject* FemMeshPy::removeElements(PyObject* args)
+{
+    PyObject* obj;
+    if (!PyArg_ParseTuple(args, "O", &obj)) {
+        return nullptr;
+    }
+
+    std::vector<int> ids;
+    Py::Sequence list(obj);
+    for (auto item : list) {
+        ids.push_back(static_cast<int>(Py::Long(item)));
+    }
+
+    return Py::new_reference_to(Py::Long(getFemMeshPtr()->removeElements(ids)));
+}
+
 PyObject* FemMeshPy::removeGroup(PyObject* args) const
 {
     int theId;

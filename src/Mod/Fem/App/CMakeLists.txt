@@ -33,6 +33,7 @@ endif()
 
 generate_from_py(FemMesh)
 generate_from_py(FemGeometry)
+generate_from_py(FemMeshShapeGroup)
 
 
 SET(Python_SRCS
@@ -40,6 +41,8 @@ SET(Python_SRCS
     FemMeshPyImp.cpp
     FemGeometry.pyi
     FemGeometryPyImp.cpp
+    FemMeshShapeGroup.pyi
+    FemMeshShapeGroupPyImp.cpp
     HypothesisPy.cpp
     HypothesisPy.h
 )

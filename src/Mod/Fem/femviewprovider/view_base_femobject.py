@@ -42,6 +42,48 @@ from femobjects.base_fempythonobject import _PropHelper
 
 False if FemGui.__name__ else True  # flake8, dummy FemGui usage
 
+# What clutters the view while an object is edited, the task panel is about the
+# edited object alone. The mesh group is left out on purpose: it draws nothing,
+# hiding it would only grey out its tree item.
+HIDE_WHILE_EDITING = (
+    "Fem::FemMeshObject",
+    "Fem::FemPostFunction",
+)
+
+# The mesh task panels show the mesh they build, so postprocessing goes away too
+HIDE_WHILE_MESH_EDITING = HIDE_WHILE_EDITING + ("Fem::FemPostObject",)
+
+
+def hide_while_editing(vobj, types=HIDE_WHILE_EDITING):
+    """
+    Hide the objects of the given types while vobj is edited.
+
+    Returns the view objects that were switched off, to be passed to
+    show_after_editing() when the editor closes. Objects the user had hidden
+    himself are not touched and stay hidden.
+    """
+    edited = vobj.Object
+    hidden = []
+    for obj in edited.Document.Objects:
+        if obj == edited or obj.isDerivedFrom("Fem::FemMeshShapeGroup"):
+            continue
+        if not any(obj.isDerivedFrom(t) for t in types):
+            continue
+        view = obj.ViewObject
+        if view is not None and view.Visibility:
+            view.Visibility = False
+            hidden.append(view)
+    return hidden
+
+
+def show_after_editing(hidden):
+    """Bring back what hide_while_editing() switched off, deleted objects aside."""
+    for view in hidden:
+        try:
+            view.Visibility = True
+        except (ReferenceError, AttributeError, RuntimeError):
+            continue
+
 
 class _GuiPropHelper(_PropHelper):
     """
@@ -97,14 +139,7 @@ class VPBaseFemObject:
             # https://forum.freecad.org/viewtopic.php?t=12139&start=10#p161062
             return False
         if hide_mesh:
-            # hide all FEM meshes and FemPost function objects
-            for obj in vobj.Object.Document.Objects:
-                if (
-                    obj.isDerivedFrom("Fem::FemMeshObject")
-                    or obj.isDerivedFrom("Fem::FemPostPlaneFunction")
-                    or obj.isDerivedFrom("Fem::FemPostSphereFunction")
-                ):
-                    obj.ViewObject.hide()
+            self.hidden_while_editing = hide_while_editing(vobj)
         # show task panel
         task = TaskPanel(vobj.Object)
         FreeCADGui.Control.showDialog(task)
@@ -112,6 +147,8 @@ class VPBaseFemObject:
 
     def unsetEdit(self, vobj, mode=0):
         FreeCADGui.Control.closeDialog()
+        show_after_editing(getattr(self, "hidden_while_editing", []))
+        self.hidden_while_editing = []
         return True
 
     def doubleClicked(self, vobj):

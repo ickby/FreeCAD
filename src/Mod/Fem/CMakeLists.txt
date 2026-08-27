@@ -191,6 +191,7 @@ SET(FemMesh_SRCS
     femmesh/__init__.py
     femmesh/femmesh2mesh.py
     femmesh/gmshtools.py
+    femmesh/meshcomponents.py
     femmesh/meshsetsgetter.py
     femmesh/meshtools.py
     femmesh/netgentools.py
@@ -753,6 +754,7 @@ SET(FemGuiTests_SRCS
 
 SET(FemGuiUtils_SRCS
     femguiutils/__init__.py
+    femguiutils/component_selection.py
     femguiutils/disambiguate_solid_selection.py
     femguiutils/migrate_gui.py
     femguiutils/selection_widgets.py

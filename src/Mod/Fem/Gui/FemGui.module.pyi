@@ -38,6 +38,16 @@ def getAnalysisViewState(analysis: DocumentObject | None = None, /) -> object | 
     """Return the runtime AnalysisViewState for the given or active analysis."""
     ...
 
+def createClipPlane(
+    analysis: DocumentObject | None = None, name: str | None = None, /
+) -> object | None:
+    """Return an interactive clip plane handle for the given or active analysis.
+
+    A new plane starts clipping at the center of the model. Passing the name of
+    an existing clip plane adopts that plane instead of adding a new one.
+    """
+    ...
+
 @overload
 def open(name: str, /) -> None:
     """Open one Abaqus or Python input file in the FEM editor."""

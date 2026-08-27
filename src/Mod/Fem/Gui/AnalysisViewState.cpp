@@ -80,6 +80,15 @@ AnalysisViewState* AnalysisViewState::forAnalysis(Fem::FemAnalysis* analysis)
     return raw;
 }
 
+AnalysisViewState* AnalysisViewState::find(Fem::FemAnalysis* analysis)
+{
+    if (!analysis) {
+        return nullptr;
+    }
+    auto it = s_states.find(analysis);
+    return it != s_states.end() ? it->second.get() : nullptr;
+}
+
 void AnalysisViewState::destroyForAnalysis(Fem::FemAnalysis* analysis)
 {
     s_states.erase(analysis);
@@ -241,7 +250,23 @@ bool AnalysisViewState::isCellTypeHidden(const std::string& cellType) const
 
 void AnalysisViewState::setClipPlane(const std::string& name, const ClippingPlane& plane)
 {
-    m_clipPlanes[name] = plane;
+    // A degenerate normal reaches VTK as a zero length plane normal, which
+    // clips everything or nothing depending on the filter.
+    ClippingPlane clip = plane;
+    if (clip.Direction.Length() < 1e-9) {
+        Base::Console().warning(
+            "FEM view state: clip plane '%s' ignored, its normal is degenerate\n",
+            name.c_str()
+        );
+        return;
+    }
+    clip.Direction.Normalize();
+
+    auto it = m_clipPlanes.find(name);
+    if (it != m_clipPlanes.end() && it->second == clip) {
+        return;
+    }
+    m_clipPlanes[name] = clip;
     persist();
     notifyChanged();
 }

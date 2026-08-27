@@ -174,6 +174,13 @@ public:
     Connection connectChanged(Slot slot);
 
     static AnalysisViewState* forAnalysis(Fem::FemAnalysis* analysis);
+    /**
+     * State of @a analysis without creating one.
+     *
+     * For callers that may run while an analysis is being torn down, where
+     * forAnalysis() would resurrect a state for a dying object.
+     */
+    static AnalysisViewState* find(Fem::FemAnalysis* analysis);
     static void destroyForAnalysis(Fem::FemAnalysis* analysis);
     /** True while @a state is still owned by the forAnalysis registry. */
     static bool isAlive(const AnalysisViewState* state);

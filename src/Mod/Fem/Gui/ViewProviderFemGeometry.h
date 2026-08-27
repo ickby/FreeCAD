@@ -107,6 +107,21 @@ public:
 protected:
     void updateColors();
     void updateVTK();
+    /**
+     * Clip m_visdata against the active planes and cap the cut open solids.
+     *
+     * Runs on every view state change, so a failure must leave the geometry
+     * usable: on error the unclipped data of this step survives.
+     *
+     * @param clipper Active clip planes of the view state.
+     * @param passthrough_ids Shape ids that made it through the visibility
+     *        filter; only those solids get a cap face.
+     */
+    void applyClipPlanes(
+        const std::map<std::string, ClippingPlane>& clipper,
+        DimensionMode dimMode,
+        const IVtk_ShapeIdList& passthrough_ids
+    );
     void update3D();
     void applySelectionHighlight();
     /**

@@ -3119,6 +3119,50 @@ void FemMesh::addGroupElements(int GroupId, const std::set<int>& ElementIds)
     }
 }
 
+int FemMesh::removeElements(const std::vector<int>& ids)
+{
+    SMESH_Mesh* mesh = this->getSMesh();
+    SMESHDS_Mesh* meshDS = mesh->GetMeshDS();
+
+    // Nodes are shared, so which of them survive is only known once the
+    // elements are gone
+    std::set<const SMDS_MeshNode*> nodes;
+    std::list<int> elements;
+    for (int id : ids) {
+        const SMDS_MeshElement* element = meshDS->FindElement(id);
+        if (!element) {
+            continue;
+        }
+        elements.push_back(id);
+        for (SMDS_ElemIteratorPtr it = element->nodesIterator(); it->more();) {
+            if (const auto* node = dynamic_cast<const SMDS_MeshNode*>(it->next())) {
+                nodes.insert(node);
+            }
+        }
+    }
+
+    SMESH_MeshEditor editor(mesh);
+    const int removed = editor.Remove(elements, false);
+
+    std::list<int> orphans;
+    for (const SMDS_MeshNode* node : nodes) {
+        if (node->NbInverseElements() == 0) {
+            orphans.push_back(node->GetID());
+        }
+    }
+    editor.Remove(orphans, true);
+
+    // A group of an entity that is completely gone has nothing left to say
+    for (int id : mesh->GetGroupIds()) {
+        SMESH_Group* group = mesh->GetGroup(id);
+        if (group && group->GetGroupDS() && group->GetGroupDS()->IsEmpty()) {
+            mesh->RemoveGroup(id);
+        }
+    }
+
+    return removed;
+}
+
 bool FemMesh::removeGroup(int GroupId)
 {
     return this->getSMesh()->RemoveGroup(GroupId);

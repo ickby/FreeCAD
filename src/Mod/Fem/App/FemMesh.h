@@ -188,6 +188,14 @@ public:
     //@{
     /// Applies a transformation on the real geometric data type
     void transformGeometry(const Base::Matrix4D& rclMat) override;
+    /**
+     * Removes elements and the nodes they leave behind.
+     *
+     * Groups lose the removed elements, groups that end up empty are dropped.
+     * Ids of the remaining elements and nodes are kept. Returns the number of
+     * removed elements.
+     */
+    int removeElements(const std::vector<int>& ids);
     //@}
 
     /** @name Group management */

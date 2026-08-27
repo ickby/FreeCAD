@@ -76,10 +76,36 @@ public:
 
     void invalidateMergedCache();
 
+    /**
+     * Mesh child claiming each component of the geometry, by 1-based index.
+     *
+     * A child with an empty Components sub-list claims every component, which
+     * is the "all components" convention of that property. Where more than one
+     * child claims a component the first one in group order is reported; such
+     * an overlap makes execute() fail.
+     */
+    std::map<int, App::DocumentObject*> getComponentOwners() const;
+
+    PyObject* getPyObject() override;
+
 protected:
     void onChanged(const App::Property* prop) override;
 
 private:
+    /// Component claims of the mesh children, the base of every coverage check.
+    struct ComponentClaims
+    {
+        /// Geometry all children agree on, null if there is none to check
+        FemGeometry* geometry {nullptr};
+        /// 1-based component index -> child that claimed it first
+        std::map<int, const FemMeshShapeBaseObject*> owner;
+        /// Claims on a component that another child already owns
+        std::vector<std::pair<int, const FemMeshShapeBaseObject*>> conflicts;
+        /// Children link different geometries, which coverage cannot resolve
+        bool mixedGeometry {false};
+    };
+
+    ComponentClaims collectComponentClaims() const;
     void reconnectChildSignals();
     void slotChildChanged(const App::DocumentObject& obj, const App::Property& prop);
     std::string validateComponents(bool* hasOverlap = nullptr) const;

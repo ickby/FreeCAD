@@ -35,8 +35,6 @@ import FreeCAD
 import FreeCADGui
 import FemGui
 
-import pivy
-
 import femtools.membertools as mt
 
 from PySide import QtCore, QtGui
@@ -919,17 +917,169 @@ class GeometryExplorer(QtGui.QTreeView):
         self._suppress_scroll = True
 
 
-class _clipWidget(QtGui.QWidget):
+class _clipEditWidget(QtGui.QWidget):
+    """
+    Popup with the exact values of one clip plane.
 
-    def __init__(self, name, analysis, view_state, parent=None):
+    Origin and normal belong to the plane, the step size does not: it is a
+    preference that the handle shares with every other clip plane.
+
+    The spin boxes have keyboard tracking off, so a typed value only arrives
+    once the field is left and the clipping is not recomputed per keystroke.
+    """
+
+    def __init__(self, handle, parent=None):
         super().__init__(parent)
-        self.name = name
-        self.view_state = view_state
-        self.analysis_vp = analysis.ViewObject
+        self.handle = handle
+        self._updating = False
+
+        self.widget = FreeCADGui.PySideUic.loadUi(_ui_path("ViewClipEditWidget.ui"))
+        self.widget.OffsetStep.setToolTip(
+            QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel",
+                "Step of the drag arrow, shared by all clipping planes. "
+                "Zero follows the model size.",
+            )
+        )
+        self.widget.AngleStep.setToolTip(
+            QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel",
+                "Step of the two angle handles, shared by all clipping planes",
+            )
+        )
+        origin_tip = QtCore.QCoreApplication.translate(
+            "FEM_ViewPanel", "Point the plane passes through, also the center it rotates about"
+        )
+        normal_tip = QtCore.QCoreApplication.translate(
+            "FEM_ViewPanel", "Plane normal, pointing at the part that is kept"
+        )
+        self.widget.OriginLabel.setToolTip(origin_tip)
+        self.widget.NormalLabel.setToolTip(normal_tip)
+        for box in (self.widget.OriginX, self.widget.OriginY, self.widget.OriginZ):
+            box.setToolTip(origin_tip)
+        for box in (self.widget.NormalX, self.widget.NormalY, self.widget.NormalZ):
+            box.setToolTip(normal_tip)
+
+        self.layout = QtGui.QVBoxLayout()
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.addWidget(self.widget)
+        self.setLayout(self.layout)
+
+        self.widget.OffsetStep.valueChanged.connect(self.offset_step_changed)
+        self.widget.AngleStep.valueChanged.connect(self.angle_step_changed)
+        for box in self._plane_boxes():
+            box.valueChanged.connect(self.plane_changed)
+
+    def _plane_boxes(self):
+        widget = self.widget
+        return (
+            widget.OriginX,
+            widget.OriginY,
+            widget.OriginZ,
+            widget.NormalX,
+            widget.NormalY,
+            widget.NormalZ,
+        )
+
+    def shutdown(self):
+        self.handle = None
+
+    def showEvent(self, event):
+        # The plane may well have been dragged since the popup was last up
+        self.refresh()
+        super().showEvent(event)
+
+    def refresh(self):
+        if not self.handle:
+            return
+        origin = self.handle.getOrigin()
+        normal = self.handle.getNormal()
+        self._updating = True
+        try:
+            # rawValue is the plain number in internal units, which spares the
+            # popup any quantity juggling while the display stays unit aware.
+            self.widget.OffsetStep.setProperty("rawValue", self.handle.getOffsetStep())
+            self.widget.AngleStep.setProperty("rawValue", self.handle.getAngleStep())
+            self.widget.OriginX.setProperty("rawValue", origin.x)
+            self.widget.OriginY.setProperty("rawValue", origin.y)
+            self.widget.OriginZ.setProperty("rawValue", origin.z)
+            self.widget.NormalX.setValue(normal.x)
+            self.widget.NormalY.setValue(normal.y)
+            self.widget.NormalZ.setValue(normal.z)
+        finally:
+            self._updating = False
+
+    def offset_step_changed(self, value=None):
+        if self._updating or not self.handle:
+            return
+        self.handle.setOffsetStep(self.widget.OffsetStep.property("rawValue"))
+
+    def angle_step_changed(self, value=None):
+        if self._updating or not self.handle:
+            return
+        self.handle.setAngleStep(self.widget.AngleStep.property("rawValue"))
+
+    def plane_changed(self, value=None):
+        if self._updating or not self.handle:
+            return
+        origin = FreeCAD.Vector(
+            self.widget.OriginX.property("rawValue"),
+            self.widget.OriginY.property("rawValue"),
+            self.widget.OriginZ.property("rawValue"),
+        )
+        normal = FreeCAD.Vector(
+            self.widget.NormalX.value(),
+            self.widget.NormalY.value(),
+            self.widget.NormalZ.value(),
+        )
+        # Zeroing the normal is a step on the way to another direction, not a
+        # plane; keep the old one until a usable direction is typed.
+        if normal.Length < 1e-9:
+            return
+        self.handle.setPlane(origin, normal)
+
+
+class _clipWidget(QtGui.QWidget):
+    """
+    One row of the clipping list, driving a FemGui clip plane handle.
+
+    The 3D side -- dragger, plane indicator and view state updates -- lives in
+    the handle, so this widget only mirrors button states. Dropping the handle
+    removes the plane from the view, which is why shutdown() must run before
+    the row goes away.
+    """
+
+    def __init__(self, handle, parent=None):
+        super().__init__(parent)
+        self.handle = handle
 
         self.widget = FreeCADGui.PySideUic.loadUi(_ui_path("ViewClipWidget.ui"))
-        self.widget.ClipButton.setText(self.name)
+        self.widget.ClipButton.setText(handle.getName())
+        self.widget.ClipButton.setChecked(handle.isActive())
+        self.widget.WidgetButton.setChecked(handle.isWidgetVisible())
         self.widget.DeleteButton.setIcon(FreeCADGui.getIcon("delete.svg"))
+        self.widget.EditButton.setIcon(FreeCADGui.getIcon("preferences-general.svg"))
+        self.widget.ClipButton.setToolTip(
+            QtCore.QCoreApplication.translate("FEM_ViewPanel", "Apply this clipping plane")
+        )
+        self.widget.WidgetButton.setToolTip(
+            QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel", "Show the plane and its drag handles in the 3D view"
+            )
+        )
+        self.widget.EditButton.setToolTip(
+            QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel", "Set drag steps, origin and normal by value"
+            )
+        )
+
+        # A menu of our own instead of the button popup mode, which would turn
+        # the button into a drop down with an arrow.
+        self.editor = _clipEditWidget(handle)
+        self.edit_menu = QtGui.QMenu(self.widget.EditButton)
+        edit_action = QtGui.QWidgetAction(self.edit_menu)
+        edit_action.setDefaultWidget(self.editor)
+        self.edit_menu.addAction(edit_action)
 
         self.layout = QtGui.QVBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -938,70 +1088,45 @@ class _clipWidget(QtGui.QWidget):
 
         self.widget.ClipButton.clicked.connect(self.clip_changed)
         self.widget.WidgetButton.clicked.connect(self.widget_changed)
+        self.widget.EditButton.clicked.connect(self.edit_clicked)
         self.widget.DeleteButton.clicked.connect(self.delete_clicked)
 
-        root = self.analysis_vp.RootNode
-        _search = pivy.coin.SoSearchAction()
-        _search.setName("__ClippingRoot__")
-        _search.apply(root)
-        _paths = _search.getPaths()
-        if not _paths or _paths.getLength() == 0:
-            self.clip_root = pivy.coin.SoSeparator()
-            self.clip_root.setName("__ClippingRoot__")
-            root.insertChild(self.clip_root, 1)
-        else:
-            self.clip_root = _paths.get(0).getTail()
+    @property
+    def name(self):
+        return self.handle.getName() if self.handle else ""
 
-        self.switch = pivy.coin.SoSwitch()
-        self.clip_root.addChild(self.switch)
-
-        view = self.analysis_vp.Document.activeView()
-        if not view:
-            raise Exception("No view in active analysis document: cannot add dragger")
-
-        self.manip = pivy.coin.SoJackDragger()
-        self.cbFin = view.addDraggerCallback(
-            self.manip, "addFinishCallback", self.drag_finish_callback
-        )
-        self.switch.addChild(self.manip)
-        self.switch.whichChild = 0
-        self.drag_finish_callback(None)
-
-    def delete_clicked(self, value):
-        self.clip_changed(False)
-        self.clip_root.removeChild(self.switch)
-        view = self.analysis_vp.Document.activeView()
-        if view:
-            view.removeDraggerCallback(self.manip, "addFinishCallback", self.drag_finish_callback)
-        if self.view_state:
-            self.view_state.removeClipPlane(self.name)
+    def shutdown(self):
+        """Drop the clip plane and its 3D widget, then retire the row."""
+        self.editor.shutdown()
+        if self.handle:
+            self.handle.remove()
+            self.handle = None
+        self.setParent(None)
         self.deleteLater()
 
-    def get_origin_normal(self):
-        translation = self.manip.translation.getValue()
-        rotation = self.manip.rotation.getValue()
-        normal = pivy.coin.SbVec3f([0, 1, 0])
-        normal = rotation.multVec(normal)
-        origin = FreeCAD.Vector(translation[0], translation[1], translation[2])
-        normal = FreeCAD.Vector(normal[0], normal[1], normal[2])
-        return (origin, normal)
+    def refresh(self):
+        """Re-fit the plane indicator and resync the buttons with the handle."""
+        if not self.handle:
+            return
+        self.handle.refresh()
+        self.widget.ClipButton.setChecked(self.handle.isActive())
+        if self.editor.isVisible():
+            self.editor.refresh()
 
-    def drag_finish_callback(self, event):
-        if self.widget.ClipButton.isChecked() and self.view_state:
-            origin, normal = self.get_origin_normal()
-            self.view_state.setClipPlane(self.name, origin, normal)
+    def edit_clicked(self, value=None):
+        button = self.widget.EditButton
+        self.edit_menu.popup(button.mapToGlobal(QtCore.QPoint(0, button.height())))
+
+    def delete_clicked(self, value):
+        self.shutdown()
 
     def clip_changed(self, value):
-        if not self.view_state:
-            return
-        if value:
-            origin, normal = self.get_origin_normal()
-            self.view_state.setClipPlane(self.name, origin, normal)
-        else:
-            self.view_state.removeClipPlane(self.name)
+        if self.handle:
+            self.handle.setActive(bool(value))
 
     def widget_changed(self, value):
-        self.switch.whichChild = 0 if value else -1
+        if self.handle:
+            self.handle.setWidgetVisible(bool(value))
 
 
 class ViewSettings(QtGui.QWidget):
@@ -1044,6 +1169,7 @@ class ViewSettings(QtGui.QWidget):
         self.mesh_obj = None
         self._vs_callback = None
         self._updating = False
+        self._clip_key = None
         self.setup_analysis()
 
         self.widget.GeometryButton.clicked.connect(self.geometry_button_checked)
@@ -1061,6 +1187,8 @@ class ViewSettings(QtGui.QWidget):
         FreeCAD.addDocumentObserver(self._app_observer)
 
     def shutdown(self):
+        self.clear_clipping_planes()
+        self._clip_key = None
         self._disconnect_view_state()
         FemGui.removeActiveAnalysisObserver(self)
         FreeCADGui.removeDocumentObserver(self._gui_observer)
@@ -1085,6 +1213,15 @@ class ViewSettings(QtGui.QWidget):
         self._vs_callback = _on_changed
         self.view_state.connectChanged(self._vs_callback)
 
+    def _analysis_key(self):
+        """Identity of the current analysis that survives a dead wrapper."""
+        if not self.active_analysis:
+            return None
+        try:
+            return (self.active_analysis.Document.Name, self.active_analysis.Name)
+        except (AttributeError, ReferenceError, RuntimeError):
+            return None
+
     def setup_analysis(self):
         self.geom_obj = None
         self.mesh_obj = None
@@ -1103,6 +1240,17 @@ class ViewSettings(QtGui.QWidget):
                     self.view_state.setActiveStage("Geometry")
 
         self._connect_view_state()
+
+        # setup_analysis() also runs on every geometry or mesh change, where the
+        # clip planes have to stay put and only re-fit their indicator.
+        key = self._analysis_key()
+        if key != self._clip_key:
+            self._clip_key = key
+            self.setup_clipping_planes()
+        else:
+            for widget in self.clip_widgets():
+                widget.refresh()
+
         self.setup_widgets()
 
     def setup_widgets(self):
@@ -1205,11 +1353,60 @@ class ViewSettings(QtGui.QWidget):
     def slotResetEdit(self, viewprovider):
         pass
 
+    def clip_widgets(self):
+        layout = self.widget.ClippingGroup.layout()
+        widgets = []
+        for index in range(layout.count()):
+            item = layout.itemAt(index)
+            widget = item.widget() if item else None
+            if isinstance(widget, _clipWidget):
+                widgets.append(widget)
+        return widgets
+
+    def clear_clipping_planes(self):
+        """
+        Retire all clip rows.
+
+        Rows outlive nothing: their handles reference the analysis they were
+        made for, so switching analysis or closing the document has to drop
+        them here instead of leaving stale rows behind.
+        """
+        layout = self.widget.ClippingGroup.layout()
+        for widget in self.clip_widgets():
+            layout.removeWidget(widget)
+            widget.shutdown()
+
+    def setup_clipping_planes(self):
+        """Rebuild the clip rows for the current analysis, planes included."""
+        self.clear_clipping_planes()
+        if not self.active_analysis or not self.view_state:
+            return
+        # Planes restored from a saved document are already in the view state
+        # and only need their handle back.
+        for name in sorted(self.view_state.getClipPlanes().keys()):
+            self._add_clip_widget(name)
+
+    def _add_clip_widget(self, name=None):
+        try:
+            handle = (
+                FemGui.createClipPlane(self.active_analysis, name)
+                if name
+                else FemGui.createClipPlane(self.active_analysis)
+            )
+        except Exception as exc:
+            FreeCAD.Console.PrintError(f"FEM view panel: cannot create clipping plane: {exc}\n")
+            return None
+        if handle is None:
+            return None
+
+        layout = self.widget.ClippingGroup.layout()
+        widget = _clipWidget(handle)
+        layout.insertWidget(layout.count() - 1, widget)
+        return widget
+
     def add_clipping_plane(self, value):
         if self.active_analysis and self.view_state:
-            layout = self.widget.ClippingGroup.layout()
-            widget = _clipWidget(f"Clip {layout.count()}", self.active_analysis, self.view_state)
-            layout.insertWidget(layout.count() - 1, widget)
+            self._add_clip_widget()
 
     def viewmode_changed(self, value):
         if self._updating or not self.view_state:

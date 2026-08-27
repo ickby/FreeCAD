@@ -52,17 +52,16 @@
 
 #include <IVtk_Types.hxx>
 #include <IVtkVTK_ShapeData.hxx>
+#include <Standard_Failure.hxx>
 #include <vtkAppendPolyData.h>
 #include <vtkCellData.h>
 #include <vtkFloatArray.h>
 #include <vtkIdTypeArray.h>
-#include <vtkImplicitBoolean.h>
 #include <vtkPlane.h>
 #include <vtkPlaneCollection.h>
 #include <vtkPointData.h>
 #include <vtkPolyData.h>
 #include <vtkSortDataArray.h>
-#include <vtkSphere.h>
 
 #include "ActiveAnalysisObserver.h"
 #include "AnalysisViewState.h"
@@ -1029,46 +1028,73 @@ void ViewProviderFemGeometry::updateVTK()
     m_vtkshapefilter->Update();
     m_visdata = m_vtkshapefilter->GetOutput();
 
-    auto clip_planes = vtkSmartPointer<vtkPlaneCollection>::New();
-    auto clip_function = vtkSmartPointer<vtkImplicitBoolean>::New();
-    for (const auto& clip : clipper) {
-        auto plane = vtkSmartPointer<vtkPlane>::New();
-        plane->SetNormal(
-            clip.second.Direction.x,
-            clip.second.Direction.y,
-            clip.second.Direction.z
-        );
-        plane->SetOrigin(clip.second.Origin.x, clip.second.Origin.y, clip.second.Origin.z);
+    applyClipPlanes(clipper, dimMode, passthrough_ids);
 
-        clip_planes->AddItem(plane);
-        clip_function->AddFunction(plane);
+    m_vtkgeometryoverlayextract->Update();
+    auto overlay_data = m_vtkgeometryoverlayextract->GetOutput();
+    m_visgeometryoverlay = vtkPolyData::SafeDownCast(overlay_data);
 
-        m_vtkclipfilter->SetClipFunction(plane);
-        m_vtkclipfilter->SetInputData(m_visdata);
-        // IVtk stores edges as polylines, which vtkTableBasedClipDataSet reports
-        // as unsupported: only its output *points* are duplicated, the Shape_ID
-        // cell data stays attached to the right cells. Silence that one warning.
-        const int warn = vtkObject::GetGlobalWarningDisplay();
-        vtkObject::SetGlobalWarningDisplay(0);
-        m_vtkclipgeometryfilter->Update();
-        vtkObject::SetGlobalWarningDisplay(warn);
-        vtkNew<vtkPolyData> clipped;
-        clipped->DeepCopy(m_vtkclipgeometryfilter->GetOutput());
-        m_visdata = clipped;
-    }
-    if (clipper.empty()) {
-        // an empty boolean implicit function clips everything
-        auto sphere = vtkSmartPointer<vtkSphere>::New();
-        sphere->SetRadius(1e9);
-        clip_function->AddFunction(sphere);
+    update3D();
+}
+
+void ViewProviderFemGeometry::applyClipPlanes(
+    const std::map<std::string, ClippingPlane>& clipper,
+    DimensionMode dimMode,
+    const IVtk_ShapeIdList& passthrough_ids
+)
+{
+    auto* geom_obj = getObject<Fem::FemGeometry>();
+    if (clipper.empty() || !geom_obj || !m_visdata) {
+        return;
     }
 
-    const bool solidClipInterior =
-        (dimMode == DimensionMode::Volume || dimMode == DimensionMode::Highest);
+    try {
+        auto clip_planes = vtkSmartPointer<vtkPlaneCollection>::New();
+        for (const auto& clip : clipper) {
+            const Base::Vector3d& dir = clip.second.Direction;
+            if (dir.Length() < 1e-9) {
+                Base::Console().warning(
+                    "FEM geometry: skipping clip plane '%s' with a degenerate normal\n",
+                    clip.first.c_str()
+                );
+                continue;
+            }
 
-    if (!clipper.empty() && solidClipInterior) {
+            auto plane = vtkSmartPointer<vtkPlane>::New();
+            plane->SetNormal(dir.x, dir.y, dir.z);
+            plane->SetOrigin(clip.second.Origin.x, clip.second.Origin.y, clip.second.Origin.z);
+            clip_planes->AddItem(plane);
+
+            m_vtkclipfilter->SetClipFunction(plane);
+            m_vtkclipfilter->SetInputData(m_visdata);
+            // IVtk stores edges as polylines, which vtkTableBasedClipDataSet reports
+            // as unsupported: only its output *points* are duplicated, the Shape_ID
+            // cell data stays attached to the right cells. Silence that one warning.
+            const int warn = vtkObject::GetGlobalWarningDisplay();
+            vtkObject::SetGlobalWarningDisplay(0);
+            m_vtkclipgeometryfilter->Update();
+            vtkObject::SetGlobalWarningDisplay(warn);
+
+            vtkPolyData* clip_out = m_vtkclipgeometryfilter->GetOutput();
+            if (!clip_out) {
+                Base::Console().warning(
+                    "FEM geometry: clip plane '%s' produced no data, geometry left unclipped\n",
+                    clip.first.c_str()
+                );
+                return;
+            }
+            vtkNew<vtkPolyData> clipped;
+            clipped->DeepCopy(clip_out);
+            m_visdata = clipped;
+        }
+
+        const bool solidClipInterior =
+            (dimMode == DimensionMode::Volume || dimMode == DimensionMode::Highest);
+        if (clip_planes->GetNumberOfItems() == 0 || !solidClipInterior) {
+            return;
+        }
+
         auto shape = geom_obj->Shape.getShape();
-
         for (TopoDS_Shape& solid : shape.getSubShapes(TopAbs_ShapeEnum::TopAbs_SOLID)) {
             vtkIdType solid_id =
                 (shape.shapeType() == TopAbs_SOLID) ? 1 : m_shape->GetSubShapeId(solid);
@@ -1086,45 +1112,53 @@ void ViewProviderFemGeometry::updateVTK()
             m_vtkclipnormals->Update();
             vtkPolyData* solid_clip_plane = m_vtkclipnormals->GetOutput();
 
-            if (solid_clip_plane->GetNumberOfCells() > 0) {
-                vtkNew<vtkIdTypeArray> id_data;
-                vtkNew<vtkIdTypeArray> mesh_data;
-                id_data->SetNumberOfValues(solid_clip_plane->GetNumberOfCells());
-                mesh_data->SetNumberOfValues(solid_clip_plane->GetNumberOfCells());
-                for (vtkIdType i = 0; i < solid_clip_plane->GetNumberOfCells(); i++) {
-                    id_data->SetValue(i, solid_id);
-                    mesh_data->SetValue(i, IVtk_MeshType::MT_ShadedFace);
-                }
-                id_data->SetName(IVtkVTK_ShapeData::ARRNAME_SUBSHAPE_IDS());
-                mesh_data->SetName(IVtkVTK_ShapeData::ARRNAME_MESH_TYPES());
-                solid_clip_plane->GetCellData()->AddArray(id_data);
-                solid_clip_plane->GetCellData()->AddArray(mesh_data);
-
-                // Ensure hover/selection can resolve the cut face to SolidN.
-                const auto sid = shape.findShape(solid);
-                if (sid > 0) {
-                    addIdElement(
-                        solid_id,
-                        Part::TopoShape::shapeName(TopAbs_SOLID) + std::to_string(sid)
-                    );
-                }
-
-                vtkNew<vtkAppendPolyData> append;
-                append->AddInputData(m_visdata);
-                append->AddInputData(solid_clip_plane);
-                append->Update();
-                vtkNew<vtkPolyData> merged;
-                merged->DeepCopy(append->GetOutput());
-                m_visdata = merged;
+            if (!solid_clip_plane || solid_clip_plane->GetNumberOfCells() == 0) {
+                continue;
             }
+
+            vtkNew<vtkIdTypeArray> id_data;
+            vtkNew<vtkIdTypeArray> mesh_data;
+            id_data->SetNumberOfValues(solid_clip_plane->GetNumberOfCells());
+            mesh_data->SetNumberOfValues(solid_clip_plane->GetNumberOfCells());
+            for (vtkIdType i = 0; i < solid_clip_plane->GetNumberOfCells(); i++) {
+                id_data->SetValue(i, solid_id);
+                mesh_data->SetValue(i, IVtk_MeshType::MT_ShadedFace);
+            }
+            id_data->SetName(IVtkVTK_ShapeData::ARRNAME_SUBSHAPE_IDS());
+            mesh_data->SetName(IVtkVTK_ShapeData::ARRNAME_MESH_TYPES());
+            solid_clip_plane->GetCellData()->AddArray(id_data);
+            solid_clip_plane->GetCellData()->AddArray(mesh_data);
+
+            // Ensure hover/selection can resolve the cut face to SolidN.
+            const auto sid = shape.findShape(solid);
+            if (sid > 0) {
+                addIdElement(
+                    solid_id,
+                    Part::TopoShape::shapeName(TopAbs_SOLID) + std::to_string(sid)
+                );
+            }
+
+            vtkNew<vtkAppendPolyData> append;
+            append->AddInputData(m_visdata);
+            append->AddInputData(solid_clip_plane);
+            append->Update();
+            if (!append->GetOutput()) {
+                continue;
+            }
+            vtkNew<vtkPolyData> merged;
+            merged->DeepCopy(append->GetOutput());
+            m_visdata = merged;
         }
     }
-
-    m_vtkgeometryoverlayextract->Update();
-    auto overlay_data = m_vtkgeometryoverlayextract->GetOutput();
-    m_visgeometryoverlay = vtkPolyData::SafeDownCast(overlay_data);
-
-    update3D();
+    catch (const Standard_Failure& e) {
+        Base::Console().warning("FEM geometry: clipping failed in OCC: %s\n", e.GetMessageString());
+    }
+    catch (const Base::Exception& e) {
+        Base::Console().warning("FEM geometry: clipping failed: %s\n", e.what());
+    }
+    catch (const std::exception& e) {
+        Base::Console().warning("FEM geometry: clipping failed: %s\n", e.what());
+    }
 }
 
 void ViewProviderFemGeometry::updateColors()

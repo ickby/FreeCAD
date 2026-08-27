@@ -170,6 +170,16 @@ void ViewProviderFemAnalysis::removeView(Gui::ViewProviderDocumentObject* view)
     extension.removeView(view);
 }
 
+SoSeparator* ViewProviderFemAnalysis::getClipPlaneRoot()
+{
+    if (!clipPlaneRoot) {
+        clipPlaneRoot = new SoSeparator();
+        clipPlaneRoot->setName("FemClipPlanes");
+        getRoot()->addChild(clipPlaneRoot);
+    }
+    return clipPlaneRoot;
+}
+
 bool ViewProviderFemAnalysis::doubleClicked()
 {
     Gui::Command::assureWorkbench("FemWorkbench");

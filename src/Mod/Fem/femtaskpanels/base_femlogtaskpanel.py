@@ -74,6 +74,7 @@ class _BaseLogTaskPanel(base_femtaskpanel._BaseTaskPanel, ABC):
         self.timer = QtCore.QTimer()
         self.elapsed = QtCore.QElapsedTimer()
         self._thread = _Thread(self.tool)
+        self.btn_apply = None
 
         if hasattr(self, "form"):
             self.text_log = self.form.te_output
@@ -239,8 +240,12 @@ class _BaseLogTaskPanel(base_femtaskpanel._BaseTaskPanel, ABC):
             self.apply()
 
     def modifyStandardButtons(self, box):
-        btn_apply = box.button(QtGui.QDialogButtonBox.Apply)
-        btn_apply.setText(FreeCAD.Qt.translate("FEM", "Run"))
+        self.btn_apply = box.button(QtGui.QDialogButtonBox.Apply)
+        self.btn_apply.setText(FreeCAD.Qt.translate("FEM", "Run"))
+        self.update_run_state()
+
+    def update_run_state(self):
+        """Hook for panels whose object can be incomplete, always runnable here."""
 
     def apply(self):
         self.run_process()
@@ -275,12 +280,15 @@ class _BaseWorkerTaskPanel(_BaseLogTaskPanel):
         super().__init__(obj)
         self.prepared = False
         self.run_complete = False
+        self.component_selection = None
 
         # add document observer to detect properties changes
         FreeCAD.addDocumentObserver(self.observer)
 
     def setup_connections(self):
         super().setup_connections()
+
+        self.add_component_selection()
 
         QtCore.QObject.connect(
             self.form.ckb_working_directory,
@@ -324,6 +332,41 @@ class _BaseWorkerTaskPanel(_BaseLogTaskPanel):
             # previously write the input files
             self.run_complete = True
             super().apply()
+
+    def add_component_selection(self):
+        """
+        Add the component picker for mesh objects that mesh a FemGeometry.
+
+        Legacy mesh objects link a Part feature and mesh it as a whole, so
+        there is nothing to pick and the widget stays away.
+        """
+        from femguiutils import component_selection
+        from femmesh import meshcomponents
+
+        if meshcomponents.geometry_of(self.obj) is None:
+            return
+
+        self.component_selection = component_selection.ComponentSelection(self.obj)
+        self.component_selection.selectionChanged.connect(self.component_selection_changed)
+
+        # right below the working directory, above the mesh parameters
+        layout = self.form.layout()
+        position = layout.indexOf(self.form.gpb_working_directory) + 1
+        layout.insertWidget(position, self.component_selection)
+
+    def component_selection_changed(self):
+        self.prepared = False
+        self.update_run_state()
+
+    def update_run_state(self):
+        if self.component_selection is None:
+            return
+
+        hint = self.component_selection.hint()
+        self.form.pb_write_input.setEnabled(not hint)
+        if self.btn_apply is not None:
+            self.btn_apply.setEnabled(not hint)
+            self.btn_apply.setToolTip(hint)
 
     def set_widgets(self):
         "fill the widgets"

@@ -36,6 +36,7 @@ import FemGui
 from PySide import QtGui
 from femtaskpanels import task_mesh_gmsh
 from femtools.femutils import is_of_type, type_of_obj
+from femviewprovider import view_base_femobject
 
 _supported_definitions = [
     "Fem::MeshRegion",
@@ -74,22 +75,10 @@ class VPMeshGmsh:
         return
 
     def setEdit(self, vobj, mode):
-        # hide all FEM meshes and VTK FemPost* objects
-        for obj in vobj.Object.Document.Objects:
-            if (
-                obj.isDerivedFrom("Fem::FemMeshObject")
-                or obj.isDerivedFrom("Fem::FemPostClipFilter")
-                or obj.isDerivedFrom("Fem::FemPostContoursFilter")
-                or obj.isDerivedFrom("Fem::FemPostCutFilter")
-                or obj.isDerivedFrom("Fem::FemPostDataAlongLineFilter")
-                or obj.isDerivedFrom("Fem::FemPostDataAtPointFilter")
-                or obj.isDerivedFrom("Fem::FemPostPipeline")
-                or obj.isDerivedFrom("Fem::FemPostPlaneFunction")
-                or obj.isDerivedFrom("Fem::FemPostScalarClipFilter")
-                or obj.isDerivedFrom("Fem::FemPostSphereFunction")
-                or obj.isDerivedFrom("Fem::FemPostWarpVectorFilter")
-            ):
-                obj.ViewObject.hide()
+        # hide all other FEM meshes and VTK FemPost* objects
+        self.hidden_while_editing = view_base_femobject.hide_while_editing(
+            vobj, view_base_femobject.HIDE_WHILE_MESH_EDITING
+        )
         # show the mesh we like to edit
         self.ViewObject.show()
         # show task panel
@@ -111,6 +100,8 @@ class VPMeshGmsh:
     # overwrite unsetEdit
     def unsetEdit(self, vobj, mode):
         FreeCADGui.Control.closeDialog()
+        view_base_femobject.show_after_editing(getattr(self, "hidden_while_editing", []))
+        self.hidden_while_editing = []
         return True
 
     def doubleClicked(self, vobj):

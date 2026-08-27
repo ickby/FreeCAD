@@ -837,22 +837,24 @@ class _MeshGmshFromShape(CommandManager):
             mesh_groups = membertools.get_member(analysis, "Fem::FemMeshShapeGroup")
 
             if geoms:
-                # Prefer the analysis geometry; Components=[] means all components.
+                # Prefer the analysis geometry over the legacy Shape link
                 FreeCADGui.doCommand(
                     "_geom = femtools.membertools.get_member(" "_analysis, 'Fem::FemGeometry')[0]"
                 )
                 if mesh_groups:
                     FreeCADGui.doCommand(
-                        "femtools.membertools.get_member("
-                        "_analysis, 'Fem::FemMeshShapeGroup')[0].addObject(_mesh)"
+                        "_meshgroup = femtools.membertools.get_member("
+                        "_analysis, 'Fem::FemMeshShapeGroup')[0]"
                     )
                 else:
                     FreeCADGui.doCommand(
                         "_meshgroup = ObjectsFem.makeMeshShapeGroup("
                         "FreeCAD.ActiveDocument, geometry=_geom, analysis=_analysis)"
                     )
-                    FreeCADGui.doCommand("_meshgroup.addObject(_mesh)")
-                FreeCADGui.doCommand("_mesh.Components = (_geom, [])")
+                FreeCADGui.doCommand("_meshgroup.addObject(_mesh)")
+                # Mesh what no other mesh object of the group meshes yet
+                FreeCADGui.addModule("femmesh.meshcomponents")
+                FreeCADGui.doCommand("femmesh.meshcomponents.assign_unclaimed(_mesh)")
             else:
                 if mesh_groups:
                     FreeCADGui.doCommand(
@@ -864,9 +866,7 @@ class _MeshGmshFromShape(CommandManager):
                 FreeCADGui.doCommand(f"_mesh.Shape = FreeCAD.ActiveDocument.{self.selobj.Name}")
             # Open the mesh task panel — not the mesh group (ActiveObject after makeMeshShapeGroup).
             FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(_mesh.Name)")
-            FreeCADGui.doCommand(
-                "FemGui.getAnalysisViewState(_analysis).setActiveStage('Mesh')"
-            )
+            FreeCADGui.doCommand("FemGui.getAnalysisViewState(_analysis).setActiveStage('Mesh')")
         else:
             FreeCADGui.doCommand(
                 "FreeCAD.ActiveDocument.ActiveObject.Shape = FreeCAD.ActiveDocument.{}".format(
@@ -939,16 +939,18 @@ class _MeshNetgenFromShape(CommandManager):
                 )
                 if mesh_groups:
                     FreeCADGui.doCommand(
-                        "femtools.membertools.get_member("
-                        "_analysis, 'Fem::FemMeshShapeGroup')[0].addObject(_mesh)"
+                        "_meshgroup = femtools.membertools.get_member("
+                        "_analysis, 'Fem::FemMeshShapeGroup')[0]"
                     )
                 else:
                     FreeCADGui.doCommand(
                         "_meshgroup = ObjectsFem.makeMeshShapeGroup("
                         "FreeCAD.ActiveDocument, geometry=_geom, analysis=_analysis)"
                     )
-                    FreeCADGui.doCommand("_meshgroup.addObject(_mesh)")
-                FreeCADGui.doCommand("_mesh.Components = (_geom, [])")
+                FreeCADGui.doCommand("_meshgroup.addObject(_mesh)")
+                # Mesh what no other mesh object of the group meshes yet
+                FreeCADGui.addModule("femmesh.meshcomponents")
+                FreeCADGui.doCommand("femmesh.meshcomponents.assign_unclaimed(_mesh)")
             else:
                 FreeCADGui.doCommand(f"_mesh.Shape = FreeCAD.ActiveDocument.{self.selobj.Name}")
                 if mesh_groups:
@@ -960,9 +962,7 @@ class _MeshNetgenFromShape(CommandManager):
                     FreeCADGui.doCommand("_analysis.addObject(_mesh)")
             # Open the mesh task panel — not the mesh group (ActiveObject after makeMeshShapeGroup).
             FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(_mesh.Name)")
-            FreeCADGui.doCommand(
-                "FemGui.getAnalysisViewState(_analysis).setActiveStage('Mesh')"
-            )
+            FreeCADGui.doCommand("FemGui.getAnalysisViewState(_analysis).setActiveStage('Mesh')")
         else:
             FreeCADGui.doCommand(
                 "FreeCAD.ActiveDocument.ActiveObject.Shape = FreeCAD.ActiveDocument.{}".format(

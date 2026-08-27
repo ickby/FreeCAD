@@ -37,6 +37,8 @@
 #include "ActiveAnalysisObserver.h"
 #include "AnalysisViewState.h"
 #include "AnalysisViewStatePy.h"
+#include "ClipPlaneHandle.h"
+#include "ClipPlaneHandlePy.h"
 
 
 namespace FemGui
@@ -48,6 +50,7 @@ public:
         : Py::ExtensionModule<Module>("FemGui")
     {
         AnalysisViewStatePy::init_type();
+        ClipPlaneHandlePy::init_type();
 
         add_varargs_method(
             "setActiveAnalysis",
@@ -75,6 +78,13 @@ public:
             &Module::getAnalysisViewState,
             "getAnalysisViewState([AnalysisObject]) -- Runtime AnalysisViewState for the "
             "given or active analysis."
+        );
+        add_varargs_method(
+            "createClipPlane",
+            &Module::createClipPlane,
+            "createClipPlane([AnalysisObject], [name]) -- Interactive clip plane handle for "
+            "the given or active analysis. A new plane starts clipping at the model center, "
+            "an existing name adopts that plane."
         );
         add_varargs_method(
             "open",
@@ -163,6 +173,26 @@ private:
         }
         return Py::None();
     }
+    /// The given analysis or, without argument, the active one.
+    static Fem::FemAnalysis* resolveAnalysis(PyObject* object)
+    {
+        if (object) {
+            App::DocumentObject* obj
+                = static_cast<App::DocumentObjectPy*>(object)->getDocumentObjectPtr();
+            auto* analysis = Base::freecad_cast<Fem::FemAnalysis*>(obj);
+            if (!analysis) {
+                throw Py::Exception(
+                    Base::PyExc_FC_GeneralError,
+                    "Object must be of type Fem::FemAnalysis"
+                );
+            }
+            return analysis;
+        }
+        if (FemGui::ActiveAnalysisObserver::instance()->hasActiveObject()) {
+            return FemGui::ActiveAnalysisObserver::instance()->getActiveObject();
+        }
+        return nullptr;
+    }
     Py::Object getAnalysisViewState(const Py::Tuple& args)
     {
         PyObject* object = nullptr;
@@ -170,22 +200,7 @@ private:
             throw Py::Exception();
         }
 
-        Fem::FemAnalysis* analysis = nullptr;
-        if (object) {
-            App::DocumentObject* obj
-                = static_cast<App::DocumentObjectPy*>(object)->getDocumentObjectPtr();
-            analysis = Base::freecad_cast<Fem::FemAnalysis*>(obj);
-            if (!analysis) {
-                throw Py::Exception(
-                    Base::PyExc_FC_GeneralError,
-                    "Object must be of type Fem::FemAnalysis"
-                );
-            }
-        }
-        else if (FemGui::ActiveAnalysisObserver::instance()->hasActiveObject()) {
-            analysis = FemGui::ActiveAnalysisObserver::instance()->getActiveObject();
-        }
-
+        Fem::FemAnalysis* analysis = resolveAnalysis(object);
         if (!analysis) {
             return Py::None();
         }
@@ -194,6 +209,33 @@ private:
             return Py::None();
         }
         return AnalysisViewStatePy::create(state);
+    }
+    Py::Object createClipPlane(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        char* name = nullptr;
+        if (!PyArg_ParseTuple(
+                args.ptr(),
+                "|O!s",
+                &(App::DocumentObjectPy::Type),
+                &object,
+                &name
+            )) {
+            throw Py::Exception();
+        }
+
+        Fem::FemAnalysis* analysis = resolveAnalysis(object);
+        if (!analysis) {
+            return Py::None();
+        }
+        auto handle = ClipPlaneHandle::create(analysis, name ? std::string(name) : std::string());
+        if (!handle) {
+            throw Py::Exception(
+                Base::PyExc_FC_GeneralError,
+                "Analysis has no view provider to attach a clip plane to"
+            );
+        }
+        return ClipPlaneHandlePy::create(std::move(handle));
     }
     Py::Object open(const Py::Tuple& args)
     {

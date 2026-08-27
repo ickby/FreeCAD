@@ -332,6 +332,10 @@ SET(FemGui_SRCS_Module
     AnalysisViewState.h
     AnalysisViewStatePy.cpp
     AnalysisViewStatePy.h
+    ClipPlaneHandle.cpp
+    ClipPlaneHandle.h
+    ClipPlaneHandlePy.cpp
+    ClipPlaneHandlePy.h
     FemViewTypes.h
     Command.cpp
     FemGuiTools.cpp
@@ -505,6 +509,7 @@ SET(FemGuiPythonUI_SRCS
     Resources/ui/PostTableFieldViewEdit.ui
     Resources/ui/ViewSettingsWidget.ui
     Resources/ui/ViewClipWidget.ui
+    Resources/ui/ViewClipEditWidget.ui
 )
 
 ADD_CUSTOM_TARGET(FemPythonUi ALL

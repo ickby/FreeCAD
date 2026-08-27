@@ -280,6 +280,16 @@ class FemMesh(ComplexGeoData):
         """
         ...
 
+    def removeElements(self, elements: list[int], /) -> int:
+        """
+        Remove elements and the nodes they leave behind
+                            removeElements(elements)
+                            elements: list of int
+                            Groups lose the removed elements, groups that end up empty are
+                            dropped. Ids of the remaining elements and nodes are kept.
+                            Returns the number of removed elements."""
+        ...
+
     @constmethod
     def removeGroup(self, group_id: int, /) -> bool:
         """

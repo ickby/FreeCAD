@@ -288,11 +288,19 @@ void ViewProviderFemMeshShapePreprocess::updateStageVisibility()
     if (!m_preprocessModeAdded) {
         return;
     }
-    bool show = Visibility.getValue();
+    bool meshStage = true;
     if (auto* state = m_boundViewState ? m_boundViewState : viewState()) {
-        show = show && (state->activeStage() == ActiveStage::Mesh);
+        meshStage = (state->activeStage() == ActiveStage::Mesh);
     }
-    setDisplayMaskMode(show ? PreprocessMode : PreprocessHiddenMode);
+
+    // The stage picks what the mode switch holds, the visibility of the object
+    // switches the whole node off. Only the latter is what the tree reads, so
+    // hiding by hand has to end there, otherwise the item never greys out and
+    // the next space bar hit sees a shown object again.
+    setDisplayMaskMode(meshStage ? PreprocessMode : PreprocessHiddenMode);
+    if (!Visibility.getValue()) {
+        Gui::ViewProvider::hide();
+    }
 }
 
 void ViewProviderFemMeshShapePreprocess::updateMeshFromProperty()

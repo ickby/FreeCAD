@@ -23,6 +23,8 @@
 #include "PreCompiled.h"
 
 #ifndef _PreComp_
+# include <algorithm>
+# include <functional>
 # include <sstream>
 #endif
 
@@ -37,7 +39,9 @@
 #include <Gui/Document.h>
 #include <Gui/ViewProviderDocumentObject.h>
 #include <Mod/Fem/App/FemAnalysis.h>
+#include <Mod/Fem/App/FemAnalysisImport.h>
 #include <Mod/Fem/App/FemGeometry.h>
+#include <Mod/Fem/App/FemTools.h>
 
 using namespace FemGui;
 
@@ -302,6 +306,38 @@ Fem::FemGeometry* AnalysisViewState::findGeometry() const
     return nullptr;
 }
 
+std::size_t AnalysisViewState::importRevision() const
+{
+    std::size_t hash = 0;
+    auto mix = [&hash](std::size_t value) {
+        hash ^= value + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    };
+
+    std::vector<const Fem::FemAnalysisImport*> chain;
+    std::function<void(const Fem::FemAnalysis*)> walk = [&](const Fem::FemAnalysis* analysis) {
+        for (auto* imp : Fem::Tools::analysisImports(analysis)) {
+            if (std::ranges::find(chain, imp) != chain.end()) {
+                continue;
+            }
+            const char* name = imp->getNameInDocument();
+            mix(std::hash<std::string> {}(name ? name : ""));
+            if (auto* geom = imp->sourceGeometry()) {
+                mix(geom->revision());
+            }
+            for (long component : imp->SuppressedComponents.getValues()) {
+                mix(static_cast<std::size_t>(component));
+            }
+            if (auto* src = Base::freecad_cast<Fem::FemAnalysis*>(imp->Analysis.getValue())) {
+                chain.push_back(imp);
+                walk(src);
+                chain.pop_back();
+            }
+        }
+    };
+    walk(m_analysis);
+    return hash;
+}
+
 const Classification* AnalysisViewState::classification(vtkUnstructuredGrid* meshGrid)
 {
     const ColorMode mode = colorMode();
@@ -310,17 +346,47 @@ const Classification* AnalysisViewState::classification(vtkUnstructuredGrid* mes
         m_classificationMode = mode;
     }
 
+    // Categories are keyed by the toplevel element names of the geometry, so a
+    // geometry that gained or lost elements outdates all of them, and an element
+    // with no category falls back to the first one. Checking the revision here
+    // rather than having whoever changed the geometry invalidate keeps the answer
+    // right no matter who asks first: the view panel observes the document before
+    // the view providers do, so invalidating from a view provider would still
+    // hand the panel the previous set.
+    auto* geometry = findGeometry();
+    const std::size_t revision = geometry ? geometry->revision() : 0;
+    if (m_classificationRevision != revision) {
+        m_classifications.clear();
+        m_classificationRevision = revision;
+    }
+
+    // The placed instances contribute categories of their own, so an import
+    // coming, going or changing what it shows outdates them the same way a
+    // change of the native geometry does.
+    const std::size_t importRevision = this->importRevision();
+    if (m_classificationImportRevision != importRevision) {
+        m_classifications.clear();
+        m_classificationImportRevision = importRevision;
+    }
+
     auto& entry = m_classifications[meshGrid];
     if (!entry) {
-        entry = Classification::create(mode, m_analysis, findGeometry(), meshGrid);
+        const auto source = m_meshGrids.find(meshGrid);
+        entry = Classification::create(
+            mode,
+            m_analysis,
+            geometry,
+            meshGrid,
+            source != m_meshGrids.end() ? source->second : GridSource {}
+        );
     }
     return entry.get();
 }
 
-void AnalysisViewState::registerMeshGrid(vtkUnstructuredGrid* meshGrid)
+void AnalysisViewState::registerMeshGrid(vtkUnstructuredGrid* meshGrid, const GridSource& source)
 {
     if (meshGrid) {
-        m_meshGrids.insert(meshGrid);
+        m_meshGrids[meshGrid] = source;
         // Force a fresh classification so entity→toplevel mapping uses current geometry.
         m_classifications.erase(meshGrid);
     }
@@ -352,8 +418,8 @@ std::vector<Category> AnalysisViewState::categories() const
     // Geometry derived categories first so their order stays stable, then
     // whatever the individual meshes add on top.
     collect(self->classification(nullptr));
-    for (auto* grid : m_meshGrids) {
-        collect(self->classification(grid));
+    for (const auto& entry : m_meshGrids) {
+        collect(self->classification(entry.first));
     }
     return result;
 }
@@ -365,16 +431,26 @@ std::string encodeClipPlane(const ClippingPlane& p)
     std::ostringstream os;
     os << p.Origin.x << ' ' << p.Origin.y << ' ' << p.Origin.z << ' ' << p.Direction.x << ' '
        << p.Direction.y << ' ' << p.Direction.z;
+    if (!p.Scope.empty()) {
+        os << ' ' << p.Scope;
+    }
     return os.str();
 }
 
 bool decodeClipPlane(const std::string& s, ClippingPlane& p)
 {
+    p.Scope.clear();
     std::istringstream is(s);
-    return static_cast<bool>(
-        is >> p.Origin.x >> p.Origin.y >> p.Origin.z >> p.Direction.x >> p.Direction.y
-           >> p.Direction.z
-    );
+    if (!(is >> p.Origin.x >> p.Origin.y >> p.Origin.z >> p.Direction.x >> p.Direction.y
+          >> p.Direction.z)) {
+        return false;
+    }
+    std::string rest;
+    std::getline(is >> std::ws, rest);
+    if (!rest.empty()) {
+        p.Scope = rest;
+    }
+    return true;
 }
 }  // namespace
 

@@ -32,6 +32,16 @@ from . import base_fempythonobject
 _PropHelper = base_fempythonobject._PropHelper
 
 
+def _get_features_without_compounds(shape):
+    result = shape.Solids
+    result += shape.getChildShapes("Shell", "Solids")
+    result += shape.getChildShapes("Face", "Shell")
+    result += shape.getChildShapes("Wire", "Face")
+    result += shape.getChildShapes("Edge", "Wire")
+    result += shape.getChildShapes("Vertex", "Edge")
+    return result
+
+
 class GeometryBase(base_fempythonobject.BaseFemPythonObject):
     """The GeometryBase object"""
 
@@ -64,11 +74,6 @@ class GeometryGroup(base_fempythonobject.BaseFemPythonObject):
     def __init__(self, obj):
         super().__init__(obj)
         obj.addExtension("App::GeoFeatureGroupExtensionPython")
-        for prop in self._get_properties():
-            prop.add_to_object(obj)
-
-    def _get_properties(self):
-        return []
 
     def onChanged(self, obj, prop):
         if prop == "Group":
@@ -83,20 +88,7 @@ class GeometryGroup(base_fempythonobject.BaseFemPythonObject):
                 last = child
 
     def execute(self, obj):
-        if obj.Group:
-            obj.Shape = obj.Group[-1].Shape
-        else:
-            obj.Shape = Part.Shape()
-
-
-def _get_features_without_compounds(shape):
-    result = shape.Solids
-    result += shape.getChildShapes("Shell", "Solids")
-    result += shape.getChildShapes("Face", "Shell")
-    result += shape.getChildShapes("Wire", "Face")
-    result += shape.getChildShapes("Edge", "Wire")
-    result += shape.getChildShapes("Vertex", "Edge")
-    return result
+        obj.Shape = obj.Group[-1].Shape if obj.Group else Part.Shape()
 
 
 class GeometryImport(GeometryBase):

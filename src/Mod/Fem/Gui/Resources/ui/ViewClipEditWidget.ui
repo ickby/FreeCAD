@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>330</width>
-    <height>140</height>
+    <height>170</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -180,6 +180,16 @@
       <double>0.100000000000000</double>
      </property>
     </widget>
+   </item>
+   <item row="4" column="0">
+    <widget class="QLabel" name="ScopeLabel">
+     <property name="text">
+      <string>Clips</string>
+     </property>
+    </widget>
+   </item>
+   <item row="4" column="1" colspan="3">
+    <widget class="QComboBox" name="Scope"/>
    </item>
    <item row="3" column="3">
     <widget class="QDoubleSpinBox" name="NormalZ">

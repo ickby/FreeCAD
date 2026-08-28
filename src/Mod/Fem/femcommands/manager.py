@@ -501,3 +501,37 @@ class CommandManager:
 
         FreeCADGui.Selection.clearSelection()
         FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(geometry_obj.Name)")
+
+    def add_analysis_import(self):
+        """
+        Add an analysis import under the Imports group.
+
+        membertools.get_member() does not recurse into the Imports container;
+        later recursive import resolution must look there explicitly.
+        """
+        import FreeCAD
+        import FreeCADGui
+        import ObjectsFem
+        from femtools import importtools
+
+        analysis = FemGui.getActiveAnalysis()
+        selection = FreeCADGui.Selection.getSelection()
+        source = None
+        for obj in selection:
+            if obj.isDerivedFrom("Fem::FemAnalysis") and obj != analysis:
+                source = obj
+                break
+        if source is None:
+            FreeCAD.Console.PrintError(
+                "Select a source Fem analysis in the tree, then run Import Analysis again.\n"
+            )
+            return
+
+        FreeCAD.ActiveDocument.openTransaction("Create Analysis Import")
+
+        import_obj = ObjectsFem.makeAnalysisImport(FreeCAD.ActiveDocument)
+        import_obj.Analysis = source
+        importtools.wire_import(analysis, import_obj)
+
+        FreeCAD.ActiveDocument.commitTransaction()
+        FreeCAD.ActiveDocument.recompute()

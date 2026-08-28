@@ -20,10 +20,6 @@
  *                                                                         *
  ***************************************************************************/
 
-#include <cstring>
-
-#include <App/Document.h>
-#include <Base/Tools.h>
 #include <Gui/Application.h>
 #include <Gui/Document.h>
 #include <Gui/ViewProviderDocumentObject.h>
@@ -32,7 +28,6 @@
 
 #include "ViewProviderFemMeshGroup.h"
 #include "ViewProviderFemMeshShapePreprocess.h"
-
 
 using namespace FemGui;
 
@@ -50,30 +45,19 @@ ViewProviderFemMeshGroup::~ViewProviderFemMeshGroup()
 
 void ViewProviderFemMeshGroup::attach(App::DocumentObject* pcObject)
 {
-    // Thin: inherit group attach only — no mesh scene graph content.
     Gui::ViewProviderDocumentObjectGroup::attach(pcObject);
     connectViewState();
     updateStageVisibility();
 }
 
-std::vector<std::string> ViewProviderFemMeshGroup::getDisplayModes() const
-{
-    // No render modes; children own display.
-    return {};
-}
-
-void ViewProviderFemMeshGroup::setDisplayMode(const char* ModeName)
-{
-    (void)ModeName;
-}
-
 void ViewProviderFemMeshGroup::updateData(const App::Property* prop)
 {
     Gui::ViewProviderDocumentObjectGroup::updateData(prop);
-    // Attach often runs before the group is added to an analysis, so reconnect
-    // whenever data changes (e.g. after Analysis.addObject / Group updates).
     connectViewState();
-    if (prop && prop->getName() && strcmp(prop->getName(), "Group") == 0) {
+    if (!prop || !prop->getName()) {
+        return;
+    }
+    if (strcmp(prop->getName(), "Group") == 0) {
         updateStageVisibility();
         syncChildViewStates();
     }
@@ -111,7 +95,6 @@ void ViewProviderFemMeshGroup::connectViewState()
     if (!state) {
         return;
     }
-    // Already bound to this analysis's state.
     if (m_viewStateConn.connected()) {
         return;
     }
@@ -143,8 +126,6 @@ void ViewProviderFemMeshGroup::syncChildViewStates()
         }
         auto* vp = Base::freecad_cast<ViewProviderFemMeshShapePreprocess*>(doc->getViewProvider(child));
         if (vp) {
-            // Joining the group is what makes preprocessActive() true, and the
-            // child gets no property change of its own for that.
             vp->syncRepresentation();
         }
     }
@@ -159,23 +140,14 @@ void ViewProviderFemMeshGroup::updateStageVisibility()
         }
     }
 
-    // Never force children Visibility=false for Geometry stage. DocumentObjectGroup
-    // can mirror “all children hidden” onto this group's Visibility, which then
-    // permanently blocks Mesh stage (showMeshes stayed false until the user
-    // manually unhid the group). Child preprocess VPs hide via display masks.
     if (!meshStage) {
         return;
     }
 
-    // Children keep their own visibility, a mesh the user hid stays hidden over
-    // stage switches. Only the group is put back, it draws nothing itself but a
-    // hidden group blocks the stage.
     if (!Visibility.getValue()) {
         Visibility.setValue(true);
     }
 }
-
-// Python feature ---------------------------------------------------------
 
 namespace Gui
 {

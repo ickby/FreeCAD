@@ -163,7 +163,55 @@ def is_same_geometry(shape1, shape2):
 
 
 # ************************************************************************************************
+def get_element_shape(part, element):
+    """
+    The shape *element* is numbered in, or None.
+
+    An element of an imported analysis is numbered in the shape of the analysis
+    it came from, which the path in front of its name leads to; an import
+    carries no shape of its own. Use this wherever a bare element name has to
+    be turned into an index, e.g. to find which solid a face belongs to.
+
+    The shape comes placed the way get_element() places the element, so the two
+    can be compared. A placement moves a shape without renumbering it, so the
+    indices are the same either way.
+    """
+    from . import femutils
+
+    owner = part
+    matrix = None
+    head = element.rpartition(".")[0] if element else ""
+    if head and hasattr(part, "getSubObject"):
+        owner = part.getSubObject(f"{head}.", 1) or part
+        matrix = part.getSubObject(f"{head}.", 4)
+
+    if not owner.isDerivedFrom("Fem::FemAnalysisImport"):
+        return getattr(owner, "Shape", None)
+
+    geom = femutils.get_reference_geometry(owner.Analysis)
+    if geom is None or geom.Shape.isNull():
+        return None
+    if matrix is None:
+        matrix = part.Placement.toMatrix()
+    return geom.Shape.transformed(matrix)
+
+
+# ************************************************************************************************
 def get_element(part, element):
+    if hasattr(part, "getSubObject"):
+        sub = part.getSubObject(element)
+        if sub is not None:
+            if hasattr(sub, "ShapeType"):
+                return sub
+            if hasattr(sub, "Shape") and not sub.Shape.isNull():
+                return sub.Shape
+
+    if not hasattr(part, "Shape"):
+        FreeCAD.Console.PrintError(
+            f"Cannot resolve element {element!r} on {part.Name}: no Shape property\n"
+        )
+        return None
+
     if element.startswith("Solid"):
         index = int(element.lstrip("Solid")) - 1
         if index >= len(part.Shape.Solids):

@@ -135,6 +135,16 @@ public:
     }
     void setWidgetVisible(bool on);
 
+    /**
+     * What the plane cuts: the whole analysis for an empty scope, otherwise
+     * the instance at that path and everything inside it.
+     */
+    const std::string& scope() const
+    {
+        return m_scope;
+    }
+    void setScope(const std::string& scope);
+
     Base::Vector3d origin() const;
 
     /** Plane normal, pointing at the half of the model that is kept. */
@@ -173,6 +183,7 @@ private:
 
     App::DocumentObjectWeakPtrT m_analysis;
     std::string m_name;
+    std::string m_scope;
     bool m_active {false};
     bool m_widgetVisible {true};
     bool m_removed {false};

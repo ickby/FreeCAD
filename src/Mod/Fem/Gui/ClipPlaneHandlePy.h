@@ -56,6 +56,8 @@ public:
     Py::Object setActive(const Py::Tuple&);
     Py::Object isWidgetVisible(const Py::Tuple&);
     Py::Object setWidgetVisible(const Py::Tuple&);
+    Py::Object getScope(const Py::Tuple&);
+    Py::Object setScope(const Py::Tuple&);
     Py::Object getOrigin(const Py::Tuple&);
     Py::Object getNormal(const Py::Tuple&);
     Py::Object setPlane(const Py::Tuple&);

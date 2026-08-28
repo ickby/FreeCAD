@@ -130,6 +130,12 @@ def solid_name_from_index(solid_index: int) -> str:
     return f"Solid{solid_index+1}"
 
 
+def can_highlight(parent_part: "PartFeature") -> bool:
+    """Whether the object can be coloured face by face to mark a solid."""
+    view = getattr(parent_part, "ViewObject", None)
+    return view is not None and hasattr(view, "DiffuseColor")
+
+
 def disambiguate_solid_selection(
     parent_part: "PartFeature", solid_indices: List[int]
 ) -> Optional[str]:
@@ -147,6 +153,12 @@ def disambiguate_solid_selection(
 
     for index in solid_indices:
         menu_of_solids.addAction(solid_name_from_index(index))
+
+    # An analysis import draws the geometry it places itself and offers no
+    # per-face colours, so there the menu is all there is to go by.
+    if not can_highlight(parent_part):
+        selected_action = menu_of_solids.exec_(QtGui.QCursor.pos())
+        return selected_action.text() if selected_action is not None else None
 
     # Configure highlighting callbacks
     last_action: list[QtGui.QAction] = []

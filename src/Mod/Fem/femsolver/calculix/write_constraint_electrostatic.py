@@ -27,6 +27,8 @@ __url__ = "https://www.freecad.org"
 
 import FreeCAD
 
+from femtools import geomtools
+
 
 def get_analysis_types():
     return ["electromagnetic"]
@@ -101,15 +103,18 @@ def _check_shared_interface(pot_obj):
     for o, sub in pot_obj.References:
         for elem in sub:
             found = []
-            elem_i = o.getSubObject(elem)
+            elem_i = geomtools.get_element(o, elem)
+            owner_shape = geomtools.get_element_shape(o, elem)
+            if elem_i is None or owner_shape is None:
+                continue
             if elem_i.ShapeType == "Face":
-                for s in o.Shape.Solids:
+                for s in owner_shape.Solids:
                     found.append(any([q.isSame(elem_i) for q in s.Faces]))
                 if sum(found) > 1:
                     internal.append((o, (elem,)))
 
             if elem_i.ShapeType == "Edge":
-                for s in o.Shape.Faces:
+                for s in owner_shape.Faces:
                     found.append(any([q.isSame(elem_i) for q in s.Edges]))
                 if sum(found) > 1:
                     internal.append((o, (elem,)))

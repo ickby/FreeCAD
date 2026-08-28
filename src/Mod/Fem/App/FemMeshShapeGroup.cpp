@@ -140,16 +140,19 @@ void FemMeshShapeGroup::invalidateMergedCache()
 void FemMeshShapeGroup::reconnectChildSignals()
 {
     m_childConns.clear();
-    for (auto* obj : Group.getValues()) {
-        if (!obj || !obj->isAttachedToDocument()) {
-            continue;
-        }
-        m_childConns[obj] = obj->signalChanged.connect(
-            [this](const App::DocumentObject& o, const App::Property& p) {
-                this->slotChildChanged(o, p);
+    auto connect = [this](const std::vector<App::DocumentObject*>& objects) {
+        for (auto* obj : objects) {
+            if (!obj || !obj->isAttachedToDocument()) {
+                continue;
             }
-        );
-    }
+            m_childConns[obj] = obj->signalChanged.connect(
+                [this](const App::DocumentObject& o, const App::Property& p) {
+                    this->slotChildChanged(o, p);
+                }
+            );
+        }
+    };
+    connect(Group.getValues());
 }
 
 void FemMeshShapeGroup::slotChildChanged(const App::DocumentObject& obj, const App::Property& prop)
@@ -177,6 +180,16 @@ void FemMeshShapeGroup::onChanged(const App::Property* prop)
         }
     }
     FemMeshShapeBaseObject::onChanged(prop);
+}
+
+void FemMeshShapeGroup::onDocumentRestored()
+{
+    // Anything that read the merge while the document was still coming off disk
+    // got whatever the children held at that moment, which for a mesh read from
+    // its own file in the archive is nothing. Restoring the children raises no
+    // property change, so this is the only point at which that can be undone.
+    invalidateMergedCache();
+    FemMeshShapeBaseObject::onDocumentRestored();
 }
 
 namespace
@@ -255,8 +268,10 @@ FemMeshShapeGroup::ComponentClaims FemMeshShapeGroup::collectComponentClaims() c
 
 std::map<int, App::DocumentObject*> FemMeshShapeGroup::getComponentOwners() const
 {
+    const ComponentClaims claims = collectComponentClaims();
+
     std::map<int, App::DocumentObject*> owners;
-    for (const auto& [idx, mesh] : collectComponentClaims().owner) {
+    for (const auto& [idx, mesh] : claims.owner) {
         owners[idx] = const_cast<FemMeshShapeBaseObject*>(mesh);
     }
     return owners;
@@ -405,6 +420,12 @@ std::string FemMeshShapeGroup::validateComponents(bool* hasOverlap) const
 
 App::DocumentObjectExecReturn* FemMeshShapeGroup::execute()
 {
+    // An import pulls its mesh straight out of the source analysis mesh group,
+    // so a change there reaches us as a recompute and not as a property change
+    // on the import. Drop the cache here to cover that; the rebuild itself
+    // still only happens when someone reads the merged mesh.
+    invalidateMergedCache();
+
     // Validation only — merge happens lazily in getMergedMesh().
     bool overlap = false;
     const std::string msg = validateComponents(&overlap);
@@ -469,6 +490,7 @@ void FemMeshShapeGroup::rebuildMergedMesh()
         FemMesh.setValue(merged);
         CellSources.setValues(sources);
     }
+    ++m_mergeRevision;
     m_mergedValid = true;
     m_merging = false;
 }

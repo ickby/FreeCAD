@@ -259,6 +259,7 @@ int dimensionOfShapeType(TopAbs_ShapeEnum type)
 
 void FemGeometry::build_components()
 {
+    ++m_revision;
     m_components_cache.clear();
     m_geometric_dimension.clear();
     m_entity_owners.clear();

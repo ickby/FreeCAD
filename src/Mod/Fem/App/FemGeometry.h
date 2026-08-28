@@ -81,6 +81,18 @@ public:
      */
     std::vector<Part::TopoShape> getSubShapes(std::string subname) const;
 
+    /**
+     * Counter bumped every time the component cache is rebuilt.
+     *
+     * Lets a consumer that derives data from the element names of this geometry
+     * tell that its own cache went stale. Reading this is O(1), where comparing
+     * the toplevel names would cost about as much as rebuilding.
+     */
+    std::size_t revision() const
+    {
+        return m_revision;
+    }
+
     std::vector<std::vector<Part::TopoShape>> getComponents() const;
     std::vector<Part::TopoShape> getComponent(componentIdType) const;
     std::vector<std::string> getToplevelElements(componentIdType component_idx) const;
@@ -123,6 +135,7 @@ private:
     void build_components();
     void rebuildDimensionCache();
 
+    std::size_t m_revision {0};
     std::vector<std::vector<Part::TopoShape>> m_components_cache;
     std::map<std::string, int> m_geometric_dimension;           ///< toplevel -> dim
     std::map<std::string, std::vector<std::string>> m_entity_owners;  ///< entity -> owners

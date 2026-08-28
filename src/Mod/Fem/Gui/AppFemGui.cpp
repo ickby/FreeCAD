@@ -41,6 +41,7 @@
 #include "ViewProviderFemMesh.h"
 #include "ViewProviderFemMeshShape.h"
 #include "ViewProviderFemMeshShapeNetgen.h"
+#include "ViewProviderFemAnalysisImport.h"
 #include "ViewProviderFemMeshGroup.h"
 #include "ViewProviderSetElements.h"
 #include "ViewProviderSetElementNodes.h"
@@ -148,6 +149,7 @@ PyMOD_INIT_FUNC(FemGui)
     FemGui::ViewProviderFemMeshShapeNetgen                      ::init();
     FemGui::ViewProviderFemMeshGroup                            ::init();
     FemGui::ViewProviderFemMeshGroupPython                      ::init();
+    FemGui::ViewProviderFemAnalysisImport                       ::init();
     FemGui::PropertyFemMeshItem                                 ::init();
 
     FemGui::ViewProviderSetElements                             ::init();

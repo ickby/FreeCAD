@@ -153,8 +153,11 @@ public:
      * Mesh view providers announce their grid here so that consumers without a
      * grid of their own -- the view panel tree -- can still see mesh derived
      * categories such as the cell types present in the analysis.
+     *
+     * @param source Where the element names of the grid come from; an instance
+     *               has to say so or its elements pass for native ones.
      */
-    void registerMeshGrid(vtkUnstructuredGrid* meshGrid);
+    void registerMeshGrid(vtkUnstructuredGrid* meshGrid, const GridSource& source = {});
     void unregisterMeshGrid(vtkUnstructuredGrid* meshGrid);
 
     /**
@@ -191,6 +194,8 @@ public:
 private:
     void notifyChanged();
     Fem::FemGeometry* findGeometry() const;
+    /// Cheap fingerprint of what the placed instances contribute, see classification().
+    std::size_t importRevision() const;
     /// Mirror the persistable subset onto the analysis view provider.
     void persist() const;
 
@@ -212,7 +217,11 @@ private:
     /// One classification per mesh grid; the null key serves grid-less callers.
     mutable std::map<vtkUnstructuredGrid*, std::unique_ptr<Classification>> m_classifications;
     mutable ColorMode m_classificationMode {ColorMode::Subelement};
-    std::set<vtkUnstructuredGrid*> m_meshGrids;
+    /// Geometry revision the cached classifications were built from
+    mutable std::size_t m_classificationRevision {0};
+    /// Import fingerprint the cached classifications were built from
+    mutable std::size_t m_classificationImportRevision {0};
+    std::map<vtkUnstructuredGrid*, GridSource> m_meshGrids;
 
     boost::signals2::signal<void()> m_changed;
 

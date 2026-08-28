@@ -30,6 +30,7 @@
 
 
 #include <App/Document.h>
+#include <App/PropertyLinks.h>
 #include <Gui/Application.h>
 #include <Gui/BitmapFactory.h>
 #include <Gui/Command.h>
@@ -37,6 +38,7 @@
 #include <Gui/Selection/Selection.h>
 #include <Gui/Tools.h>
 #include <Gui/ViewProvider.h>
+#include <Mod/Fem/App/FemAnalysisImport.h>
 #include <Mod/Fem/App/FemConstraint.h>
 #include <Mod/Fem/App/FemGeometry.h>
 #include <Mod/Fem/App/FemTools.h>
@@ -121,6 +123,10 @@ bool TaskFemConstraint::checkReference(const App::DocumentObject* obj)
             return true;
         }
 
+        if (obj->isDerivedFrom<Fem::FemAnalysisImport>()) {
+            return true;
+        }
+
         QMessageBox::warning(
             this,
             tr("Selection Error"),
@@ -136,6 +142,11 @@ bool TaskFemConstraint::checkReference(const App::DocumentObject* obj)
     }
 
     return true;
+}
+
+void TaskFemConstraint::normalizeReference(App::DocumentObject*& /*obj*/, std::string& /*subName*/) const
+{
+    // References are stored on the import object with dotted paths; no flattening.
 }
 
 const std::string TaskFemConstraint::getScale() const
@@ -204,6 +215,8 @@ const QString TaskFemConstraint::makeRefText(
     const std::string& subName
 ) const
 {
+    // getReferences() and setSelection() parse this text back into an object,
+    // so it has to stay the internal name and not become the label.
     return QString::fromUtf8((std::string(obj->getNameInDocument()) + ":" + subName).c_str());
 }
 

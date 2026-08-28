@@ -23,7 +23,9 @@
 #include "PreCompiled.h"
 
 #ifndef _PreComp_
+# include <numeric>
 # include <sstream>
+# include <unordered_map>
 # include <TopExp_Explorer.hxx>
 # include <TopoDS.hxx>
 # include <TopoDS_Shape.hxx>
@@ -183,10 +185,56 @@ App::DocumentObject* FemGeometry::getSubObject(
 
 namespace
 {
-struct Component
+/// Union-find over the free candidates of a shape, joined by the vertices they share.
+class ComponentUnion
 {
-    std::set<std::size_t> vertices;
-    std::vector<Part::TopoShape> shapes;
+public:
+    explicit ComponentUnion(std::size_t count)
+        : m_parent(count)
+    {
+        std::iota(m_parent.begin(), m_parent.end(), 0);
+    }
+
+    /// Put the candidates that share vertex @a hash in the same component.
+    void shareVertex(std::size_t hash, std::size_t candidate)
+    {
+        auto [it, inserted] = m_owner.try_emplace(hash, candidate);
+        if (!inserted) {
+            join(candidate, it->second);
+        }
+    }
+
+    /// The component a candidate ended up in, numbered in candidate order.
+    std::size_t componentOf(std::size_t candidate)
+    {
+        auto [it, inserted] = m_number.try_emplace(root(candidate), m_number.size());
+        return it->second;
+    }
+
+private:
+    std::size_t root(std::size_t candidate)
+    {
+        while (m_parent[candidate] != candidate) {
+            m_parent[candidate] = m_parent[m_parent[candidate]];
+            candidate = m_parent[candidate];
+        }
+        return candidate;
+    }
+
+    void join(std::size_t first, std::size_t second)
+    {
+        first = root(first);
+        second = root(second);
+        if (first != second) {
+            // The smaller index stays the root, which keeps the components
+            // numbered in the order their first candidate appears.
+            m_parent[std::max(first, second)] = std::min(first, second);
+        }
+    }
+
+    std::vector<std::size_t> m_parent;
+    std::unordered_map<std::size_t, std::size_t> m_owner;
+    std::unordered_map<std::size_t, std::size_t> m_number;
 };
 
 int dimensionOfShapeType(TopAbs_ShapeEnum type)
@@ -249,42 +297,25 @@ void FemGeometry::build_components()
         free_candidate.push_back(explorer.Current());
     }
 
-    std::vector<Component> components;
+    // A candidate can bridge candidates that were seen apart from each other, so
+    // the components they were put in have to be joined when the bridge shows
+    // up. Handing the bridge to the first component it touches would report two
+    // components for geometry that shares topology and is therefore one.
+    ComponentUnion candidate_union(free_candidate.size());
     Part::ShapeMapHasher hasher;
-    for (auto& candidate : free_candidate) {
-        int component_idx = -1;
-        explorer.Init(candidate, TopAbs_VERTEX, TopAbs_SHAPE);
-        std::set<std::size_t> candidate_vertices_indices;
+    for (std::size_t i = 0; i < free_candidate.size(); ++i) {
+        explorer.Init(free_candidate[i], TopAbs_VERTEX, TopAbs_SHAPE);
         for (; explorer.More(); explorer.Next()) {
-            auto hash = hasher(explorer.Current());
-            if (component_idx < 0) {
-                for (std::size_t i = 0; i < components.size(); ++i) {
-                    if (components[i].vertices.contains(hash)) {
-                        component_idx = static_cast<int>(i);
-                        break;
-                    }
-                }
-            }
-            candidate_vertices_indices.insert(hash);
-        }
-
-        if (component_idx < 0) {
-            components.push_back(
-                Component {candidate_vertices_indices, std::vector<Part::TopoShape> {candidate}}
-            );
-        }
-        else {
-            auto& comp = components[static_cast<std::size_t>(component_idx)];
-            comp.vertices.insert(
-                candidate_vertices_indices.begin(),
-                candidate_vertices_indices.end()
-            );
-            comp.shapes.push_back(candidate);
+            candidate_union.shareVertex(hasher(explorer.Current()), i);
         }
     }
 
-    for (auto& component : components) {
-        m_components_cache.push_back(component.shapes);
+    for (std::size_t i = 0; i < free_candidate.size(); ++i) {
+        auto component_idx = candidate_union.componentOf(i);
+        if (component_idx >= m_components_cache.size()) {
+            m_components_cache.emplace_back();
+        }
+        m_components_cache[component_idx].emplace_back(free_candidate[i]);
     }
 
     rebuildDimensionCache();

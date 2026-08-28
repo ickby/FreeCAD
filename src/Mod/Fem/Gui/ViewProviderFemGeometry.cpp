@@ -20,7 +20,6 @@
 #ifndef _PreComp_
 # include <algorithm>
 # include <cctype>
-# include <random>
 # include <vector>
 
 # include <QIcon>
@@ -115,14 +114,6 @@ bool isVolumeElementName(const std::string& element)
     return kind == "Solid" || kind == "Shell" || kind == "CompSolid" || kind == "Compound";
 }
 
-Base::Color randomColor()
-{
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    static std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    return Base::Color(dist(gen), dist(gen), dist(gen));
-}
-
 /**
  * Document-wide selection observer (Path-style).
  * Avoid SelectionObserver MI on the FeaturePython view provider.
@@ -190,9 +181,6 @@ public:
 ViewProviderFemGeometry::ViewProviderFemGeometry()
 {
     FemGeometrySelectionObserver::init();
-
-    ADD_PROPERTY_TYPE(Colors, (), "Base", App::Prop_None, "Colors for the toplevel elements");
-    Colors.setValues(FemMeshRenderer::distinctColors());
 
     m_visdata = vtkSmartPointer<vtkPolyData>::New();
     m_shape = new IVtkOCC_Shape(TopoDS_Shape());
@@ -1430,10 +1418,7 @@ void ViewProviderFemGeometry::finishRestoring()
 
 void ViewProviderFemGeometry::onChanged(const App::Property* prop)
 {
-    if (prop == &Colors) {
-        updateColors();
-    }
-    else if (prop == &DisplayMode) {
+    if (prop == &DisplayMode) {
         update3D();
     }
 
@@ -1755,30 +1740,20 @@ void ViewProviderFemGeometry::updateColors()
         return;
     }
 
-    // Fallback: legacy per-toplevel Colors property
+    // No colour mode, or the colour mode has nothing to say: paint from the
+    // live palette in the same order as the classification would, so a later
+    // palette setting recolouring reaches this path too. Nothing is stored.
     std::vector<std::string> names;
     auto components = geom_obj->getComponents();
     for (auto& component : components) {
         auto comp_names = geom_obj->getToplevelElements(component);
         names.insert(names.end(), comp_names.begin(), comp_names.end());
     }
-
-    auto colors = Colors.getValues();
-    if (names.size() < colors.size()) {
-        colors.resize(names.size());
-        Colors.setValues(colors);
-    }
-    else if (names.size() > colors.size()) {
-        colors.reserve(names.size());
-        while (colors.size() < names.size()) {
-            colors.push_back(randomColor());
-        }
-        Colors.setValues(colors);
-    }
+    std::sort(names.begin(), names.end());
 
     std::map<std::string, Base::Color> element_color;
     for (size_t i = 0; i < names.size(); i++) {
-        element_color[names[i]] = Colors[static_cast<int>(i)];
+        element_color[names[i]] = Classification::colorForIndex(static_cast<int>(i));
     }
 
     m_facematerial->diffuseColor.startEditing();
@@ -1788,7 +1763,7 @@ void ViewProviderFemGeometry::updateColors()
         // Never index the maps with operator[]: an id without a toplevel name
         // would insert a default-constructed (black) colour and paint that part
         // black instead of leaving it in its component colour.
-        Base::Color face_color = colors.empty() ? randomColor() : colors.front();
+        Base::Color face_color = Classification::colorForIndex(0);
         auto owner = idElementForColor(vtkid);
         if (!owner.empty()) {
             auto color_it = element_color.find(owner);

@@ -110,6 +110,21 @@ class _GeometryImport(CommandManager):
         self.do_activated = "add_geometry_set_edit"
 
 
+class _GeometryPartition(CommandManager):
+    "The FEM_GeometryPartition command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.pixmap = "FEM_GeometryPartition"
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_GeometryPartition", "Partition Geometry")
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_GeometryPartition",
+            "Partitions geometry with a plane, extended face or edge split",
+        )
+        self.is_active = "with_geometry_chain_input"
+        self.do_activated = "add_geometry_set_edit"
+
+
 class _ClippingPlaneAdd(CommandManager):
     "The FEM_ClippingPlaneAdd command definition"
 
@@ -1470,6 +1485,7 @@ class _CompSolvers(CommandManager):
 # the string in add command will be the page name on FreeCAD wiki
 FreeCADGui.addCommand("FEM_Analysis", _Analysis())
 FreeCADGui.addCommand("FEM_GeometryImport", _GeometryImport())
+FreeCADGui.addCommand("FEM_GeometryPartition", _GeometryPartition())
 FreeCADGui.addCommand("FEM_ClippingPlaneAdd", _ClippingPlaneAdd())
 FreeCADGui.addCommand("FEM_ClippingPlaneRemoveAll", _ClippingPlaneRemoveAll())
 FreeCADGui.addCommand("FEM_ConstantVacuumPermittivity", _ConstantVacuumPermittivity())

@@ -225,6 +225,7 @@ SET(FemObjects_SRCS
     femobjects/material_mechanicalnonlinear.py
     femobjects/material_reinforced.py
     femobjects/geometry_base.py
+    femobjects/geometry_partition.py
     femobjects/mesh_boundarylayer.py
     femobjects/mesh_gmsh.py
     femobjects/mesh_group.py
@@ -716,6 +717,7 @@ SET(FemGuiTaskPanels_SRCS
     femtaskpanels/task_element_geometry2D.py
     femtaskpanels/task_element_rotation1D.py
     femtaskpanels/task_geometry.py
+    femtaskpanels/task_geometry_partition.py
     femtaskpanels/task_material_common.py
     femtaskpanels/task_material_reinforced.py
     femtaskpanels/task_mesh_boundarylayer.py
@@ -749,6 +751,8 @@ endif(BUILD_FEM_VTK_PYTHON)
 
 SET(FemGuiTests_SRCS
     femtest/gui/__init__.py
+    femtest/gui/test_geometry_marks.py
+    femtest/gui/test_geometry_partition.py
     femtest/gui/test_open.py
 )
 

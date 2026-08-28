@@ -118,7 +118,8 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
 
     Gui::ToolBarItem* geometry = new Gui::ToolBarItem(root);
     geometry->setCommand("Geometry preprocessing");
-    *geometry << "FEM_GeometryImport";
+    *geometry << "FEM_GeometryImport"
+              << "FEM_GeometryPartition";
 
     Gui::ToolBarItem* electromag = new Gui::ToolBarItem(root);
     electromag->setCommand("Electromagnetic Boundary Conditions");
@@ -245,7 +246,8 @@ Gui::MenuItem* Workbench::setupMenuBar() const
 
     Gui::MenuItem* geomprep = new Gui::MenuItem;
     geomprep->setCommand("&Geometry preprocessing");
-    *geomprep << "FEM_GeometryImport";
+    *geomprep << "FEM_GeometryImport"
+              << "FEM_GeometryPartition";
 
     Gui::MenuItem* elec = new Gui::MenuItem;
     elec->setCommand("&Electromagnetic Boundary Conditions");

@@ -80,6 +80,30 @@ def _vp_object(viewprovider):
         return None
 
 
+def _chain_preview_input(viewprovider):
+    """
+    Shape that an edited geometry chain step is picked on, or None for any other
+    editor.
+
+    A step builds on its input and holds references into it, so that is the
+    shape drawn in its place while the step is open — and the one the panel has
+    to describe, down to which parts are on screen.
+    """
+    obj = _vp_object(viewprovider)
+    if obj is None:
+        return None
+    try:
+        base = getattr(obj, "Base", None)
+        if base is None:
+            return None
+        view = base.ViewObject
+        if view is None or not hasattr(view, "isChainPreview"):
+            return None
+        return base if view.isChainPreview() else None
+    except (AttributeError, ReferenceError, RuntimeError):
+        return None
+
+
 def _app_document_object(arg):
     """
     Return arg if it is an App DocumentObject. Never touches ViewProvider.Object.
@@ -109,6 +133,12 @@ class _GuiDocObserver:
 
     def slotDeletedObject(self, viewprovider):
         self.owner._gui_deleted_object(viewprovider)
+
+    def slotInEdit(self, viewprovider):
+        self.owner.slotInEdit(viewprovider)
+
+    def slotResetEdit(self, viewprovider):
+        self.owner.slotResetEdit(viewprovider)
 
 
 class _AppDocObserver:
@@ -275,15 +305,23 @@ class GeometryModel(QAbstractItemModel):
         self.root = None
         self.geom_obj = None
         self.view_state = None
+        self.geometry_only = False
 
-    def set_context(self, geom_obj, view_state):
+    def set_context(self, geom_obj, view_state, geometry_only=False):
+        """
+        Describe geom_obj. With geometry_only the colour modes that group by
+        category are passed over: their categories are keyed by the elements of
+        the analysis geometry, which say nothing about a chain step's input.
+        """
         self.geom_obj = geom_obj
         self.view_state = view_state
+        self.geometry_only = geometry_only
         self.update_model()
 
     def clear(self):
         self.geom_obj = None
         self.view_state = None
+        self.geometry_only = False
         self.update_model()
 
     def _attach_state(self, node):
@@ -299,7 +337,7 @@ class GeometryModel(QAbstractItemModel):
         color_mode = self.view_state.getColorMode()
         under = set(self.view_state.getUnderAchievedElements() or [])
 
-        if color_mode in ("Material", "CellType"):
+        if color_mode in ("Material", "CellType") and not self.geometry_only:
             self.root = self._build_category_tree(color_mode, under)
         else:
             self.root = self._build_geometry_tree(under)
@@ -559,6 +597,9 @@ class GeometryExplorer(QtGui.QTreeView):
         self.view_state = None
         self._vs_callback = None
         self._suspend_vs_rebuild = False
+        self.edit_obj = None
+        self._edit_step = None
+        self._pre_edit_hidden = None
 
         size_policy = QtGui.QSizePolicy(
             QtGui.QSizePolicy.Policy.Expanding, QtGui.QSizePolicy.Policy.Expanding
@@ -664,6 +705,16 @@ class GeometryExplorer(QtGui.QTreeView):
         self.active_analysis = None
         self.setup_analysis()
 
+    def _forget_edit_session(self):
+        """
+        Give up on an edit session, gone analysis or gone input: there is
+        nothing left to describe, and no view state to hand the hidden elements
+        back to.
+        """
+        self._edit_step = None
+        self.edit_obj = None
+        self._pre_edit_hidden = None
+
     def setup_analysis(self):
         self._model.beginResetModel()
         self.view_state = None
@@ -673,8 +724,11 @@ class GeometryExplorer(QtGui.QTreeView):
             self.view_state = FemGui.getAnalysisViewState(self.active_analysis)
             geom_list = mt.get_member(self.active_analysis, "Fem::FemGeometry")
             self.geom_obj = geom_list[0] if geom_list else None
-            self._model.set_context(self.geom_obj, self.view_state)
+            self._model.set_context(
+                self._tree_object(), self.view_state, geometry_only=self.edit_obj is not None
+            )
         else:
+            self._forget_edit_session()
             self._model.clear()
 
         self._connect_view_state()
@@ -686,6 +740,7 @@ class GeometryExplorer(QtGui.QTreeView):
     def slotActiveFemAnalysisUpdated(self, analysis):
         if analysis != self.active_analysis:
             self.active_analysis = analysis
+            self._forget_edit_session()
             self.setup_analysis()
 
     def _gui_deleted_document(self, guidoc):
@@ -728,10 +783,52 @@ class GeometryExplorer(QtGui.QTreeView):
             return
 
     def slotInEdit(self, viewprovider):
-        pass
+        """
+        Follow an edited chain step onto its input geometry.
+
+        The tree then lists what the 3D view draws, so hiding a part clears the
+        way to the one behind it and clicking a row selects on the object the
+        step's panel is waiting to hear about.
+        """
+        base = _chain_preview_input(viewprovider)
+        if base is None or self._edit_step is not None:
+            return
+        if base not in self._geometry_chain():
+            return
+
+        self._edit_step = _vp_object(viewprovider)
+        self.edit_obj = base
+        # Parts switched off to reach a reference are scratch: the result view
+        # numbers its elements differently and must not inherit them.
+        if self.view_state:
+            self._pre_edit_hidden = list(self.view_state.getHiddenElements() or [])
+        self.setup_analysis()
 
     def slotResetEdit(self, viewprovider):
-        pass
+        if self._edit_step is None or _vp_object(viewprovider) != self._edit_step:
+            return
+
+        self._edit_step = None
+        self.edit_obj = None
+        hidden = self._pre_edit_hidden
+        self._pre_edit_hidden = None
+        if self.view_state and hidden is not None:
+            self.view_state.setHiddenElements(hidden)
+        self.setup_analysis()
+
+    def _tree_object(self):
+        """
+        Geometry the tree describes: the input of an edited chain step, or the
+        chain result when nothing is being edited.
+        """
+        if self.edit_obj is not None:
+            try:
+                if self.edit_obj.Name and self.edit_obj in self._geometry_chain():
+                    return self.edit_obj
+            except (AttributeError, ReferenceError, RuntimeError):
+                pass
+            self._forget_edit_session()
+        return self.geom_obj
 
     def _geometry_chain(self):
         """
@@ -752,11 +849,12 @@ class GeometryExplorer(QtGui.QTreeView):
 
     def _selection_target(self):
         """
-        Object to select on: the geometry group, whose view provider draws the
-        shape the tree describes. Picking in the 3D view reports the same
-        object, so both directions produce identical selection entries.
+        Object to select on: whichever geometry draws the shape the tree
+        describes — the group normally, the edited step's input while one is
+        open. Picking in the 3D view reports the same object, so both directions
+        produce identical selection entries.
         """
-        return self.geom_obj
+        return self._tree_object()
 
     def _element_from_selection(self, doc, obj, sub):
         """
@@ -1169,6 +1267,8 @@ class ViewSettings(QtGui.QWidget):
         self._vs_callback = None
         self._updating = False
         self._clip_key = None
+        self._edit_step = None
+        self._edit_stage = None
         self.setup_analysis()
 
         self.widget.GeometryButton.clicked.connect(self.geometry_button_checked)
@@ -1237,6 +1337,10 @@ class ViewSettings(QtGui.QWidget):
             if self.geom_obj and self.view_state and self.view_state.getActiveStage() != "Geometry":
                 if not self.mesh_obj:
                     self.view_state.setActiveStage("Geometry")
+        else:
+            # No analysis left to put the stage back on.
+            self._edit_step = None
+            self._edit_stage = None
 
         self._connect_view_state()
 
@@ -1256,8 +1360,9 @@ class ViewSettings(QtGui.QWidget):
         self._updating = True
         try:
             has_vs = self.view_state is not None
+            editing = self._edit_step is not None
             self.widget.GeometryButton.setEnabled(has_vs and self.geom_obj is not None)
-            self.widget.MeshButton.setEnabled(has_vs and self.mesh_obj is not None)
+            self.widget.MeshButton.setEnabled(has_vs and self.mesh_obj is not None and not editing)
             self.widget.ClipButton.setEnabled(has_vs)
             self.color_mode.setEnabled(has_vs)
             self.widget.Dimension.setEnabled(has_vs)
@@ -1292,6 +1397,9 @@ class ViewSettings(QtGui.QWidget):
 
     def slotActiveFemAnalysisUpdated(self, analysis):
         if analysis != self.active_analysis:
+            # The stage to go back to belonged to the analysis being left.
+            self._edit_step = None
+            self._edit_stage = None
             self.active_analysis = analysis
             self.setup_analysis()
 
@@ -1347,10 +1455,31 @@ class ViewSettings(QtGui.QWidget):
             self.setup_analysis()
 
     def slotInEdit(self, viewprovider):
-        pass
+        """
+        Put the view into the geometry stage for as long as a chain step is
+        edited. The step is picked on geometry, and a mesh drawn over it only
+        gets in the way, so the stage stays where it is put.
+        """
+        if self._edit_step is not None or not self.view_state:
+            return
+        if _chain_preview_input(viewprovider) is None:
+            return
+
+        self._edit_step = _vp_object(viewprovider)
+        self._edit_stage = self.view_state.getActiveStage()
+        self.view_state.setActiveStage("Geometry")
+        self.setup_widgets()
 
     def slotResetEdit(self, viewprovider):
-        pass
+        if self._edit_step is None or _vp_object(viewprovider) != self._edit_step:
+            return
+
+        stage = self._edit_stage
+        self._edit_step = None
+        self._edit_stage = None
+        if self.view_state and stage:
+            self.view_state.setActiveStage(stage)
+        self.setup_widgets()
 
     def clip_widgets(self):
         layout = self.widget.ClippingGroup.layout()

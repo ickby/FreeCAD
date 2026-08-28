@@ -120,6 +120,11 @@ public:
      * staying hidden. Hides the geometry group for the duration.
      */
     void setChainPreview(bool on);
+    /** True while this shape stands in for the chain result, see setChainPreview(). */
+    bool isChainPreview() const
+    {
+        return m_chainPreview;
+    }
     void setChainRenderSuppressed(bool on);
     bool isChainRenderSuppressed() const
     {
@@ -145,10 +150,11 @@ public:
      * Gui::Selection change and does not answer to one.
      *
      * Elements may name toplevels (Solid2) or sub-elements (Face7, Edge3,
-     * Vertex1); a toplevel marks everything that belongs to it. A role
-     * separates consumers, so two open panels do not overwrite each other and
-     * each clears only its own marks. Where roles overlap, the one set last
-     * wins.
+     * Vertex1). A toplevel marks its faces and only those: a solid reads from
+     * its faces, and colouring its edges and vertices as well would swamp the
+     * ones marked in their own right. A role separates consumers, so two open
+     * panels do not overwrite each other and each clears only its own marks.
+     * Where roles overlap, the one set last wins.
      */
     void setElementHighlight(
         const std::string& role,
@@ -213,7 +219,8 @@ protected:
      * SoBrepEdgeSet and SoBrepPointSet take one colour for the whole set, so
      * marked edges and vertices cannot be recoloured in place the way faces
      * can. They are drawn again on top instead, from the same coordinates, in
-     * the colour of their mark.
+     * the colour of their mark. Only elements named outright end up here, never
+     * ones inherited from a marked toplevel.
      */
     void updateElementHighlight();
     /** Element name of a vtk shape id, @a fallbackPrefix if its type is odd. */
@@ -221,8 +228,8 @@ protected:
     /** Colour marking any element the shape with this vtk id belongs to. */
     const Base::Color* idHighlightColor(vtkIdType id) const;
     /**
-     * Colour marking a rendered part, by its own name or by a toplevel it
-     * belongs to, so a mark on a solid reaches the faces and edges under it.
+     * Colour marking a rendered face, by its own name or by a toplevel it
+     * belongs to, so a mark on a solid reaches the faces under it.
      */
     const Base::Color* highlightColorForPart(const std::string& element, vtkIdType id) const;
 

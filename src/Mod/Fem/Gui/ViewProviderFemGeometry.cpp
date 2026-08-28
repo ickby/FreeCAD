@@ -827,8 +827,8 @@ const Base::Color* ViewProviderFemGeometry::idHighlightColor(vtkIdType id) const
     if (m_elementHighlights.empty()) {
         return nullptr;
     }
-    // A mark on a toplevel covers everything below it, and m_id_elements is what
-    // ties a rendered part back to the toplevels it belongs to.
+    // A mark on a toplevel covers the faces below it, and m_id_elements is what
+    // ties a rendered face back to the toplevels it belongs to.
     auto it = m_id_elements.find(id);
     if (it == m_id_elements.end()) {
         return nullptr;
@@ -912,17 +912,20 @@ void ViewProviderFemGeometry::updateElementHighlight()
         return;
     }
 
+    // Only elements named outright, never one inherited from a toplevel: a mark
+    // on a solid reads from its faces, and drawing its edges and vertices too
+    // would swamp the ones marked in their own right.
+    //
     // A marked element that is also selected or hovered keeps the feedback of
     // the selection: drawing the mark over it would swallow the very colour that
     // tells the user their click landed. Faces need no such rule, there
     // SoBrepFaceSet paints the selection over the material by itself.
-    const auto marked_color =
-        [this](const std::string& element, vtkIdType id) -> const Base::Color* {
-        if (!element.empty()
-            && (m_selected.count(element) > 0 || m_preselected.count(element) > 0)) {
+    const auto marked_color = [this](const std::string& element) -> const Base::Color* {
+        if (element.empty() || m_selected.count(element) > 0
+            || m_preselected.count(element) > 0) {
             return nullptr;
         }
-        return highlightColorForPart(element, id);
+        return elementHighlightColor(element);
     };
 
     std::vector<int32_t> indices;
@@ -940,7 +943,7 @@ void ViewProviderFemGeometry::updateElementHighlight()
         }
         if (polyline < m_lineids.size()) {
             const auto shape_id = m_lineids[polyline];
-            const auto* color = marked_color(elementForShapeId(shape_id, "Edge"), shape_id);
+            const auto* color = marked_color(elementForShapeId(shape_id, "Edge"));
             if (color) {
                 indices.insert(indices.end(), source + run_start, source + i);
                 indices.push_back(-1);
@@ -970,7 +973,7 @@ void ViewProviderFemGeometry::updateElementHighlight()
     colors.clear();
     for (size_t i = 0; i < m_pointids.size(); ++i) {
         const auto shape_id = m_pointids[i];
-        const auto* color = marked_color(elementForShapeId(shape_id, "Vertex"), shape_id);
+        const auto* color = marked_color(elementForShapeId(shape_id, "Vertex"));
         if (color) {
             indices.push_back(static_cast<int32_t>(i));
             colors.push_back(*color);
@@ -1449,8 +1452,10 @@ void ViewProviderFemGeometry::updateVTK()
 
     const std::set<std::string> empty_hidden;
     const std::map<std::string, ClippingPlane> empty_clips;
-    const auto& filtered =
-        (m_chainPreview || !state) ? empty_hidden : state->hiddenElements();
+    // Hiding applies to the previewed input too: while a step is edited the
+    // view panel describes that shape, and switching parts off is how the user
+    // reaches what is buried inside.
+    const auto& filtered = state ? state->hiddenElements() : empty_hidden;
     const auto& clipper = state ? state->clipPlanes() : empty_clips;
     const DimensionMode dimMode = state ? state->dimensionMode() : DimensionMode::Highest;
 
@@ -2029,12 +2034,10 @@ void ViewProviderFemGeometry::update3D()
 
     const auto& clipper = state ? state->clipPlanes() : std::map<std::string, ClippingPlane> {};
     const std::set<std::string> empty_hidden;
-    const auto& hidden =
-        (m_chainPreview || !state) ? empty_hidden : state->hiddenElements();
+    const auto& hidden = state ? state->hiddenElements() : empty_hidden;
     const bool overlay_enabled = !state || state->overlay();
     const bool show_geometry_overlay =
-        !m_chainPreview
-        && overlay_enabled && (wireframe || !clipper.empty() || !hidden.empty());
+        overlay_enabled && (wireframe || !clipper.empty() || !hidden.empty());
     if (!show_geometry_overlay || !m_visgeometryoverlay) {
         m_geometryoverlay->coordIndex.setNum(0);
         return;

@@ -131,8 +131,7 @@ void TaskFemConstraintForce::addToSelection()
     std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
 
     for (auto& it : selection) {  // for every selected object
-        if (!it.isObjectTypeOf(Part::Feature::getClassTypeId())) {
-            QMessageBox::warning(this, tr("Selection Error"), tr("Selected object is not a part!"));
+        if (!checkReference(it.getObject())) {
             return;
         }
 
@@ -213,8 +212,7 @@ void TaskFemConstraintForce::removeFromSelection()
     std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
     std::vector<size_t> itemsToDel;
     for (const auto& it : selection) {  // for every selected object
-        if (!it.isObjectTypeOf(Part::Feature::getClassTypeId())) {
-            QMessageBox::warning(this, tr("Selection Error"), tr("Selected object is not a part!"));
+        if (!checkReference(it.getObject())) {
             return;
         }
         const std::vector<std::string>& subNames = it.getSubNames();
@@ -278,8 +276,8 @@ std::pair<App::DocumentObject*, std::string> TaskFemConstraintForce::getDirectio
     if (selObj->isDerivedFrom<App::DatumElement>() || selObj->isDerivedFrom<Part::Datum>()) {
         link = std::make_pair(selObj, std::string());
     }
-    // Sub-element of Part object
-    else if (selectionElement.isObjectTypeOf(Part::Feature::getClassTypeId())) {
+    // Sub-element of an object carrying a shape
+    else if (const Part::TopoShape* shape = Fem::Tools::getFeatureShape(selObj)) {
         const std::vector<std::string>& subNames = selectionElement.getSubNames();
         if (subNames.size() != 1) {
             return link;
@@ -287,8 +285,10 @@ std::pair<App::DocumentObject*, std::string> TaskFemConstraintForce::getDirectio
 
         std::string subNamesElement = subNames[0];
 
-        const Part::Feature* feat = static_cast<const Part::Feature*>(selectionElement.getObject());
-        TopoDS_Shape ref = feat->Shape.getShape().getSubShape(subNamesElement.c_str());
+        TopoDS_Shape ref = shape->getSubShape(subNamesElement.c_str(), true);
+        if (ref.IsNull()) {
+            return link;
+        }
 
         if (ref.ShapeType() == TopAbs_EDGE) {
             if (Fem::Tools::isLinear(TopoDS::Edge(ref))) {

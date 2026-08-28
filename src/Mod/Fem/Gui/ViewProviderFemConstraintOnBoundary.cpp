@@ -22,14 +22,17 @@
  ***************************************************************************/
 
 
+#include <App/Document.h>
 #include <Gui/Application.h>
 #include "Mod/Fem/App/FemConstraint.h"
+#include <Mod/Fem/App/FemGeometry.h>
 #include <Mod/Part/App/PartFeature.h>
 #include <Mod/Part/Gui/ReferenceHighlighter.h>
 #include <Mod/Part/Gui/ViewProvider.h>
 
 #include "TaskFemConstraintOnBoundary.h"
 #include "ViewProviderFemConstraintOnBoundary.h"
+#include "ViewProviderFemGeometry.h"
 
 
 using namespace FemGui;
@@ -40,10 +43,53 @@ ViewProviderFemConstraintOnBoundary::ViewProviderFemConstraintOnBoundary() = def
 
 ViewProviderFemConstraintOnBoundary::~ViewProviderFemConstraintOnBoundary() = default;
 
+void ViewProviderFemConstraintOnBoundary::markGeometryReferences(const bool on)
+{
+    App::DocumentObject* constraint = getObject();
+    const std::string role = std::string("constraint:") + constraint->getNameInDocument();
+
+    std::map<const App::DocumentObject*, std::set<std::string>> marked;
+    if (on) {
+        for (const auto& subSet : getObject<Fem::Constraint>()->References.getSubListValues()) {
+            if (Base::freecad_cast<Fem::FemGeometry*>(subSet.first)) {
+                marked[subSet.first].insert(subSet.second.begin(), subSet.second.end());
+            }
+        }
+    }
+
+    // Reach every geometry, not only the referenced ones, so that marks left on
+    // a geometry the references have moved away from go as well.
+    const auto geometries = constraint->getDocument()->getObjectsOfType(
+        Fem::FemGeometry::getClassTypeId()
+    );
+    for (auto* geometry : geometries) {
+        auto* vp = dynamic_cast<ViewProviderFemGeometry*>(
+            Gui::Application::Instance->getViewProvider(geometry)
+        );
+        if (!vp) {
+            continue;
+        }
+
+        auto elements = marked.find(geometry);
+        if (elements == marked.end()) {
+            vp->clearElementHighlight(role);
+        }
+        else {
+            vp->setElementHighlight(
+                role,
+                elements->second,
+                ViewProviderFemGeometry::defaultElementHighlightColor()
+            );
+        }
+    }
+}
+
 void ViewProviderFemConstraintOnBoundary::highlightReferences(const bool on)
 {
     Fem::Constraint* pcConstraint = this->getObject<Fem::Constraint>();
     const auto& subSets = pcConstraint->References.getSubListValues();
+
+    markGeometryReferences(on);
 
     for (auto& subSet : subSets) {
         Part::Feature* base = dynamic_cast<Part::Feature*>(subSet.first);

@@ -36,6 +36,13 @@ class QAction;
 class QListWidget;
 class QListWidgetItem;
 
+namespace Fem
+{
+
+class FemGeometry;
+
+}
+
 namespace FemGui
 {
 
@@ -73,6 +80,16 @@ protected:
     }
     const QString makeRefText(const std::string& objName, const std::string& subName) const;
     const QString makeRefText(const App::DocumentObject* obj, const std::string& subName) const;
+    /**
+     * The geometry the references of this constraint have to point at, or
+     * nullptr when its analysis builds none and any shape will do.
+     */
+    Fem::FemGeometry* referenceGeometry() const;
+    /**
+     * Whether obj can carry a reference of this constraint, telling the user
+     * why it cannot when it may not be referenced.
+     */
+    bool checkReference(const App::DocumentObject* obj);
     void keyPressEvent(QKeyEvent* ke) override;
     void createActions(QListWidget* parentList);
     void createClearListAction(QListWidget* parentList);

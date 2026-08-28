@@ -32,15 +32,26 @@
 class TopoDS_Edge;
 class TopoDS_Face;
 
+namespace App
+{
+
+class DocumentObject;
+class GeoFeature;
+
+}
+
 namespace Part
 {
 
 class Feature;
+class TopoShape;
 
 }
 
 namespace Fem
 {
+
+class FemGeometry;
 
 class FemExport Tools
 {
@@ -89,12 +100,26 @@ public:
      Subshape placement is not necessarily the same as the
      feature placement
     */
-    static Base::Placement getSubShapeGlobalLocation(const Part::Feature* feat, const TopoDS_Shape& sh);
-    static void setSubShapeGlobalLocation(const Part::Feature* feat, TopoDS_Shape& sh);
+    static Base::Placement
+    getSubShapeGlobalLocation(const App::GeoFeature* feat, const TopoDS_Shape& sh);
+    static void setSubShapeGlobalLocation(const App::GeoFeature* feat, TopoDS_Shape& sh);
     /*!
-     Get subshape from Part Feature. The subShape is returned with global location
+     Get the shape of a feature that carries one, be it a part or the geometry an
+     analysis builds. Null when the object carries no part shape.
     */
-    static TopoDS_Shape getFeatureSubShape(const Part::Feature* feat, const char* subName, bool silent);
+    static const Part::TopoShape* getFeatureShape(const App::DocumentObject* obj);
+    /*!
+     Get subshape from a feature that carries a shape. The subShape is returned
+     with global location
+    */
+    static TopoDS_Shape
+    getFeatureSubShape(const App::GeoFeature* feat, const char* subName, bool silent);
+    /*!
+     The geometry the members of an analysis reference. Pass any member of the
+     analysis. Null when the analysis builds no geometry, which is the case for
+     documents whose members reference part features directly.
+    */
+    static Fem::FemGeometry* getAnalysisGeometry(const App::DocumentObject* member);
     /*!
      Get cylinder parameters. Base is located at the center of the cylinder
     */

@@ -84,7 +84,10 @@ void ConstraintBearing::onChanged(const App::Property* prop)
             return;
         }
 
-        Part::Feature* feat = static_cast<Part::Feature*>(ref.front());
+        auto* feat = Base::freecad_cast<App::GeoFeature*>(ref.front());
+        if (!feat) {
+            return;
+        }
         TopoDS_Shape sh = Tools::getFeatureSubShape(feat, subRef.front().c_str(), true);
         double radius, height;
         Base::Vector3d base, axis;
@@ -109,8 +112,11 @@ void ConstraintBearing::onChanged(const App::Property* prop)
             return;
         }
         std::string subName = names.front();
-        Part::Feature* feat = static_cast<Part::Feature*>(obj);
-        TopoDS_Shape sh = feat->Shape.getShape().getSubShape(subName.c_str());
+        const Part::TopoShape* locShape = Tools::getFeatureShape(obj);
+        if (!locShape) {
+            return;
+        }
+        TopoDS_Shape sh = locShape->getSubShape(subName.c_str());
 
         if (sh.ShapeType() == TopAbs_FACE) {
             BRepAdaptor_Surface surface(TopoDS::Face(sh));
@@ -131,7 +137,10 @@ void ConstraintBearing::onChanged(const App::Property* prop)
             return;
         }
 
-        feat = static_cast<Part::Feature*>(ref.front());
+        auto* feat = Base::freecad_cast<App::GeoFeature*>(ref.front());
+        if (!feat) {
+            return;
+        }
         sh = Tools::getFeatureSubShape(feat, subRef.front().c_str(), true);
         double radius, height;
         Base::Vector3d base, axis;

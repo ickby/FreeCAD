@@ -43,7 +43,7 @@ from femtaskpanels import task_geometry_partition
 from femviewprovider import view_geometry_base
 
 from femtest.app.support_utils import fcc_print
-from femtest.gui.test_geometry_marks import children_of_type, field_values, own_render
+from femtest.gui.test_geometry_marks import face_material, node_colors
 
 
 def _mask_mode(vobj):
@@ -428,15 +428,10 @@ class TestGeometryPartitionGui(unittest.TestCase):
 
     # -- marks --------------------------------------------------------------
 
-    def _marked_edge_count(self):
-        """Polylines the mark overlay of the previewed input step draws."""
-        overlay = [
-            sep
-            for sep in children_of_type(own_render(self.imp.ViewObject), "SoSeparator")
-            if children_of_type(sep, "SoIndexedLineSet")
-        ][0]
-        lines = children_of_type(overlay, "SoIndexedLineSet")[0]
-        return field_values(lines.coordIndex).count(-1)
+    def _marked_face_count(self, role):
+        """Faces of the previewed input step drawn in that role's colour."""
+        color = tuple(round(channel, 3) for channel in task_geometry_partition.MARK_COLORS[role])
+        return node_colors(face_material(self.imp.ViewObject)).count(color)
 
     def test_panel_marks_its_stored_targets_on_the_input(self):
         """
@@ -468,7 +463,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
                 self.imp.ViewObject.getElementHighlight(task_geometry_partition.MARK_TARGETS),
                 [],
             )
-            self.assertEqual(self._marked_edge_count(), 0)
+            self.assertEqual(self._marked_face_count(task_geometry_partition.MARK_TARGETS), 0)
 
             panel.target_picker.start_selection()
             FreeCADGui.Selection.addSelection(self.document.Name, self.imp.Name, "Face1")
@@ -478,9 +473,9 @@ class TestGeometryPartitionGui(unittest.TestCase):
                 "the mark has to show the solid the pick was promoted to",
             )
             self.assertEqual(
-                self._marked_edge_count(),
-                len(self.imp.Shape.Solids[0].Edges),
-                "a marked solid has to reach the edges of that solid",
+                self._marked_face_count(task_geometry_partition.MARK_TARGETS),
+                len(self.imp.Shape.Solids[0].Faces),
+                "a marked solid has to reach the faces of that solid",
             )
         finally:
             panel.deactivate()
@@ -494,8 +489,8 @@ class TestGeometryPartitionGui(unittest.TestCase):
         try:
             panel = task_geometry_partition._PartitionTaskPanel(self.part)
             self.assertEqual(
-                self._marked_edge_count(),
-                len(self.imp.Shape.Solids[0].Edges),
+                self._marked_face_count(task_geometry_partition.MARK_TARGETS),
+                len(self.imp.Shape.Solids[0].Faces),
                 "the stored targets have to be marked while the panel is open",
             )
 
@@ -506,7 +501,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
                 task_geometry_partition.MARK_TOOL,
             ):
                 self.assertEqual(self.imp.ViewObject.getElementHighlight(role), [])
-            self.assertEqual(self._marked_edge_count(), 0)
+            self.assertEqual(self._marked_face_count(task_geometry_partition.MARK_TARGETS), 0)
         finally:
             view_geometry_base.set_input_preview(self.part, False)
 

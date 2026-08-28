@@ -78,6 +78,16 @@ def own_render(vobj):
     return vobj.SwitchNode.getChild(0)
 
 
+def face_material(vobj):
+    """
+    The material updateColors fills, one colour per rendered face.
+
+    The last one in the separator, which is where attach puts the face material,
+    after the one the plain edges and vertices share.
+    """
+    return children_of_type(own_render(vobj), "SoMaterial")[-1]
+
+
 def node_colors(material):
     return [
         tuple(round(channel, 3) for channel in material.diffuseColor[i].getValue())
@@ -122,9 +132,7 @@ class TestGeometryMarksGui(unittest.TestCase):
         line_material, point_material = children_of_type(self.overlay, "SoMaterial")
         self.line_material = line_material
         self.point_material = point_material
-        # The face material is the last one before the face set in the same
-        # separator, the one updateColors fills per part.
-        self.face_material = children_of_type(own, "SoMaterial")[-1]
+        self.face_material = face_material(self.vobj)
 
     def tearDown(self):
         FreeCADGui.Selection.clearSelection()
@@ -179,7 +187,7 @@ class TestGeometryMarksGui(unittest.TestCase):
         self.assertEqual(field_values(self.points.coordIndex), [0])
         self.assertEqual(node_colors(self.point_material), [BLUE])
 
-    def test_a_marked_solid_reaches_everything_under_it(self):
+    def test_a_marked_solid_reaches_its_faces(self):
         solid = self.group.Shape.Solids[0]
         self.vobj.setElementHighlight("test", ["Solid1"], GREEN)
         self.assertEqual(
@@ -187,11 +195,26 @@ class TestGeometryMarksGui(unittest.TestCase):
             len(solid.Faces),
             "a mark on a solid has to cover all of its faces",
         )
+
+    def test_a_marked_solid_leaves_its_edges_and_vertices_alone(self):
+        """
+        A solid reads from its faces. Colouring its edges and vertices as well
+        turns it into one block of colour and swamps the edges and vertices that
+        carry a mark in their own right.
+        """
+        self.vobj.setElementHighlight("test", ["Solid1"], GREEN)
+        self.assertEqual(self._marked_polylines(), 0)
+        self.assertEqual(self._marked_points(), 0)
+
+    def test_a_marked_solid_still_leaves_room_for_an_edge_mark(self):
+        self.vobj.setElementHighlight("targets", ["Solid1"], GREEN)
+        self.vobj.setElementHighlight("tool", ["Edge1"], RED)
         self.assertEqual(
             self._marked_polylines(),
-            len(solid.Edges),
-            "a mark on a solid has to cover all of its edges",
+            1,
+            "only the edge named outright may reach the overlay",
         )
+        self.assertEqual(node_colors(self.line_material), [RED])
 
     def test_a_marked_solid_leaves_the_other_one_alone(self):
         self.vobj.setElementHighlight("test", ["Solid1"], GREEN)
@@ -266,18 +289,20 @@ class TestGeometryMarksGui(unittest.TestCase):
         marks are kept by element name and have to be laid out again.
         """
         solid = self.group.Shape.Solids[0]
-        self.vobj.setElementHighlight("test", ["Solid1"], GREEN)
+        self.vobj.setElementHighlight("targets", ["Solid1"], GREEN)
+        self.vobj.setElementHighlight("tool", ["Edge1"], RED)
         self.imp.touch()
         self.document.recompute()
         self.assertEqual(self._face_colors().count(GREEN), len(solid.Faces))
-        self.assertEqual(self._marked_polylines(), len(solid.Edges))
+        self.assertEqual(self._marked_polylines(), 1)
+        self.assertEqual(node_colors(self.line_material), [RED])
 
     def test_the_overlay_cannot_be_picked(self):
         """
         A mark sits right on the element it marks. If it took the pick, the user
         could no longer select what is underneath it.
         """
-        self.vobj.setElementHighlight("test", ["Solid1"], GREEN)
+        self.vobj.setElementHighlight("test", ["Edge1"], GREEN)
         style = children_of_type(self.overlay, "SoPickStyle")
         self.assertEqual(len(style), 1)
         self.assertEqual(style[0].style.getValue(), coin.SoPickStyle.UNPICKABLE)

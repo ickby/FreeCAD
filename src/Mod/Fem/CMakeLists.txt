@@ -752,6 +752,7 @@ SET(FemGuiTests_SRCS
     femtest/gui/test_geometry_marks.py
     femtest/gui/test_geometry_partition.py
     femtest/gui/test_open.py
+    femtest/gui/test_view_panel.py
 )
 
 SET(FemGuiUtils_SRCS

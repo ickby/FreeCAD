@@ -23,6 +23,9 @@
 # include <random>
 # include <vector>
 
+# include <QIcon>
+# include <QPixmap>
+
 # include <Inventor/details/SoFaceDetail.h>
 # include <Inventor/details/SoLineDetail.h>
 # include <Inventor/details/SoPointDetail.h>
@@ -41,6 +44,7 @@
 #include <App/Document.h>
 #include <App/GroupExtension.h>
 #include <Gui/Application.h>
+#include <Gui/BitmapFactory.h>
 #include <Gui/Selection/Selection.h>
 #include <Gui/Selection/SoFCUnifiedSelection.h>
 #include <Gui/Window.h>
@@ -353,8 +357,141 @@ void ViewProviderFemGeometry::ensureViewStateConnection()
     }
 }
 
+Fem::FemGeometry* ViewProviderFemGeometry::chainOwner() const
+{
+    auto* obj = getObject();
+    if (!obj) {
+        return nullptr;
+    }
+    for (auto* parent : obj->getInList()) {
+        auto* group = Base::freecad_cast<Fem::FemGeometry*>(parent);
+        if (!group) {
+            continue;
+        }
+        auto* ext = group->getExtensionByType<App::GroupExtension>(true);
+        if (ext && ext->hasObject(obj)) {
+            return group;
+        }
+    }
+    return nullptr;
+}
+
+void ViewProviderFemGeometry::applyChainRole()
+{
+    const bool step = isChainStep();
+    if (step == m_isChainStep) {
+        return;
+    }
+    m_isChainStep = step;
+
+    // A build step is not a thing you can look at on its own: the group holds
+    // the result and renders it. Take the visibility control away instead of
+    // leaving a switch that does nothing, the same way objects without a
+    // representation do it.
+    setToggleVisibility(
+        step ? ToggleVisibilityMode::NoToggleVisibility : ToggleVisibilityMode::CanToggleVisibility
+    );
+    if (step) {
+        setDisplayMaskMode("Hidden");
+    }
+    else {
+        // Shape changes were ignored while this was a step, so the vtk source
+        // has to be caught up before it can be rendered again.
+        if (auto* geom_obj = getObject<Fem::FemGeometry>()) {
+            m_shape = new IVtkOCC_Shape(geom_obj->Shape.getShape().getShape());
+            m_vtksource->SetShape(m_shape);
+        }
+        m_viewStateCacheValid = false;
+        setDisplayMaskMode("Default");
+        // Rebuilds the render and lets the active stage have the final say on
+        // the mask. applyChainRole is a no-op from there, the role is set.
+        onViewStateChanged();
+    }
+}
+
+void ViewProviderFemGeometry::refreshChainSteps()
+{
+    auto* obj = getObject();
+    if (!obj) {
+        return;
+    }
+    auto* ext = obj->getExtensionByType<App::GroupExtension>(true);
+    if (!ext) {
+        return;
+    }
+    auto* doc = Gui::Application::Instance->getDocument(obj->getDocument());
+    if (!doc) {
+        return;
+    }
+
+    // The result of the chain is its last step, that is the one the group takes
+    // its shape from.
+    Fem::FemGeometry* result = nullptr;
+    for (auto* child : ext->Group.getValues()) {
+        if (auto* geometry = Base::freecad_cast<Fem::FemGeometry*>(child)) {
+            result = geometry;
+        }
+    }
+
+    // Objects that just left the chain have to get their own visual back, so
+    // former members are refreshed along with the current ones.
+    std::set<std::string> members = m_chainMembers;
+    m_chainMembers.clear();
+    for (auto* child : ext->Group.getValues()) {
+        if (child && child->isAttachedToDocument()) {
+            m_chainMembers.insert(child->getNameInDocument());
+            members.insert(child->getNameInDocument());
+        }
+    }
+
+    for (const auto& name : members) {
+        auto* member = obj->getDocument()->getObject(name.c_str());
+        if (!member) {
+            continue;
+        }
+        auto* vp = Base::freecad_cast<ViewProviderFemGeometry*>(doc->getViewProvider(member));
+        if (!vp) {
+            continue;
+        }
+        vp->applyChainRole();
+        vp->setChainResult(member == result);
+    }
+}
+
+void ViewProviderFemGeometry::setChainResult(bool result)
+{
+    if (result == m_isChainResult) {
+        return;
+    }
+    m_isChainResult = result;
+    signalChangeIcon();
+}
+
+QIcon ViewProviderFemGeometry::mergeColorfulOverlayIcons(const QIcon& orig) const
+{
+    QIcon icon = orig;
+    if (m_isChainResult) {
+        static QPixmap badge(
+            Gui::BitmapFactory().pixmapFromSvg("FEM_Overlay_Result", QSize(10, 10))
+        );
+        icon = Gui::BitmapFactoryInst::mergePixmap(
+            icon,
+            badge,
+            Gui::BitmapFactoryInst::BottomRight
+        );
+    }
+    return Gui::ViewProviderDocumentObject::mergeColorfulOverlayIcons(icon);
+}
+
 void ViewProviderFemGeometry::onViewStateChanged()
 {
+    applyChainRole();
+    if (m_isChainStep) {
+        // Nothing to show and nothing to filter: the group renders the result.
+        setDisplayMaskMode("Hidden");
+        return;
+    }
+
     auto* state = m_boundViewState;
     if (!state) {
         m_viewStateCacheValid = false;
@@ -370,19 +507,10 @@ void ViewProviderFemGeometry::onViewStateChanged()
     const ActiveStage stage = state->activeStage();
 
     // Exclusive geometry/mesh visibility is ActiveStage, not hand-rolled VP flags.
-    // Prefer Group when the geo-feature-group extension registered that mask so
-    // claimed children stay visible; otherwise fall back to Default (VTK).
-    if (stage == ActiveStage::Geometry) {
-        if (getDisplayMaskMode("Group")) {
-            setDisplayMaskMode("Group");
-        }
-        else {
-            setDisplayMaskMode("Default");
-        }
-    }
-    else {
-        setDisplayMaskMode("Hidden");
-    }
+    // Always the own VTK render: the group draws the result of its chain, the
+    // steps below it draw nothing, so the extension-owned Group mask would leave
+    // an empty view.
+    setDisplayMaskMode(stage == ActiveStage::Geometry ? "Default" : "Hidden");
 
     const bool colorOnly = m_viewStateCacheValid && m_cachedDimMode == dimMode
         && m_cachedWireframe == wireframe && m_cachedHidden == hidden
@@ -443,37 +571,31 @@ void ViewProviderFemGeometry::attach(App::DocumentObject* pcObj)
     addDisplayMaskMode(m_separator, "Default");
     addDisplayMaskMode(m_hidden, "Hidden");
     // Do not register "Group" here: ViewProviderGeoFeatureGroupExtension owns
-    // that mask (pcGroupChildren). Overwriting it with m_hidden would hide all
-    // claimed geometry children whenever Group mode is active.
+    // that mask (pcGroupChildren). It stays unused, the group renders the result
+    // of its chain itself.
     setDisplayMaskMode("Default");
 
+    applyChainRole();
     ensureViewStateConnection();
 }
 
 void ViewProviderFemGeometry::setDisplayMode(const char* ModeName)
 {
+    if (m_isChainStep) {
+        setDisplayMaskMode("Hidden");
+        return;
+    }
     if (ModeName) {
-        if (strcmp(ModeName, "Group") == 0) {
-            // Extension-owned mask (children). Keep Default VTK available as fallback.
-            if (getDisplayMaskMode("Group")) {
-                setDisplayMaskMode("Group");
-            }
-            else {
-                setDisplayMaskMode("Default");
-            }
-        }
-        else if (strcmp(ModeName, "Hidden") == 0) {
-            setDisplayMaskMode("Hidden");
-        }
-        else {
-            setDisplayMaskMode("Default");
-        }
+        setDisplayMaskMode(strcmp(ModeName, "Hidden") == 0 ? "Hidden" : "Default");
     }
     update3D();
 }
 
 std::vector<std::string> ViewProviderFemGeometry::getDisplayModes() const
 {
+    if (m_isChainStep) {
+        return {};
+    }
     return {"Surface", "Wireframe"};
 }
 
@@ -745,15 +867,14 @@ std::string ViewProviderFemGeometry::elementFromSelection(
         return element;
     }
 
-    // The geometry chain shares one shape: a GeometryGroup takes its Shape from
-    // the last geometry child, which is also the object that renders it. Accept
-    // element names selected on the group for that child, so selections made on
-    // either object highlight the geometry that is actually on screen.
-    if (auto* group = target->getExtensionByType<App::GroupExtension>(true)) {
-        const auto& children = group->Group.getValues();
+    // The group and the last step of its chain share one shape, and the group is
+    // the object that renders it. Accept element names selected on that step, so
+    // selections made on either object highlight what is on screen.
+    if (auto* ext = geom_obj->getExtensionByType<App::GroupExtension>(true)) {
+        const auto& children = ext->Group.getValues();
         for (auto it = children.rbegin(); it != children.rend(); ++it) {
             if (*it && (*it)->isDerivedFrom(Fem::FemGeometry::getClassTypeId())) {
-                return (*it == geom_obj) ? element : std::string();
+                return (*it == target) ? element : std::string();
             }
         }
     }
@@ -909,7 +1030,7 @@ void ViewProviderFemGeometry::onSelectionChanged(const Gui::SelectionChanges& /*
 void ViewProviderFemGeometry::updateData(const App::Property* prop)
 {
     Fem::FemGeometry* geometryObject = getObject<Fem::FemGeometry>();
-    if (prop == &geometryObject->Shape) {
+    if (prop == &geometryObject->Shape && !isChainStep()) {
         auto shape = geometryObject->Shape.getShape();
         m_shape = new IVtkOCC_Shape(shape.getShape());
         m_vtksource->SetShape(m_shape);
@@ -917,7 +1038,21 @@ void ViewProviderFemGeometry::updateData(const App::Property* prop)
         updateVTK();
     }
 
+    // Joining or leaving the chain is what makes a step a step, and the step
+    // itself gets no property change for it.
+    if (auto* ext = geometryObject->getExtensionByType<App::GroupExtension>(true);
+        ext && prop == &ext->Group) {
+        refreshChainSteps();
+    }
+
     ViewProviderDocumentObject::updateData(prop);
+}
+
+void ViewProviderFemGeometry::finishRestoring()
+{
+    ViewProviderDocumentObject::finishRestoring();
+    applyChainRole();
+    refreshChainSteps();
 }
 
 void ViewProviderFemGeometry::onChanged(const App::Property* prop)
@@ -935,7 +1070,7 @@ void ViewProviderFemGeometry::onChanged(const App::Property* prop)
 void ViewProviderFemGeometry::updateVTK()
 {
     auto* geom_obj = getObject<Fem::FemGeometry>();
-    if (!geom_obj) {
+    if (!geom_obj || m_isChainStep) {
         return;
     }
 

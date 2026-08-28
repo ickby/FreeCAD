@@ -752,12 +752,11 @@ class GeometryExplorer(QtGui.QTreeView):
 
     def _selection_target(self):
         """
-        Object to select on: the end of the geometry chain, whose view provider
-        draws the shape the tree describes. Picking in the 3D view reports the
-        same object, so both directions produce identical selection entries.
+        Object to select on: the geometry group, whose view provider draws the
+        shape the tree describes. Picking in the 3D view reports the same
+        object, so both directions produce identical selection entries.
         """
-        chain = self._geometry_chain()
-        return chain[-1] if chain else None
+        return self.geom_obj
 
     def _element_from_selection(self, doc, obj, sub):
         """

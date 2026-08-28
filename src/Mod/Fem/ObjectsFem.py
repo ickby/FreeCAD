@@ -86,6 +86,22 @@ def makeGeometryImport(doc, name="GeometryImport"):
     return obj
 
 
+def makeGeometryPartition(doc, name="GeometryPartition"):
+    """Add a partition step to the analysis geometry chain."""
+    obj = doc.addObject("Fem::FemGeometryPython", name)
+    from femobjects import geometry_partition
+
+    geometry_partition.GeometryPartition(obj)
+    if FreeCAD.GuiUp:
+        try:
+            from femviewprovider import view_geometry_base
+
+            view_geometry_base.VPGeometryPartition(obj.ViewObject)
+        except ImportError:
+            pass
+    return obj
+
+
 # ********* constant objects *********************************************************************
 def makeConstantVacuumPermittivity(doc, name="ConstantVacuumPermittivity"):
     """makeConstantVacuumPermittivity(document, [name]):

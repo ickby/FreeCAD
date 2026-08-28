@@ -54,8 +54,11 @@ class SoNormal;
 class SoMaterial;
 class SoMaterialBinding;
 class SoIndexedFaceSet;
+class SoIndexedLineSet;
+class SoIndexedPointSet;
 class SoShapeHints;
 class SoDrawStyle;
+class SoDepthBuffer;
 
 namespace PartGui
 {
@@ -112,12 +115,53 @@ public:
     /** Mark this step as the one the group takes its result from. */
     void setChainResult(bool result);
 
+    /**
+     * While a chain step is edited, show its own shape for picking instead of
+     * staying hidden. Hides the geometry group for the duration.
+     */
+    void setChainPreview(bool on);
+    void setChainRenderSuppressed(bool on);
+    bool isChainRenderSuppressed() const
+    {
+        return m_suppressChainRender;
+    }
+    ViewProviderFemGeometry* groupViewProvider(Fem::FemGeometry* group) const;
+    const char* suppressedMaskMode() const;
+
     std::string getElement(const SoDetail*) const override;
     SoDetail* getDetail(const char*) const override;
     void onSelectionChanged(const Gui::SelectionChanges&) override;
 
     /** Rebuild 3D selection/preselection highlight from Gui::Selection. */
     void syncSelectionHighlight();
+
+    /**
+     * Mark shape elements in a colour of their own, independent of what is
+     * selected.
+     *
+     * For panels that hold references to geometry -- partition targets,
+     * constraint references -- so the user can see what is already picked while
+     * still selecting freely. Marking is not selecting: it survives a
+     * Gui::Selection change and does not answer to one.
+     *
+     * Elements may name toplevels (Solid2) or sub-elements (Face7, Edge3,
+     * Vertex1); a toplevel marks everything that belongs to it. A role
+     * separates consumers, so two open panels do not overwrite each other and
+     * each clears only its own marks. Where roles overlap, the one set last
+     * wins.
+     */
+    void setElementHighlight(
+        const std::string& role,
+        const std::set<std::string>& elements,
+        const Base::Color& color
+    );
+    void clearElementHighlight(const std::string& role);
+    /** Elements currently marked by that role. */
+    std::set<std::string> elementHighlight(const std::string& role) const;
+    /** Colour marking this element, or nullptr if it carries no mark. */
+    const Base::Color* elementHighlightColor(const std::string& element) const;
+    /** Colour used to mark elements when the caller names none. */
+    static Base::Color defaultElementHighlightColor();
 
     PyObject* getPyObject() override;
 
@@ -162,6 +206,25 @@ protected:
     void applyChainRole();
     /** Refresh the roles of the steps below this group. */
     void refreshChainSteps();
+
+    /**
+     * Rebuild the edge and vertex marks.
+     *
+     * SoBrepEdgeSet and SoBrepPointSet take one colour for the whole set, so
+     * marked edges and vertices cannot be recoloured in place the way faces
+     * can. They are drawn again on top instead, from the same coordinates, in
+     * the colour of their mark.
+     */
+    void updateElementHighlight();
+    /** Element name of a vtk shape id, @a fallbackPrefix if its type is odd. */
+    std::string elementForShapeId(vtkIdType id, const char* fallbackPrefix) const;
+    /** Colour marking any element the shape with this vtk id belongs to. */
+    const Base::Color* idHighlightColor(vtkIdType id) const;
+    /**
+     * Colour marking a rendered part, by its own name or by a toplevel it
+     * belongs to, so a mark on a solid reaches the faces and edges under it.
+     */
+    const Base::Color* highlightColorForPart(const std::string& element, vtkIdType id) const;
 
     /** Record that the shape with this vtk id belongs to a toplevel element. */
     void addIdElement(vtkIdType id, const std::string& element);
@@ -211,6 +274,16 @@ protected:
     std::set<std::string> m_selected;
     std::set<std::string> m_preselected;
 
+    // Marked elements per role, in the order the roles were first set, so a
+    // later role wins where two of them name the same element.
+    struct ElementHighlight
+    {
+        std::string role;
+        std::set<std::string> elements;
+        Base::Color color;
+    };
+    std::vector<ElementHighlight> m_elementHighlights;
+
     // coin display nodes
     SoSeparator* m_separator {nullptr};
     SoSeparator* m_hidden {nullptr};
@@ -235,6 +308,19 @@ protected:
     SoNormal* m_geometryoverlaynormals {nullptr};
     SoIndexedFaceSet* m_geometryoverlay {nullptr};
 
+    // Marked edges and vertices, drawn over the plain ones from the same
+    // coordinates. Own separator, so the depth and style settings it needs stay
+    // out of the way of the normal render.
+    SoSeparator* m_highlightoverlay {nullptr};
+    SoDepthBuffer* m_highlightoverlaydepth {nullptr};
+    SoMaterialBinding* m_highlightoverlaylinebinding {nullptr};
+    SoMaterial* m_highlightoverlaylinematerial {nullptr};
+    SoMaterialBinding* m_highlightoverlaypointbinding {nullptr};
+    SoMaterial* m_highlightoverlaypointmaterial {nullptr};
+    SoDrawStyle* m_highlightoverlaystyle {nullptr};
+    SoIndexedLineSet* m_highlightoverlaylines {nullptr};
+    SoIndexedPointSet* m_highlightoverlaypoints {nullptr};
+
     SoSFColor m_colorhighlight;
     SoSFColor m_colorselection;
 
@@ -244,6 +330,9 @@ protected:
     // Chain role: a step renders nothing, the result step carries a tree badge
     bool m_isChainStep {false};
     bool m_isChainResult {false};
+    bool m_chainPreview {false};
+    bool m_suppressChainRender {false};
+    std::string m_previewSuppressedGroup;
     // Chain members of the last refresh, to hand their visual back when they go
     std::set<std::string> m_chainMembers;
 

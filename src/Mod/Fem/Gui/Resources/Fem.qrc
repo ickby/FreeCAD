@@ -120,6 +120,9 @@
         <!-- tree icon overlays -->
         <file>icons/FEM_Overlay_Result.svg</file>
 
+        <!-- geometry preprocessing -->
+        <file>icons/FEM_GeometryPartition.svg</file>
+
         <!-- object icons without gui command but with task panel action -->
         <file>icons/fem-post-geo-box.svg</file>
         <file>icons/fem-post-geo-cylinder.svg</file>

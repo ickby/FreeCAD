@@ -30,8 +30,12 @@
 # include <Inventor/details/SoLineDetail.h>
 # include <Inventor/details/SoPointDetail.h>
 # include <Inventor/nodes/SoCoordinate3.h>
+# include <Inventor/nodes/SoDepthBuffer.h>
 # include <Inventor/nodes/SoDrawStyle.h>
 # include <Inventor/nodes/SoIndexedFaceSet.h>
+# include <Inventor/nodes/SoIndexedLineSet.h>
+# include <Inventor/nodes/SoIndexedPointSet.h>
+# include <Inventor/nodes/SoLightModel.h>
 # include <Inventor/nodes/SoMaterial.h>
 # include <Inventor/nodes/SoNormal.h>
 # include <Inventor/nodes/SoPickStyle.h>
@@ -270,6 +274,37 @@ ViewProviderFemGeometry::ViewProviderFemGeometry()
     m_geometryoverlaynormals = new SoNormal();
     m_geometryoverlaynormals->ref();
 
+    m_highlightoverlay = new SoSeparator();
+    m_highlightoverlay->ref();
+    m_highlightoverlaydepth = new SoDepthBuffer();
+    m_highlightoverlaydepth->ref();
+    // The marks sit exactly on the edges they mark, so the depth test has to let
+    // an equal value through or the two would fight over the same pixels. Depth
+    // stays unwritten and the test is not switched off: a mark is a lasting
+    // thing and must not shine through the solid it is on the far side of.
+    m_highlightoverlaydepth->function.setValue(SoDepthBuffer::LEQUAL);
+    m_highlightoverlaydepth->write.setValue(FALSE);
+    m_highlightoverlaylinebinding = new SoMaterialBinding();
+    m_highlightoverlaylinebinding->ref();
+    m_highlightoverlaylinebinding->value = SoMaterialBinding::PER_FACE;
+    m_highlightoverlaylinematerial = new SoMaterial();
+    m_highlightoverlaylinematerial->ref();
+    m_highlightoverlaypointbinding = new SoMaterialBinding();
+    m_highlightoverlaypointbinding->ref();
+    m_highlightoverlaypointbinding->value = SoMaterialBinding::PER_VERTEX;
+    m_highlightoverlaypointmaterial = new SoMaterial();
+    m_highlightoverlaypointmaterial->ref();
+    m_highlightoverlaystyle = new SoDrawStyle();
+    m_highlightoverlaystyle->ref();
+    // Wider and larger than the plain ones, so a mark reads as a mark even where
+    // it lies on top of the edge it marks.
+    m_highlightoverlaystyle->lineWidth.setValue(4.0f);
+    m_highlightoverlaystyle->pointSize.setValue(9.0f);
+    m_highlightoverlaylines = new SoIndexedLineSet();
+    m_highlightoverlaylines->ref();
+    m_highlightoverlaypoints = new SoIndexedPointSet();
+    m_highlightoverlaypoints->ref();
+
     float transparency = 0.0f;
     ParameterGrp::handle hGrp = Gui::WindowParameter::getDefaultParameter()->GetGroup("View");
     SbColor highlightColor(1.0f, 0.6f, 0.0f);
@@ -312,6 +347,15 @@ ViewProviderFemGeometry::~ViewProviderFemGeometry()
     m_geometryoverlay->unref();
     m_geometryoverlaynormalBinding->unref();
     m_geometryoverlaynormals->unref();
+    m_highlightoverlay->unref();
+    m_highlightoverlaydepth->unref();
+    m_highlightoverlaylinebinding->unref();
+    m_highlightoverlaylinematerial->unref();
+    m_highlightoverlaypointbinding->unref();
+    m_highlightoverlaypointmaterial->unref();
+    m_highlightoverlaystyle->unref();
+    m_highlightoverlaylines->unref();
+    m_highlightoverlaypoints->unref();
 }
 
 AnalysisViewState* ViewProviderFemGeometry::viewState() const
@@ -467,6 +511,76 @@ void ViewProviderFemGeometry::setChainResult(bool result)
     signalChangeIcon();
 }
 
+ViewProviderFemGeometry* ViewProviderFemGeometry::groupViewProvider(Fem::FemGeometry* group) const
+{
+    if (!group) {
+        return nullptr;
+    }
+    auto* doc = Gui::Application::Instance->getDocument(group->getDocument());
+    if (!doc) {
+        return nullptr;
+    }
+    return Base::freecad_cast<ViewProviderFemGeometry*>(doc->getViewProvider(group));
+}
+
+const char* ViewProviderFemGeometry::suppressedMaskMode() const
+{
+    // A switch traverses one child only, and the children of a GeoFeatureGroup
+    // hang under the extension-owned "Group" mask. Hiding the group outright
+    // would therefore cut off the previewed step along with the group's own
+    // result, leaving nothing to look at or pick. Stepping aside onto the
+    // children mask drops the result and keeps the step reachable instead.
+    return getDisplayMaskMode("Group") ? "Group" : "Hidden";
+}
+
+void ViewProviderFemGeometry::setChainRenderSuppressed(bool on)
+{
+    if (on == m_suppressChainRender) {
+        return;
+    }
+    m_suppressChainRender = on;
+    onViewStateChanged();
+}
+
+void ViewProviderFemGeometry::setChainPreview(bool on)
+{
+    if (on == m_chainPreview) {
+        return;
+    }
+    m_chainPreview = on;
+
+    if (on) {
+        if (auto* geom_obj = getObject<Fem::FemGeometry>()) {
+            m_shape = new IVtkOCC_Shape(geom_obj->Shape.getShape().getShape());
+            m_vtksource->SetShape(m_shape);
+        }
+        m_viewStateCacheValid = false;
+
+        if (auto* group = chainOwner()) {
+            if (auto* gvp = groupViewProvider(group)) {
+                gvp->setChainRenderSuppressed(true);
+                // By name, because the group can be removed while the panel is
+                // open and a cached pointer would dangle on the way out.
+                m_previewSuppressedGroup = group->getNameInDocument();
+            }
+        }
+    }
+    else if (!m_previewSuppressedGroup.empty()) {
+        auto* obj = getObject();
+        if (obj && obj->getDocument()) {
+            auto* group = Base::freecad_cast<Fem::FemGeometry*>(
+                obj->getDocument()->getObject(m_previewSuppressedGroup.c_str())
+            );
+            if (auto* gvp = group ? groupViewProvider(group) : nullptr) {
+                gvp->setChainRenderSuppressed(false);
+            }
+        }
+        m_previewSuppressedGroup.clear();
+    }
+
+    onViewStateChanged();
+}
+
 QIcon ViewProviderFemGeometry::mergeColorfulOverlayIcons(const QIcon& orig) const
 {
     QIcon icon = orig;
@@ -486,14 +600,23 @@ QIcon ViewProviderFemGeometry::mergeColorfulOverlayIcons(const QIcon& orig) cons
 void ViewProviderFemGeometry::onViewStateChanged()
 {
     applyChainRole();
-    if (m_isChainStep) {
+    if (m_isChainStep && !m_chainPreview) {
         // Nothing to show and nothing to filter: the group renders the result.
         setDisplayMaskMode("Hidden");
+        return;
+    }
+    if (m_suppressChainRender) {
+        setDisplayMaskMode(suppressedMaskMode());
         return;
     }
 
     auto* state = m_boundViewState;
     if (!state) {
+        // No stage to consult, but the mask still has to be opened. Without
+        // this a previewed step keeps the Hidden mask applyChainRole left
+        // behind, and a group coming out of suppression never gets its render
+        // back, leaving an empty viewport either way.
+        setDisplayMaskMode("Default");
         m_viewStateCacheValid = false;
         updateVTK();
         return;
@@ -509,8 +632,11 @@ void ViewProviderFemGeometry::onViewStateChanged()
     // Exclusive geometry/mesh visibility is ActiveStage, not hand-rolled VP flags.
     // Always the own VTK render: the group draws the result of its chain, the
     // steps below it draw nothing, so the extension-owned Group mask would leave
-    // an empty view.
-    setDisplayMaskMode(stage == ActiveStage::Geometry ? "Default" : "Hidden");
+    // an empty view. A previewed step overrides the stage, because picking
+    // geometry for a chain step is a geometry operation by definition.
+    setDisplayMaskMode(
+        (m_chainPreview || stage == ActiveStage::Geometry) ? "Default" : "Hidden"
+    );
 
     const bool colorOnly = m_viewStateCacheValid && m_cachedDimMode == dimMode
         && m_cachedWireframe == wireframe && m_cachedHidden == hidden
@@ -568,11 +694,35 @@ void ViewProviderFemGeometry::attach(App::DocumentObject* pcObj)
     sep->addChild(m_geometryoverlaynormals);
     sep->addChild(m_geometryoverlay);
 
+    // Marked edges and vertices, drawn last so they land over the plain ones.
+    // The coordinates are the same node the normal render uses, so a mark costs
+    // an index list and nothing else. Unpickable, because a mark must not stand
+    // between the user and the element underneath it.
+    auto* highlight_pick = new SoPickStyle();
+    highlight_pick->style.setValue(SoPickStyle::Style::UNPICKABLE);
+    m_highlightoverlay->addChild(highlight_pick);
+    // Unlit, so the mark comes out in the colour that was asked for. The normals
+    // in scope belong to the faces and would shade it into something else.
+    auto* highlight_light = new SoLightModel();
+    highlight_light->model.setValue(SoLightModel::BASE_COLOR);
+    m_highlightoverlay->addChild(highlight_light);
+    m_highlightoverlay->addChild(m_highlightoverlaydepth);
+    m_highlightoverlay->addChild(m_highlightoverlaystyle);
+    m_highlightoverlay->addChild(m_coordinates);
+    m_highlightoverlay->addChild(m_highlightoverlaylinebinding);
+    m_highlightoverlay->addChild(m_highlightoverlaylinematerial);
+    m_highlightoverlay->addChild(m_highlightoverlaylines);
+    m_highlightoverlay->addChild(m_highlightoverlaypointbinding);
+    m_highlightoverlay->addChild(m_highlightoverlaypointmaterial);
+    m_highlightoverlay->addChild(m_highlightoverlaypoints);
+    m_separator->addChild(m_highlightoverlay);
+
     addDisplayMaskMode(m_separator, "Default");
     addDisplayMaskMode(m_hidden, "Hidden");
     // Do not register "Group" here: ViewProviderGeoFeatureGroupExtension owns
-    // that mask (pcGroupChildren). It stays unused, the group renders the result
-    // of its chain itself.
+    // that mask (pcGroupChildren). A group normally renders the result of its
+    // chain itself, and only steps aside onto that mask while a step below it
+    // is previewed, see suppressedMaskMode.
     setDisplayMaskMode("Default");
 
     applyChainRole();
@@ -581,8 +731,12 @@ void ViewProviderFemGeometry::attach(App::DocumentObject* pcObj)
 
 void ViewProviderFemGeometry::setDisplayMode(const char* ModeName)
 {
-    if (m_isChainStep) {
+    if (m_isChainStep && !m_chainPreview) {
         setDisplayMaskMode("Hidden");
+        return;
+    }
+    if (m_suppressChainRender) {
+        setDisplayMaskMode(suppressedMaskMode());
         return;
     }
     if (ModeName) {
@@ -593,10 +747,248 @@ void ViewProviderFemGeometry::setDisplayMode(const char* ModeName)
 
 std::vector<std::string> ViewProviderFemGeometry::getDisplayModes() const
 {
-    if (m_isChainStep) {
+    if (m_isChainStep && !m_chainPreview) {
         return {};
     }
     return {"Surface", "Wireframe"};
+}
+
+void ViewProviderFemGeometry::setElementHighlight(
+    const std::string& role,
+    const std::set<std::string>& elements,
+    const Base::Color& color
+)
+{
+    auto it = std::find_if(
+        m_elementHighlights.begin(),
+        m_elementHighlights.end(),
+        [&role](const auto& entry) { return entry.role == role; }
+    );
+
+    if (elements.empty()) {
+        if (it == m_elementHighlights.end()) {
+            return;
+        }
+        m_elementHighlights.erase(it);
+    }
+    else if (it != m_elementHighlights.end()) {
+        if (it->elements == elements && it->color == color) {
+            return;
+        }
+        it->elements = elements;
+        it->color = color;
+    }
+    else {
+        m_elementHighlights.push_back({role, elements, color});
+    }
+
+    updateColors();
+    updateElementHighlight();
+}
+
+void ViewProviderFemGeometry::clearElementHighlight(const std::string& role)
+{
+    setElementHighlight(role, {}, Base::Color());
+}
+
+std::set<std::string> ViewProviderFemGeometry::elementHighlight(const std::string& role) const
+{
+    for (const auto& entry : m_elementHighlights) {
+        if (entry.role == role) {
+            return entry.elements;
+        }
+    }
+    return {};
+}
+
+Base::Color ViewProviderFemGeometry::defaultElementHighlightColor()
+{
+    // Apart from the green of a selection and the orange of a hover, so a mark
+    // is never mistaken for either.
+    return Base::Color(0.85f, 0.15f, 0.85f);
+}
+
+const Base::Color* ViewProviderFemGeometry::elementHighlightColor(const std::string& element) const
+{
+    if (element.empty()) {
+        return nullptr;
+    }
+    // Backwards: of two roles naming the same element, the one set last wins.
+    for (auto it = m_elementHighlights.rbegin(); it != m_elementHighlights.rend(); ++it) {
+        if (it->elements.count(element) > 0) {
+            return &it->color;
+        }
+    }
+    return nullptr;
+}
+
+const Base::Color* ViewProviderFemGeometry::idHighlightColor(vtkIdType id) const
+{
+    if (m_elementHighlights.empty()) {
+        return nullptr;
+    }
+    // A mark on a toplevel covers everything below it, and m_id_elements is what
+    // ties a rendered part back to the toplevels it belongs to.
+    auto it = m_id_elements.find(id);
+    if (it == m_id_elements.end()) {
+        return nullptr;
+    }
+    for (const auto& owner : it->second) {
+        if (const auto* color = elementHighlightColor(owner)) {
+            return color;
+        }
+    }
+    return nullptr;
+}
+
+const Base::Color* ViewProviderFemGeometry::highlightColorForPart(
+    const std::string& element,
+    vtkIdType id
+) const
+{
+    if (m_elementHighlights.empty()) {
+        return nullptr;
+    }
+    if (const auto* color = elementHighlightColor(element)) {
+        return color;
+    }
+    return idHighlightColor(id);
+}
+
+std::string ViewProviderFemGeometry::elementForShapeId(vtkIdType id, const char* fallbackPrefix)
+    const
+{
+    if (id <= 0 || m_shape.IsNull()) {
+        return {};
+    }
+    auto* geom_obj = getObject<Fem::FemGeometry>();
+    if (!geom_obj) {
+        return {};
+    }
+    auto subshape = m_shape->GetSubShape(id);
+    if (subshape.IsNull()) {
+        return {};
+    }
+
+    // Clip-plane interiors are tagged with the solid id, so the type of the
+    // subshape has the last word on the name and the caller's guess is only used
+    // for types that have no name of their own here.
+    const char* prefix = fallbackPrefix;
+    switch (subshape.ShapeType()) {
+        case TopAbs_SOLID:
+            prefix = "Solid";
+            break;
+        case TopAbs_SHELL:
+            prefix = "Shell";
+            break;
+        case TopAbs_FACE:
+            prefix = "Face";
+            break;
+        case TopAbs_EDGE:
+            prefix = "Edge";
+            break;
+        case TopAbs_VERTEX:
+            prefix = "Vertex";
+            break;
+        default:
+            break;
+    }
+    if (!prefix) {
+        return {};
+    }
+
+    const auto shape_id = geom_obj->Shape.getShape().findShape(subshape);
+    if (shape_id <= 0) {
+        return {};
+    }
+    return std::string(prefix) + std::to_string(shape_id);
+}
+
+void ViewProviderFemGeometry::updateElementHighlight()
+{
+    m_highlightoverlaylines->coordIndex.setNum(0);
+    m_highlightoverlaypoints->coordIndex.setNum(0);
+    if (m_elementHighlights.empty()) {
+        return;
+    }
+
+    // A marked element that is also selected or hovered keeps the feedback of
+    // the selection: drawing the mark over it would swallow the very colour that
+    // tells the user their click landed. Faces need no such rule, there
+    // SoBrepFaceSet paints the selection over the material by itself.
+    const auto marked_color =
+        [this](const std::string& element, vtkIdType id) -> const Base::Color* {
+        if (!element.empty()
+            && (m_selected.count(element) > 0 || m_preselected.count(element) > 0)) {
+            return nullptr;
+        }
+        return highlightColorForPart(element, id);
+    };
+
+    std::vector<int32_t> indices;
+    std::vector<Base::Color> colors;
+
+    // Edges: every polyline of m_lines is one line cell, in the order of
+    // m_lineids, so walking the runs pairs an index range with its shape id.
+    const int32_t* source = m_lines->coordIndex.getValues(0);
+    const int source_count = m_lines->coordIndex.getNum();
+    size_t polyline = 0;
+    int run_start = 0;
+    for (int i = 0; i < source_count; ++i) {
+        if (source[i] >= 0) {
+            continue;
+        }
+        if (polyline < m_lineids.size()) {
+            const auto shape_id = m_lineids[polyline];
+            const auto* color = marked_color(elementForShapeId(shape_id, "Edge"), shape_id);
+            if (color) {
+                indices.insert(indices.end(), source + run_start, source + i);
+                indices.push_back(-1);
+                colors.push_back(*color);
+            }
+        }
+        ++polyline;
+        run_start = i + 1;
+    }
+
+    if (!indices.empty()) {
+        m_highlightoverlaylines->coordIndex.setNum(static_cast<int>(indices.size()));
+        int32_t* target = m_highlightoverlaylines->coordIndex.startEditing();
+        std::copy(indices.begin(), indices.end(), target);
+        m_highlightoverlaylines->coordIndex.finishEditing();
+
+        m_highlightoverlaylinematerial->diffuseColor.setNum(static_cast<int>(colors.size()));
+        for (size_t i = 0; i < colors.size(); ++i) {
+            m_highlightoverlaylinematerial->diffuseColor
+                .set1Value(static_cast<int>(i), colors[i].r, colors[i].g, colors[i].b);
+        }
+    }
+
+    // Vertices: SoBrepPointSet draws the leading coordinates in the order of
+    // m_pointids, the same mapping getElement resolves a picked point through.
+    indices.clear();
+    colors.clear();
+    for (size_t i = 0; i < m_pointids.size(); ++i) {
+        const auto shape_id = m_pointids[i];
+        const auto* color = marked_color(elementForShapeId(shape_id, "Vertex"), shape_id);
+        if (color) {
+            indices.push_back(static_cast<int32_t>(i));
+            colors.push_back(*color);
+        }
+    }
+
+    if (!indices.empty()) {
+        m_highlightoverlaypoints->coordIndex.setNum(static_cast<int>(indices.size()));
+        int32_t* target = m_highlightoverlaypoints->coordIndex.startEditing();
+        std::copy(indices.begin(), indices.end(), target);
+        m_highlightoverlaypoints->coordIndex.finishEditing();
+
+        m_highlightoverlaypointmaterial->diffuseColor.setNum(static_cast<int>(colors.size()));
+        for (size_t i = 0; i < colors.size(); ++i) {
+            m_highlightoverlaypointmaterial->diffuseColor
+                .set1Value(static_cast<int>(i), colors[i].r, colors[i].g, colors[i].b);
+        }
+    }
 }
 
 void ViewProviderFemGeometry::addIdElement(vtkIdType id, const std::string& element)
@@ -644,11 +1036,9 @@ std::string ViewProviderFemGeometry::getElement(const SoDetail* detail) const
     if (!detail) {
         return {};
     }
-    auto* geom_obj = getObject<Fem::FemGeometry>();
-    if (!geom_obj) {
+    if (!getObject<Fem::FemGeometry>()) {
         return {};
     }
-    auto geometry = geom_obj->Shape.getShape();
 
     vtkIdType vtk_id = -1;
     const char* prefix = nullptr;
@@ -697,34 +1087,10 @@ std::string ViewProviderFemGeometry::getElement(const SoDetail* detail) const
         return {};
     }
 
-    auto subshape = m_shape->GetSubShape(vtk_id);
-    if (subshape.IsNull()) {
-        return {};
-    }
-
-    // Clip-plane interiors are tagged with the solid id; report SolidN so the
-    // highlight matches the cut face rather than a random Face of that solid.
-    if (subshape.ShapeType() == TopAbs_SOLID) {
-        prefix = "Solid";
-    }
-    else if (subshape.ShapeType() == TopAbs_SHELL) {
-        prefix = "Shell";
-    }
-    else if (subshape.ShapeType() == TopAbs_FACE) {
-        prefix = "Face";
-    }
-    else if (subshape.ShapeType() == TopAbs_EDGE) {
-        prefix = "Edge";
-    }
-    else if (subshape.ShapeType() == TopAbs_VERTEX) {
-        prefix = "Vertex";
-    }
-
-    const auto id = geometry.findShape(subshape);
-    if (id <= 0) {
-        return {};
-    }
-    return std::string(prefix) + std::to_string(id);
+    // Clip-plane interiors are tagged with the solid id; the name follows the
+    // type of the subshape so the highlight matches the cut face rather than a
+    // random Face of that solid.
+    return elementForShapeId(vtk_id, prefix);
 }
 
 SoDetail* ViewProviderFemGeometry::getDetail(const char* subelement) const
@@ -961,6 +1327,10 @@ void ViewProviderFemGeometry::applySelectionHighlight()
     }
     appendPartIndices(solidPreselect, m_faces->highlightPartIndex);
     m_faces->touch();
+
+    // The marks yield to the selection, so they follow it. This is also the one
+    // place every rebuild passes through, by way of resetSelectionVisuals.
+    updateElementHighlight();
 }
 
 void ViewProviderFemGeometry::resetSelectionVisuals()
@@ -1030,7 +1400,7 @@ void ViewProviderFemGeometry::onSelectionChanged(const Gui::SelectionChanges& /*
 void ViewProviderFemGeometry::updateData(const App::Property* prop)
 {
     Fem::FemGeometry* geometryObject = getObject<Fem::FemGeometry>();
-    if (prop == &geometryObject->Shape && !isChainStep()) {
+    if (prop == &geometryObject->Shape && (!isChainStep() || m_chainPreview)) {
         auto shape = geometryObject->Shape.getShape();
         m_shape = new IVtkOCC_Shape(shape.getShape());
         m_vtksource->SetShape(m_shape);
@@ -1070,7 +1440,7 @@ void ViewProviderFemGeometry::onChanged(const App::Property* prop)
 void ViewProviderFemGeometry::updateVTK()
 {
     auto* geom_obj = getObject<Fem::FemGeometry>();
-    if (!geom_obj || m_isChainStep) {
+    if (!geom_obj || (m_isChainStep && !m_chainPreview)) {
         return;
     }
 
@@ -1079,7 +1449,8 @@ void ViewProviderFemGeometry::updateVTK()
 
     const std::set<std::string> empty_hidden;
     const std::map<std::string, ClippingPlane> empty_clips;
-    const auto& filtered = state ? state->hiddenElements() : empty_hidden;
+    const auto& filtered =
+        (m_chainPreview || !state) ? empty_hidden : state->hiddenElements();
     const auto& clipper = state ? state->clipPlanes() : empty_clips;
     const DimensionMode dimMode = state ? state->dimensionMode() : DimensionMode::Highest;
 
@@ -1362,7 +1733,12 @@ void ViewProviderFemGeometry::updateColors()
             else {
                 cat = cat % static_cast<int>(cats.size());
             }
-            const auto& c = cats[static_cast<size_t>(cat)].color;
+            Base::Color c = cats[static_cast<size_t>(cat)].color;
+            // A mark outranks the colour mode: it is there to answer "did my
+            // pick land", which a category colour cannot.
+            if (const auto* marked = highlightColorForPart(element, vtkid)) {
+                c = *marked;
+            }
             m_facematerial->diffuseColor.set1Value(
                 static_cast<int>(i),
                 c.r,
@@ -1414,6 +1790,9 @@ void ViewProviderFemGeometry::updateColors()
             if (color_it != element_color.end()) {
                 face_color = color_it->second;
             }
+        }
+        if (const auto* marked = highlightColorForPart(elementForShapeId(vtkid, "Face"), vtkid)) {
+            face_color = *marked;
         }
         m_facematerial->diffuseColor.set1Value(
             static_cast<int>(i),
@@ -1649,10 +2028,13 @@ void ViewProviderFemGeometry::update3D()
     resetSelectionVisuals();
 
     const auto& clipper = state ? state->clipPlanes() : std::map<std::string, ClippingPlane> {};
-    const auto& hidden = state ? state->hiddenElements() : std::set<std::string> {};
+    const std::set<std::string> empty_hidden;
+    const auto& hidden =
+        (m_chainPreview || !state) ? empty_hidden : state->hiddenElements();
     const bool overlay_enabled = !state || state->overlay();
     const bool show_geometry_overlay =
-        overlay_enabled && (wireframe || !clipper.empty() || !hidden.empty());
+        !m_chainPreview
+        && overlay_enabled && (wireframe || !clipper.empty() || !hidden.empty());
     if (!show_geometry_overlay || !m_visgeometryoverlay) {
         m_geometryoverlay->coordIndex.setNum(0);
         return;

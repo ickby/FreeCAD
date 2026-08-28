@@ -44,3 +44,46 @@ class ViewProviderFemGeometry(ViewProviderDocumentObject):
     def syncSelectionHighlight(self) -> None:
         """Rebuild 3D selection highlight from the current Gui.Selection"""
         ...
+
+    def setChainPreview(self, on: bool, /) -> None:
+        """
+        Show this geometry while it is edited as a chain step.
+
+        The geometry group is hidden for the duration so its result does not
+        overlap the shape being picked on.
+        """
+        ...
+
+    def isChainRenderSuppressed(self) -> bool:
+        """True while a chain step preview hides this group's render."""
+        ...
+
+    def setElementHighlight(
+        self, role: str, elements: object, color: object = None, /
+    ) -> None:
+        """
+        Mark shape elements in a colour of their own, independent of the selection.
+
+        For panels holding references to geometry, so the picked elements stay
+        visible while the user goes on selecting. Marking is not selecting: it
+        survives a selection change and does not answer to one.
+
+        role : str
+            Names the marking consumer. Two panels can mark at once and each
+            clears only its own. Where roles overlap, the one set last wins.
+        elements : sequence of str
+            Element names, either toplevel (Solid2) or sub-element (Face7,
+            Edge3, Vertex1). A toplevel marks everything belonging to it. An
+            empty sequence clears the role.
+        color : tuple of float, optional
+            (r, g, b) in 0..1. Defaults to a distinct marking colour.
+        """
+        ...
+
+    def clearElementHighlight(self, role: str, /) -> None:
+        """Remove the marks of one role, leaving other roles alone."""
+        ...
+
+    def getElementHighlight(self, role: str, /) -> list[str]:
+        """Element names currently marked by that role."""
+        ...

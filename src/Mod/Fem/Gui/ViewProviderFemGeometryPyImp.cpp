@@ -84,6 +84,99 @@ PyObject* ViewProviderFemGeometryPy::syncSelectionHighlight(PyObject* args)
     Py_Return;
 }
 
+PyObject* ViewProviderFemGeometryPy::setChainPreview(PyObject* args)
+{
+    PyObject* pyOn = nullptr;
+    if (!PyArg_ParseTuple(args, "O!", &PyBool_Type, &pyOn)) {
+        return nullptr;
+    }
+    this->getViewProviderFemGeometryPtr()->setChainPreview(PyObject_IsTrue(pyOn) != 0);
+    Py_Return;
+}
+
+PyObject* ViewProviderFemGeometryPy::isChainRenderSuppressed(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    if (this->getViewProviderFemGeometryPtr()->isChainRenderSuppressed()) {
+        Py_RETURN_TRUE;
+    }
+    Py_RETURN_FALSE;
+}
+
+PyObject* ViewProviderFemGeometryPy::setElementHighlight(PyObject* args)
+{
+    char* role = nullptr;
+    PyObject* pyElements = nullptr;
+    PyObject* pyColor = nullptr;
+    if (!PyArg_ParseTuple(args, "sO|O", &role, &pyElements, &pyColor)) {
+        return nullptr;
+    }
+
+    Py_ssize_t count = PySequence_Check(pyElements) ? PySequence_Size(pyElements) : -1;
+    if (count < 0) {
+        PyErr_SetString(PyExc_TypeError, "elements must be a sequence of element names");
+        return nullptr;
+    }
+
+    std::set<std::string> elements;
+    for (Py_ssize_t i = 0; i < count; i++) {
+        Py::Object item(PySequence_GetItem(pyElements, i), true);
+        if (!PyUnicode_Check(item.ptr())) {
+            PyErr_SetString(PyExc_TypeError, "elements must be a sequence of element names");
+            return nullptr;
+        }
+        elements.insert(PyUnicode_AsUTF8(item.ptr()));
+    }
+
+    auto color = FemGui::ViewProviderFemGeometry::defaultElementHighlightColor();
+    if (pyColor && pyColor != Py_None) {
+        if (!PySequence_Check(pyColor) || PySequence_Size(pyColor) != 3) {
+            PyErr_SetString(PyExc_TypeError, "color must be an (r, g, b) sequence in 0..1");
+            return nullptr;
+        }
+        float channel[3] {};
+        for (Py_ssize_t i = 0; i < 3; i++) {
+            Py::Object item(PySequence_GetItem(pyColor, i), true);
+            const double value = PyFloat_AsDouble(item.ptr());
+            if (PyErr_Occurred()) {
+                return nullptr;
+            }
+            channel[i] = static_cast<float>(value);
+        }
+        color = Base::Color(channel[0], channel[1], channel[2]);
+    }
+
+    this->getViewProviderFemGeometryPtr()->setElementHighlight(role, elements, color);
+    Py_Return;
+}
+
+PyObject* ViewProviderFemGeometryPy::clearElementHighlight(PyObject* args)
+{
+    char* role = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &role)) {
+        return nullptr;
+    }
+
+    this->getViewProviderFemGeometryPtr()->clearElementHighlight(role);
+    Py_Return;
+}
+
+PyObject* ViewProviderFemGeometryPy::getElementHighlight(PyObject* args)
+{
+    char* role = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &role)) {
+        return nullptr;
+    }
+
+    Py::List elements;
+    for (const auto& element : this->getViewProviderFemGeometryPtr()->elementHighlight(role)) {
+        elements.append(Py::String(element));
+    }
+    return Py::new_reference_to(elements);
+}
+
 PyObject* ViewProviderFemGeometryPy::getCustomAttributes(const char* /*attr*/) const
 {
     return nullptr;

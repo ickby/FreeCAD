@@ -77,6 +77,12 @@ class CommandManager:
             active = FreeCADGui.ActiveDocument is not None
         elif self.is_active == "with_analysis":
             active = FemGui.getActiveAnalysis() is not None and self.active_analysis_in_active_doc()
+        elif self.is_active == "with_geometry_chain_input":
+            active = (
+                FemGui.getActiveAnalysis() is not None
+                and self.active_analysis_in_active_doc()
+                and self.geometry_chain_has_input()
+            )
         elif self.is_active == "with_results":
             active = (
                 FemGui.getActiveAnalysis() is not None
@@ -203,6 +209,15 @@ class CommandManager:
         from femtools import membertools
 
         return bool(membertools.get_member(analysis, "Fem::FemGeometry"))
+
+    def geometry_chain_has_input(self):
+        analysis = FemGui.getActiveAnalysis()
+        if analysis is None or not self.active_analysis_in_active_doc():
+            return False
+        from femtools import membertools
+
+        groups = membertools.get_member(analysis, "Fem::GeometryGroup")
+        return bool(groups and groups[0].Group)
 
     def femmesh_selected(self):
         sel = FreeCADGui.Selection.getSelection()

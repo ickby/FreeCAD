@@ -23,6 +23,10 @@
 
 # Gui Unit tests for the FEM module
 from femtest.gui.test_open import TestObjectOpen as FemGuiTest01
+from femtest.gui.test_geometry_partition import TestGeometryPartitionGui as FemGuiTest02
+from femtest.gui.test_geometry_marks import TestGeometryMarksGui as FemGuiTest03
 
 # dummy usage to get flake8 and lgtm quiet
 False if FemGuiTest01.__name__ else True
+False if FemGuiTest02.__name__ else True
+False if FemGuiTest03.__name__ else True

@@ -94,6 +94,23 @@ public:
 
     void updateData(const App::Property* prop) override;
     void onChanged(const App::Property* prop) override;
+    void finishRestoring() override;
+
+    QIcon mergeColorfulOverlayIcons(const QIcon& orig) const override;
+
+    /**
+     * The geometry group this object is a build step of, or nullptr.
+     *
+     * Steps of a chain have no visual of their own: the group owns the result
+     * shape and is the only object that renders it.
+     */
+    Fem::FemGeometry* chainOwner() const;
+    bool isChainStep() const
+    {
+        return chainOwner() != nullptr;
+    }
+    /** Mark this step as the one the group takes its result from. */
+    void setChainResult(bool result);
 
     std::string getElement(const SoDetail*) const override;
     SoDetail* getDetail(const char*) const override;
@@ -140,6 +157,11 @@ protected:
     void ensureViewStateConnection();
     void onViewStateChanged();
     AnalysisViewState* viewState() const;
+
+    /** Apply the chain role of this object: build step or result owner. */
+    void applyChainRole();
+    /** Refresh the roles of the steps below this group. */
+    void refreshChainSteps();
 
     /** Record that the shape with this vtk id belongs to a toplevel element. */
     void addIdElement(vtkIdType id, const std::string& element);
@@ -218,6 +240,12 @@ protected:
 
     AnalysisViewState::Connection m_viewStateConn;
     AnalysisViewState* m_boundViewState {nullptr};
+
+    // Chain role: a step renders nothing, the result step carries a tree badge
+    bool m_isChainStep {false};
+    bool m_isChainResult {false};
+    // Chain members of the last refresh, to hand their visual back when they go
+    std::set<std::string> m_chainMembers;
 
     // Cached view-state snapshot so colour-mode switches skip VTK rebuild
     bool m_viewStateCacheValid {false};

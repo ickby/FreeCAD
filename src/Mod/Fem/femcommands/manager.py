@@ -450,6 +450,15 @@ class CommandManager:
         analysis = FemGui.getActiveAnalysis()
         groups = membertools.get_member(analysis, "Fem::GeometryGroup")
 
+        # The order of the group is the order of the chain, so a new step goes
+        # right behind the selected one and takes over what it produced. Without
+        # a step selected it is appended and builds on the whole chain.
+        predecessor = None
+        if groups:
+            selection = FreeCADGui.Selection.getSelection()
+            if len(selection) == 1 and selection[0] in groups[0].Group:
+                predecessor = selection[0]
+
         FreeCAD.ActiveDocument.openTransaction(f"Create Fem{geometrytype}")
         FreeCADGui.addModule("ObjectsFem")
         FreeCADGui.addModule("FemGui")
@@ -468,5 +477,14 @@ class CommandManager:
             f"geometry_obj = _group.addObject("
             f"ObjectsFem.make{geometrytype}(FreeCAD.ActiveDocument))[0]"
         )
+        if predecessor is not None:
+            FreeCADGui.doCommand("_steps = list(_group.Group)")
+            FreeCADGui.doCommand("_steps.remove(geometry_obj)")
+            FreeCADGui.doCommand(
+                "_steps.insert("
+                f"_steps.index(FreeCAD.ActiveDocument.{predecessor.Name}) + 1, geometry_obj)"
+            )
+            FreeCADGui.doCommand("_group.Group = _steps")
+
         FreeCADGui.Selection.clearSelection()
         FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(geometry_obj.Name)")

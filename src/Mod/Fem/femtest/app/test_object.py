@@ -245,6 +245,9 @@ class TestObjectType(unittest.TestCase):
         )
         self.assertEqual("Fem::GeometryGroup", type_of_obj(ObjectsFem.makeGeometryGroup(doc)))
         self.assertEqual("Fem::GeometryImport", type_of_obj(ObjectsFem.makeGeometryImport(doc)))
+        self.assertEqual(
+            "Fem::GeometryPartition", type_of_obj(ObjectsFem.makeGeometryPartition(doc))
+        )
         materialsolid = ObjectsFem.makeMaterialSolid(doc)
         self.assertEqual("Fem::MaterialCommon", type_of_obj(ObjectsFem.makeMaterialFluid(doc)))
         self.assertEqual("Fem::MaterialCommon", type_of_obj(materialsolid))
@@ -445,6 +448,7 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(is_of_type(ObjectsFem.makeElementRotation1D(doc), "Fem::ElementRotation1D"))
         self.assertTrue(is_of_type(ObjectsFem.makeGeometryGroup(doc), "Fem::GeometryGroup"))
         self.assertTrue(is_of_type(ObjectsFem.makeGeometryImport(doc), "Fem::GeometryImport"))
+        self.assertTrue(is_of_type(ObjectsFem.makeGeometryPartition(doc), "Fem::GeometryPartition"))
         materialsolid = ObjectsFem.makeMaterialSolid(doc)
         self.assertTrue(is_of_type(ObjectsFem.makeMaterialFluid(doc), "Fem::MaterialCommon"))
         self.assertTrue(is_of_type(materialsolid, "Fem::MaterialCommon"))
@@ -798,6 +802,10 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(is_derived_from(geometry_import, "Fem::FemGeometryPython"))
         self.assertTrue(is_derived_from(geometry_import, "Fem::GeometryImport"))
 
+        # GeometryPartition
+        geometry_partition = ObjectsFem.makeGeometryPartition(doc)
+        self.assertTrue(is_derived_from(geometry_partition, "Fem::GeometryPartition"))
+
         # Material Fluid
         material_fluid = ObjectsFem.makeMaterialFluid(doc)
         self.assertTrue(is_derived_from(material_fluid, "App::DocumentObject"))
@@ -1117,6 +1125,9 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(ObjectsFem.makeElementRotation1D(doc).isDerivedFrom("Fem::FeaturePython"))
         self.assertTrue(ObjectsFem.makeGeometryGroup(doc).isDerivedFrom("Fem::FemGeometryPython"))
         self.assertTrue(ObjectsFem.makeGeometryImport(doc).isDerivedFrom("Fem::FemGeometryPython"))
+        self.assertTrue(
+            ObjectsFem.makeGeometryPartition(doc).isDerivedFrom("Fem::FemGeometryPython")
+        )
         materialsolid = ObjectsFem.makeMaterialSolid(doc)
         self.assertTrue(
             ObjectsFem.makeMaterialFluid(doc).isDerivedFrom("App::MaterialObjectPython")
@@ -1280,6 +1291,7 @@ def create_all_fem_objects_doc(doc):
 
     analysis.addObject(ObjectsFem.makeGeometryGroup(doc))
     analysis.addObject(ObjectsFem.makeGeometryImport(doc))
+    analysis.addObject(ObjectsFem.makeGeometryPartition(doc))
 
     analysis.addObject(ObjectsFem.makeMaterialFluid(doc))
     mat = analysis.addObject(ObjectsFem.makeMaterialSolid(doc))[0]

@@ -68,6 +68,35 @@ def move_step(obj, offset):
     doc.recompute()
 
 
+def set_input_preview(obj, on):
+    """Show the input shape of a chain step while its task panel is open."""
+    base = obj.Base
+    if base is not None and base.ViewObject is not None:
+        base.ViewObject.setChainPreview(on)
+
+
+def set_input_marks(obj, role, elements, color=None):
+    """
+    Colour the elements a chain step refers to on the input shape it is picked
+    from, so the panel and the 3D view agree on what is already chosen.
+
+    The role keeps one panel's marks apart from another's; passing no elements
+    drops that role.
+    """
+    base = obj.Base
+    if base is not None and base.ViewObject is not None:
+        base.ViewObject.setElementHighlight(role, list(elements), color)
+
+
+def clear_input_marks(obj, *roles):
+    """Drop the given roles from the input shape of a chain step."""
+    base = obj.Base
+    if base is None or base.ViewObject is None:
+        return
+    for role in roles:
+        base.ViewObject.clearElementHighlight(role)
+
+
 class VPGeometryGroup(view_base_femobject.VPBaseFemObject):
     """
     View provider for GeometryGroup. Adds the geo-feature-group extension
@@ -140,6 +169,34 @@ class VPGeometryImport(VPGeometryStep):
 
     def setEdit(self, vobj, mode=0):
         return super().setEdit(vobj, mode, task_geometry._ImportTaskPanel, hide_mesh=False)
+
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        return None
+
+
+class VPGeometryPartition(VPGeometryStep):
+    """View provider for GeometryPartition."""
+
+    def __init__(self, vobj):
+        super().__init__(vobj)
+
+    def getIcon(self):
+        return ":/icons/FEM_GeometryPartition.svg"
+
+    def setEdit(self, vobj, mode=0):
+        from femtaskpanels import task_geometry_partition
+
+        set_input_preview(vobj.Object, True)
+        return super().setEdit(
+            vobj, mode, task_geometry_partition._PartitionTaskPanel, hide_mesh=False
+        )
+
+    def unsetEdit(self, vobj, mode=0):
+        set_input_preview(vobj.Object, False)
+        return super().unsetEdit(vobj, mode)
 
     def dumps(self):
         return None

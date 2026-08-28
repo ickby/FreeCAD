@@ -90,7 +90,7 @@ def get_single_member(analysis, t):
     return objs[0] if objs else None
 
 
-def get_several_member(analysis, t):
+def get_several_member(analysis, t, resolve_imports=False):
     """Get members and pack them for Calculix/Z88.
 
     Collect members by calling :py:func:`get_member` and pack them into a
@@ -98,6 +98,9 @@ def get_several_member(analysis, t):
 
     :param analysis: see :py:func:`get_member`
     :param t: see :py:func:`get_member`
+    :param resolve_imports: when True, append the members inherited from the
+        analyses this one imports, their references named by the path to the
+        instance they apply to.
 
     :returns:
      A list containing one dict per member. Each dict has two entries:
@@ -123,6 +126,14 @@ def get_several_member(analysis, t):
     """
     # if no member is found, an empty list is returned
     objs = get_member(analysis, t)
+    if resolve_imports:
+        from . import importmembers
+        from . import importtools
+
+        if importtools.analysis_has_imports(analysis):
+            # Native members already store their import references as paths, so
+            # only the inherited ones have to be built.
+            objs = list(objs) + importmembers.inherited_members(analysis, t)
     members = []
     for m in objs:
         obj_dict = {}
@@ -132,26 +143,31 @@ def get_several_member(analysis, t):
     return members
 
 
-def get_mesh_to_solve(analysis):
-    """Find one and only mesh object of *analysis*.
+def get_mesh_to_solve(analysis, validate=True):
+    """Return the mesh document object to pass to the solver."""
+    from . import importtools
 
-    :returns:
-     A tuple ``(object, message)``. If and only if the analysis contains
-     exactly one mesh object the first value of the tuple is the mesh document
-     object. Otherwise the first value is ``None`` and the second value is a
-     error message indicating what went wrong.
-    """
-    mesh_to_solve = None
+    has_imports = importtools.analysis_has_imports(analysis)
+    if validate and has_imports:
+        importtools.validate_imports(analysis)
+
+    native_mesh = None
     for m in analysis.Group:
         if m.isDerivedFrom("Fem::FemMeshObject") and not m.Suppressed:
-            if not mesh_to_solve:
-                mesh_to_solve = m
+            if not native_mesh:
+                native_mesh = m
             else:
                 raise Base.FreeCADError("FEM: multiple meshes in analysis are not supported yet")
-    if mesh_to_solve is not None:
-        return mesh_to_solve
-    else:
-        raise Base.FreeCADError("FEM: no mesh object found in analysis.")
+
+    if has_imports:
+        from . import solveassembly
+
+        return solveassembly.build(analysis)
+
+    if native_mesh is not None:
+        return native_mesh
+
+    raise Base.FreeCADError("FEM: no mesh object found in analysis.")
 
 
 class AnalysisMember:
@@ -291,4 +307,4 @@ class AnalysisMember:
         )
 
     def get_several_member(self, t):
-        return get_several_member(self.analysis, t)
+        return get_several_member(self.analysis, t, resolve_imports=True)

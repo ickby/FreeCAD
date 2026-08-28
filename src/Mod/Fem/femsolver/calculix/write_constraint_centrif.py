@@ -32,6 +32,8 @@ import math
 
 import FreeCAD
 
+from femmesh import meshtools
+
 
 def get_analysis_types():
     return ["buckling", "static", "thermomech"]
@@ -81,13 +83,13 @@ def write_constraint(f, femobj, centrif_obj, ccxwriter):
     # get some data from the centrif_obj
     refobj = centrif_obj.RotationAxis[0][0]
     subobj = centrif_obj.RotationAxis[0][1][0]
-    axis = refobj.Shape.getElement(subobj)
+    # The axis may sit on an imported analysis, which has no shape of its own
+    # and places what it references, so ask for the sub-shape where it ends up.
+    axis = meshtools.sub_shape_at_global_placement(refobj, subobj)
 
     if axis.Curve.TypeId == "Part::GeomLine":
-        axiscopy = axis.copy()  # apply global placement to copy
-        axiscopy.Placement = refobj.getGlobalPlacement()
-        direction = axiscopy.Curve.Direction
-        location = axiscopy.Curve.Location
+        direction = axis.Curve.Direction
+        location = axis.Curve.Location
     else:  # no line found, set default
         # TODO: No test at all in the writer
         # they should all be before in prechecks

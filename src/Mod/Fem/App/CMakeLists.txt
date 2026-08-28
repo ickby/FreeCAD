@@ -129,6 +129,10 @@ SET(FemBase_SRCS
     FemGeometry.h
     FemAnalysis.cpp
     FemAnalysis.h
+    FemAnalysisImport.cpp
+    FemSolveAssembly.cpp
+    FemAnalysisImport.h
+    FemSolveAssembly.h
     FemMesh.cpp
     FemMesh.h
     FemResultObject.cpp

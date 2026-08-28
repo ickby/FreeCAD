@@ -37,6 +37,9 @@
 #include "FemMesh.h"
 #include "FemMeshObject.h"
 #include "FemMeshPy.h"
+#include "FemAnalysis.h"
+#include "FemSolveAssembly.h"
+#include <Mod/Part/App/PartPyCXX.h>
 #ifdef FC_USE_VTK
 # include "FemPostPipeline.h"
 # include "FemVTKTools.h"
@@ -117,6 +120,11 @@ public:
             &Module::show,
             "show(shape,[string]) -- Add the mesh to the active document or create "
             "one if no document exists."
+        );
+        add_varargs_method(
+            "buildSolveAssembly",
+            &Module::buildSolveAssembly,
+            "buildSolveAssembly(analysis) -- Merge native and imported meshes for solving."
         );
         initialize("This module is the Fem module.");  // register with Python
     }
@@ -424,6 +432,41 @@ private:
         pcDoc->recompute();
 
         return Py::None();
+    }
+
+    Py::Object buildSolveAssembly(const Py::Tuple& args)
+    {
+        PyObject* pyAnalysis = nullptr;
+        if (!PyArg_ParseTuple(args.ptr(), "O!", &(App::DocumentObjectPy::Type), &pyAnalysis)) {
+            throw Py::Exception();
+        }
+
+        auto* analysis = Base::freecad_cast<Fem::FemAnalysis*>(
+            static_cast<App::DocumentObjectPy*>(pyAnalysis)->getDocumentObjectPtr()
+        );
+        if (!analysis) {
+            throw Py::TypeError("Expected a Fem::FemAnalysis object");
+        }
+        const SolveAssemblyResult result = Fem::buildSolveAssembly(analysis);
+
+        Py::Tuple tuple(4);
+        tuple.setItem(0, Py::asObject(new FemMeshPy(new FemMesh(result.mesh))));
+        tuple.setItem(1, Py::Object(Py::new_reference_to(shape2pyshape(result.shape)), true));
+        Py::List sources;
+        for (const auto& entry : result.cellSources) {
+            sources.append(Py::String(entry));
+        }
+        tuple.setItem(2, sources);
+        Py::Dict nodeSources;
+        for (const auto& [path, nodes] : result.nodeSources) {
+            Py::Dict mapping;
+            for (const auto& [sourceId, assemblyId] : nodes) {
+                mapping.setItem(Py::Long(sourceId), Py::Long(assemblyId));
+            }
+            nodeSources.setItem(Py::String(path), mapping);
+        }
+        tuple.setItem(3, nodeSources);
+        return tuple;
     }
 };
 

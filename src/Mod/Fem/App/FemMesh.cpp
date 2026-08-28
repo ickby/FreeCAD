@@ -148,6 +148,18 @@ void FemMesh::appendMeshData(
     std::vector<std::string>* cellSources
 )
 {
+    appendMeshData(mesh, sourceName, cellSources, nullptr, nullptr, nullptr);
+}
+
+void FemMesh::appendMeshData(
+    const FemMesh& mesh,
+    const std::string& sourceName,
+    std::vector<std::string>* cellSources,
+    const Base::Matrix4D* transformOverride,
+    const std::function<std::string(const std::string&)>* groupRenamer,
+    std::map<int, int>* nodeIdMap
+)
+{
     // Do not overwrite this->_Mtrx with mesh._Mtrx — each child's placement is
     // applied to node coordinates so the accumulated mesh stays in the group frame.
 
@@ -155,7 +167,8 @@ void FemMesh::appendMeshData(
     SMESHDS_Mesh* appendMeshDS = this->myMesh->GetMeshDS();
     SMESH_MeshEditor editor(this->myMesh);
 
-    const Base::Matrix4D childTrsf = mesh.getTransform();
+    const Base::Matrix4D childTrsf =
+        transformOverride ? *transformOverride : mesh.getTransform();
     const bool applyTrsf = (childTrsf != Base::Matrix4D());
 
     SMDS_ElemIteratorPtr srcElemIt = srcMeshDS->elementsIterator();
@@ -176,6 +189,9 @@ void FemMesh::appendMeshData(
         }
         auto newNode = appendMeshDS->AddNode(x, y, z);
         node_map[node->GetID()] = newNode;
+        if (nodeIdMap && newNode) {
+            (*nodeIdMap)[node->GetID()] = newNode->GetID();
+        }
     }
 
     std::map<int, const SMDS_MeshElement*> element_map;
@@ -260,13 +276,22 @@ void FemMesh::appendMeshData(
             continue;
         }
 
+        const bool named = group->GetName() != nullptr;
+        std::string targetName = named ? group->GetName() : "";
+        if (named && groupRenamer) {
+            targetName = (*groupRenamer)(targetName);
+            if (targetName.empty()) {
+                continue;
+            }
+        }
+
         SMESH_Group* targetGroup = nullptr;
         for (int id : this->myMesh->GetGroupIds()) {
             SMESH_Group* existing = this->myMesh->GetGroup(id);
             if (existing && existing->GetGroupDS()
                 && existing->GetGroupDS()->GetType() == groupType
-                && existing->GetName() && group->GetName()
-                && std::strcmp(existing->GetName(), group->GetName()) == 0) {
+                && existing->GetName() && named
+                && std::strcmp(existing->GetName(), targetName.c_str()) == 0) {
                 targetGroup = existing;
                 break;
             }
@@ -274,7 +299,7 @@ void FemMesh::appendMeshData(
 
         if (!targetGroup) {
             int aId = -1;
-            targetGroup = this->myMesh->AddGroup(groupType, group->GetName(), aId);
+            targetGroup = this->myMesh->AddGroup(groupType, targetName.c_str(), aId);
         }
 
         if (targetGroup) {

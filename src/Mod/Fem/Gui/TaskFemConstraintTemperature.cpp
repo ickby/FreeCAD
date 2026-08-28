@@ -221,13 +221,17 @@ void TaskFemConstraintTemperature::addToSelection()
 
         const std::vector<std::string>& subNames = it.getSubNames();
         for (const auto& subName : subNames) {  // for every selected sub element
+
+            App::DocumentObject* refObj = obj;
+            std::string refSub = subName;
+            normalizeReference(refObj, refSub);
             bool addMe = true;
-            for (auto itr = std::ranges::find(SubElements, subName); itr != SubElements.end(); itr
+            for (auto itr = std::ranges::find(SubElements, refSub); itr != SubElements.end(); itr
                  = std::find(++itr,
                              SubElements.end(),
-                             subName)) {  // for every sub element in selection that
+                             refSub)) {  // for every sub element in selection that
                                           // matches one in old list
-                if (obj
+                if (refObj
                     == Objects[std::distance(
                         SubElements.begin(),
                         itr
@@ -238,9 +242,9 @@ void TaskFemConstraintTemperature::addToSelection()
             }
             if (addMe) {
                 QSignalBlocker block(ui->lw_references);
-                Objects.push_back(obj);
-                SubElements.push_back(subName);
-                ui->lw_references->addItem(makeRefText(obj, subName));
+                Objects.push_back(refObj);
+                SubElements.push_back(refSub);
+                ui->lw_references->addItem(makeRefText(refObj, refSub));
             }
         }
     }

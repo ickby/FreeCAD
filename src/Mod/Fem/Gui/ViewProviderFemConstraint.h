@@ -30,6 +30,7 @@
 #include <Gui/ViewProviderFeaturePython.h>
 #include <Mod/Fem/FemGlobal.h>
 
+#include <Base/Placement.h>
 #include <Gui/ViewProviderSuppressibleExtension.h>
 
 
@@ -81,6 +82,9 @@ public:
      */
     void loadSymbol(const char* fileName);
 
+    /** Build a symbol subtree with optional placement pre-transform. */
+    SoSeparator* makeSymbolInstance(const Base::Placement& pre) const;
+
     static std::string gethideMeshShowPartStr();
     static std::string gethideMeshShowPartStr(const std::string showConstr);
 
@@ -95,6 +99,7 @@ protected:
     ) override;
 
     void updateSymbol();
+    void fillSymbolMatrices(SoMultipleCopy* multCopy, const Base::Placement* pre = nullptr) const;
     virtual void transformSymbol(
         const Base::Vector3d& point,
         const Base::Vector3d& normal,

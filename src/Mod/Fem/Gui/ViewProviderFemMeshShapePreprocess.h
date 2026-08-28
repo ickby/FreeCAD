@@ -22,22 +22,14 @@
 
 #pragma once
 
-#include <map>
-#include <set>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include <Gui/ViewProviderFeaturePython.h>
 #include <Mod/Fem/FemGlobal.h>
 
-#include "AnalysisViewState.h"
-#include "FemMeshRenderer.h"
-#include "FemViewTypes.h"
+#include "FemPreprocessMeshViewHelper.h"
 #include "ViewProviderFemMeshShape.h"
-
-#include <vtkSmartPointer.h>
-#include <vtkUnstructuredGrid.h>
 
 class SoSeparator;
 
@@ -106,51 +98,14 @@ public:
     void syncRepresentation();
 
 protected:
-    void ensureViewStateConnection();
-    void onViewStateChanged();
-    void updateMeshFromProperty();
-    void applyViewState(bool meshChanged);
-    void updateStageVisibility();
-    void rebuildSelectionMaps();
-    /// Keep the analysis view state informed about which grid this VP renders.
-    void registerGrid();
-
     Fem::FemAnalysis* findAnalysis() const;
     Fem::FemGeometry* findGeometry() const;
-    AnalysisViewState* viewState() const;
+    void updateMeshFromProperty();
+    void updateStageVisibility();
 
-    FemMeshRenderer m_renderer;
+    FemPreprocessMeshViewHelper m_preprocessMesh;
     /// Empty scene graph used to hide the object outside the mesh stage.
     SoSeparator* m_hidden {nullptr};
-    /// Set once the "Preprocess" display mask mode has been registered.
-    bool m_preprocessModeAdded {false};
-    /// Set while the preprocess representation reflects the current FemMesh.
-    bool m_preprocessBuilt {false};
-
-    vtkSmartPointer<vtkUnstructuredGrid> m_vtkmesh;
-
-    AnalysisViewState::Connection m_viewStateConn;
-    AnalysisViewState* m_boundViewState {nullptr};
-    /// Grid currently registered with m_boundViewState, may be an older one.
-    vtkUnstructuredGrid* m_registeredGrid {nullptr};
-
-    // Selection: Coin index → entity name; entity → first Coin index
-    std::vector<std::string> m_faceEntities;
-    std::vector<std::string> m_lineEntities;
-    std::vector<std::string> m_pointEntities;
-    std::unordered_map<std::string, int> m_entityToFace;
-    std::unordered_map<std::string, int> m_entityToLine;
-    std::unordered_map<std::string, int> m_entityToPoint;
-
-    // Cached view-state snapshot for colour-only updates
-    bool m_viewStateCacheValid {false};
-    DimensionMode m_cachedDimMode {DimensionMode::Highest};
-    bool m_cachedWireframe {false};
-    // Qualified: the inherited ColorMode property would shadow the enum name.
-    FemGui::ColorMode m_cachedColorMode {FemGui::ColorMode::Subelement};
-    std::set<std::string> m_cachedHidden;
-    std::set<std::string> m_cachedHiddenCellTypes;
-    std::map<std::string, ClippingPlane> m_cachedClips;
 };
 
 using ViewProviderFemMeshShapePreprocessPython

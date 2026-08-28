@@ -602,6 +602,9 @@ SET(FemTools_SRCS
     femtools/errors.py
     femtools/femutils.py
     femtools/geomtools.py
+    femtools/importtools.py
+    femtools/importmembers.py
+    femtools/solveassembly.py
     femtools/membertools.py
     femtools/migrate_app.py
     femtools/objecttools.py

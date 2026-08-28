@@ -188,6 +188,7 @@ protected:
         const IVtk_ShapeIdList& passthrough_ids
     );
     void update3D();
+    void updateGeometryOverlay();
     void applySelectionHighlight();
     /**
      * Drop selection state that indexes into the part table and rebuild it.

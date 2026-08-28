@@ -102,6 +102,31 @@ def _make_tet_mesh():
     return mesh, vol, [f1, f2, f3, f4]
 
 
+def _make_two_solid_tet_mesh():
+    """Two tetrahedra in a group each, so one solid can be hidden by name."""
+    mesh = Fem.FemMesh()
+    for solid, offset in ((1, 0.0), (2, 4.0)):
+        base = mesh.NodeCount
+        mesh.addNode(offset, 0, 0, base + 1)
+        mesh.addNode(offset + 1, 0, 0, base + 2)
+        mesh.addNode(offset, 1, 0, base + 3)
+        mesh.addNode(offset, 0, 1, base + 4)
+        nodes = [base + 1, base + 2, base + 3, base + 4]
+        vol = mesh.addVolume(nodes)
+        gid = mesh.addGroup(f"Solid{solid}", "Volume")
+        mesh.addGroupElements(gid, [vol])
+        faces = [
+            mesh.addFace([nodes[0], nodes[1], nodes[2]]),
+            mesh.addFace([nodes[0], nodes[1], nodes[3]]),
+            mesh.addFace([nodes[0], nodes[2], nodes[3]]),
+            mesh.addFace([nodes[1], nodes[2], nodes[3]]),
+        ]
+        for i, face in enumerate(faces, start=1 + (solid - 1) * 4):
+            fid = mesh.addGroup(f"Face{i}", "Face")
+            mesh.addGroupElements(fid, [face])
+    return mesh
+
+
 def _exported_element_ids(mesh, elem_param):
     """Element ids written to an ABAQUS input deck, keyed by element type."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -1501,6 +1526,58 @@ class TestViewStatePersistence(unittest.TestCase):
         self.assertEqual(list(analysis.ViewObject.ViewClipPlaneNames), [])
         self.assertEqual(list(analysis.ViewObject.ViewClipPlaneData), [])
 
+    def test_a_clip_plane_can_be_restricted_to_one_instance(self):
+        """
+        A clip plane carries the path of what it cuts, empty for the whole
+        analysis, and keeps it across a save and reload.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for AnalysisViewState persistence props")
+
+        import FemGui
+
+        analysis = ObjectsFem.makeAnalysis(self.document)
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(analysis)
+        state.setClipPlane("all", FreeCAD.Vector(), FreeCAD.Vector(0, 0, 1))
+        state.setClipPlane("one", FreeCAD.Vector(1, 0, 0), FreeCAD.Vector(1, 0, 0), "Import1")
+
+        planes = state.getClipPlanes()
+        self.assertEqual(planes["all"][2], "")
+        self.assertEqual(planes["one"][2], "Import1")
+
+        name = analysis.Name
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "clip_scope.FCStd")
+            self.document.saveAs(path)
+            FreeCAD.closeDocument(self.document.Name)
+            self.document = FreeCAD.openDocument(path)
+
+        restored = FemGui.getAnalysisViewState(self.document.getObject(name)).getClipPlanes()
+        self.assertEqual(restored["all"][2], "")
+        self.assertEqual(restored["one"][2], "Import1")
+
+    def test_hidden_elements_of_an_instance_are_named_by_path(self):
+        """
+        The same element of two instances is hidden independently, because the
+        name it is hidden under is the path to it.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for AnalysisViewState persistence props")
+
+        import FemGui
+
+        analysis = ObjectsFem.makeAnalysis(self.document)
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(analysis)
+        state.setElementHidden("Import1.Face3", True)
+        self.assertTrue(state.isElementHidden("Import1.Face3"))
+        self.assertFalse(state.isElementHidden("Import2.Face3"))
+        self.assertFalse(state.isElementHidden("Face3"))
+        self.assertEqual(set(analysis.ViewObject.ViewHiddenElements), {"Import1.Face3"})
+
     def test_view_state_is_restored_from_the_view_provider(self):
         """A reloaded document restores the hidden elements into the view state."""
         if not FreeCAD.GuiUp:
@@ -1523,3 +1600,1840 @@ class TestViewStatePersistence(unittest.TestCase):
 
             state = FemGui.getAnalysisViewState(reloaded)
             self.assertTrue(state.isElementHidden("Solid1"))
+
+
+class TestAnalysisImport(unittest.TestCase):
+    fcc_print("import TestAnalysisImport")
+
+    def setUp(self):
+        self.document = FreeCAD.newDocument(self.__class__.__name__)
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.document.Name)
+
+    def _leg_analysis(self):
+        leg, geom, mesh_group, _, _ = self._leg_analysis_with_members(with_members=False)
+        return leg, geom, mesh_group
+
+    def _leg_analysis_with_members(self, with_members=False):
+        leg = ObjectsFem.makeAnalysis(self.document, "LegAnalysis")
+        geom = ObjectsFem.makeGeometryGroup(self.document, "LegGeometry")
+        leg.addObject(geom)
+        source = self.document.addObject("Part::Feature", "LegPart")
+        source.Shape = _box()
+        imp = ObjectsFem.makeGeometryImport(self.document)
+        imp.Import = [source]
+        geom.Group = [imp]
+
+        mesh_group = ObjectsFem.makeMeshShapeGroup(self.document, geometry=geom, analysis=leg)
+        mesh_obj = self.document.addObject("Fem::FemMeshObject", "LegMesh")
+        mesh_obj.FemMesh = _make_tet_mesh()[0]
+        mesh_group.addObject(mesh_obj)
+        mat = fixed = None
+        if with_members:
+            mat = ObjectsFem.makeMaterialSolid(self.document, "LegMaterial")
+            card = mat.Material
+            card["Name"] = "CalculiX-Steel"
+            card["YoungsModulus"] = "210000 MPa"
+            card["PoissonRatio"] = "0.30"
+            card["Density"] = "7900 kg/m^3"
+            mat.Material = card
+            mat.References = [(geom, ["Solid1"])]
+            leg.addObject(mat)
+            fixed = ObjectsFem.makeConstraintFixed(self.document, "LegFixed")
+            fixed.References = [(geom, ["Face1"])]
+            leg.addObject(fixed)
+        self.document.recompute()
+        return leg, geom, mesh_group, mat, fixed
+
+    def _add_import(self, table, leg, name="Leg1", vector=None):
+        from femtools import importtools
+
+        imp = ObjectsFem.makeAnalysisImport(self.document, name)
+        imp.Analysis = leg
+        if vector is not None:
+            imp.Placement = FreeCAD.Placement(vector, FreeCAD.Rotation())
+        return imp, importtools.wire_import(table, imp)
+
+    def _table_analysis(self, mesh_group=False, native=False):
+        """
+        The analysis that imports others.
+
+        With *native* it brings a geometry and a mesh of its own, so the solve
+        assembly has to join native and imported pieces rather than only place
+        the imported ones.
+        """
+        table = ObjectsFem.makeAnalysis(self.document, "Table")
+        geometry = ObjectsFem.makeGeometryGroup(self.document, "TableGeometry")
+        table.addObject(geometry)
+        if native:
+            source = self.document.addObject("Part::Feature", "TablePart")
+            source.Shape = _box()
+            imp = ObjectsFem.makeGeometryImport(self.document)
+            imp.Import = [source]
+            geometry.Group = [imp]
+        group = None
+        if mesh_group:
+            group = ObjectsFem.makeMeshShapeGroup(self.document, geometry=geometry, analysis=table)
+            if native:
+                mesh_obj = self.document.addObject("Fem::FemMeshObject", "TableMesh")
+                mesh_obj.FemMesh = _make_tet_mesh()[0]
+                group.addObject(mesh_obj)
+        self.document.recompute()
+        return table, geometry, group
+
+    @staticmethod
+    def _group_names(mesh):
+        return {mesh.getGroupName(gid) for gid in mesh.Groups}
+
+    def test_00print(self):
+        fcc_print(
+            "\n{0}\n{1} run FEM TestAnalysisImport tests {2}\n{0}".format(
+                100 * "*", 10 * "*", 49 * "*"
+            )
+        )
+
+    def test_import_group_created_once(self):
+        from femtools import importtools
+
+        leg, _, _ = self._leg_analysis()
+        table, _, _ = self._table_analysis()
+        self._add_import(table, leg, "Leg1")
+        self._add_import(table, leg, "Leg2")
+        groups = [m for m in table.Group if importtools.is_import_group(m)]
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0].Group), 2)
+
+    def test_a_second_analysis_keeps_one_import_group(self):
+        """
+        Internal names are unique across a document, so the container of the
+        second analysis to import anything cannot be called Imports. Looking
+        for that name alone never finds it again and every further import
+        leaves another container behind.
+        """
+        from femtools import importtools
+
+        leg, _, _ = self._leg_analysis()
+        first, _, _ = self._table_analysis()
+        self._add_import(first, leg, "Leg1")
+
+        second, _, _ = self._table_analysis()
+        self._add_import(second, leg, "Leg2")
+        self._add_import(second, leg, "Leg3")
+
+        groups = [m for m in second.Group if importtools.is_import_group(m)]
+        self.assertEqual(len(groups), 1)
+        self.assertNotEqual(groups[0].Name, "Imports")
+        self.assertEqual(len(groups[0].Group), 2)
+
+    def test_spare_import_groups_are_folded_together(self):
+        """An analysis left with several containers settles back on one."""
+        from femtools import importtools
+
+        leg, _, _ = self._leg_analysis()
+        table, _, _ = self._table_analysis()
+        populated = ObjectsFem.makeImportGroup(self.document)
+        table.addObject(populated)
+        stray = ObjectsFem.makeAnalysisImport(self.document, "Stray")
+        stray.Analysis = leg
+        populated.addObject(stray)
+        empty = ObjectsFem.makeImportGroup(self.document).Name
+        table.addObject(self.document.getObject(empty))
+
+        imp, group = self._add_import(table, leg, "Leg1")
+
+        self.assertEqual([m for m in table.Group if importtools.is_import_group(m)], [group])
+        self.assertEqual(set(group.Group), {imp, stray})
+        self.assertIsNone(self.document.getObject(empty))
+
+    def test_import_into_a_fresh_analysis_wires_itself(self):
+        """A fresh analysis only needs an Imports container; geometry is not merged."""
+        from femtools import importtools, membertools
+
+        leg, _, _ = self._leg_analysis()
+        fresh = ObjectsFem.makeAnalysis(self.document, "Fresh")
+        self.assertEqual(membertools.get_member(fresh, "Fem::GeometryGroup"), [])
+
+        imp, import_group = self._add_import(fresh, leg)
+        self.document.recompute()
+
+        self.assertEqual(importtools.find_import_group(fresh), import_group)
+        self.assertEqual(list(import_group.Group), [imp])
+        self.assertNotIn("Invalid", imp.State)
+        solid = imp.getSubObject("Solid1")
+        self.assertIsNotNone(solid)
+        self.assertGreater(solid.Volume, 0.0)
+
+        self._add_import(fresh, leg, "Leg2")
+        self.document.recompute()
+        self.assertEqual(len(import_group.Group), 2)
+        self.assertEqual(len(membertools.get_member(fresh, "Fem::GeometryGroup")), 0)
+
+    def test_import_icon_resource_loads(self):
+        """The tree and toolbar both address the import icon by this name."""
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for icon resources")
+
+        from PySide import QtGui
+
+        pixmap = QtGui.QPixmap(":/icons/FEM_AnalysisImport.svg")
+        self.assertFalse(pixmap.isNull())
+
+    def test_import_view_provider_can_be_shown(self):
+        """The import renders itself and exposes a display mode."""
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        leg, _, _ = self._leg_analysis()
+        table, _, _ = self._table_analysis()
+        imp, _ = self._add_import(table, leg)
+        self.document.recompute()
+
+        view = imp.ViewObject
+        self.assertGreater(len(view.listDisplayModes()), 0)
+        view.Visibility = True
+        self.assertTrue(view.isVisible())
+
+    def test_colour_categories_grow_with_a_second_import(self):
+        """Every imported solid needs its own colour category.
+
+        The categories are cached on the analysis view state and used to be
+        dropped only on a stage or colour mode switch, so the solids of a later
+        import found no category, fell back to the first one and came out in a
+        single colour. Reading them before the second import is the point of the
+        test: that is what fills the cache, and it is what the view panel does,
+        since it observes the document before the view providers do.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for the analysis view state")
+
+        import FemGui
+
+        leg, _, _ = self._leg_analysis()
+        table, table_geom, _ = self._table_analysis()
+        self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(table)
+        first = {c["key"] for c in state.getCategories()}
+        self.assertTrue(first)
+
+        self._add_import(table, leg, "Leg2", FreeCAD.Vector(200, 0, 0))
+        self.document.recompute()
+
+        second = {c["key"] for c in state.getCategories()}
+        self.assertGreater(len(second), len(first))
+
+    def _two_solid_leg(self, with_material=False, per_solid_mesh=False):
+        """A source analysis with two solids, so a colour per solid is visible."""
+        leg = ObjectsFem.makeAnalysis(self.document, "LegAnalysis")
+        geom = ObjectsFem.makeGeometryGroup(self.document, "LegGeometry")
+        leg.addObject(geom)
+        first = self.document.addObject("Part::Feature", "PartA")
+        first.Shape = _box()
+        second = self.document.addObject("Part::Feature", "PartB")
+        second.Shape = _box()
+        second.Placement = FreeCAD.Placement(FreeCAD.Vector(30, 0, 0), FreeCAD.Rotation())
+        step = ObjectsFem.makeGeometryImport(self.document)
+        step.Import = [first, second]
+        geom.Group = [step]
+        mesh_group = ObjectsFem.makeMeshShapeGroup(self.document, geometry=geom, analysis=leg)
+        mesh_obj = self.document.addObject("Fem::FemMeshObject", "LegMesh")
+        mesh_obj.FemMesh = _make_two_solid_tet_mesh() if per_solid_mesh else _make_tet_mesh()[0]
+        mesh_group.addObject(mesh_obj)
+        if with_material:
+            mat = ObjectsFem.makeMaterialSolid(self.document, "LegMaterial")
+            card = mat.Material
+            card["Name"] = "CalculiX-Steel"
+            card["YoungsModulus"] = "210000 MPa"
+            card["PoissonRatio"] = "0.30"
+            card["Density"] = "7900 kg/m^3"
+            mat.Material = card
+            mat.References = [(geom, ["Solid1", "Solid2"])]
+            leg.addObject(mat)
+        self.document.recompute()
+        return leg, geom
+
+    @staticmethod
+    def _geometry_face_colours(view_object):
+        """
+        Colours the import paints its geometry faces in.
+
+        Only the branch that is traversed for rendering is searched, so this is
+        the geometry of the active stage and not the mesh. A symbol material
+        carries a single colour, a face material one per BREP face.
+        """
+        from pivy import coin
+
+        search = coin.SoSearchAction()
+        search.setType(coin.SoMaterial.getClassTypeId())
+        search.setInterest(coin.SoSearchAction.ALL)
+        search.apply(view_object.RootNode)
+        paths = search.getPaths()
+        colours = []
+        for i in range(paths.getLength()):
+            material = paths[i].getTail()
+            count = material.diffuseColor.getNum()
+            if count < 2:
+                continue
+            colours.extend(
+                tuple(round(v, 3) for v in material.diffuseColor[j].getValue())
+                for j in range(count)
+            )
+        return colours
+
+    def test_imported_geometry_is_coloured_per_solid(self):
+        """
+        Each solid of an instance takes the colour of its own category. The
+        faces of a solid have no category of their own, so they have to fall
+        back to the solid they belong to rather than to the first category —
+        which would paint the whole instance in one colour.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FemGui
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(table)
+        state.setColorMode("Toplevel")
+        by_key = {
+            c["key"]: tuple(round(v, 3) for v in c["color"][:3]) for c in state.getCategories()
+        }
+        self.assertIn("Leg1.Solid1", by_key)
+        self.assertIn("Leg1.Solid2", by_key)
+
+        colours = self._geometry_face_colours(imp.ViewObject)
+        self.assertTrue(colours, "the instance draws its source geometry")
+        self.assertEqual(
+            set(colours),
+            {by_key["Leg1.Solid1"], by_key["Leg1.Solid2"]},
+            "each solid of the instance wears its own category colour",
+        )
+
+    def test_imported_geometry_follows_a_colour_mode_switch(self):
+        """
+        An import is put into its analysis after its view provider is attached,
+        so the helpers that draw it start out without a view state. Unless they
+        pick one up they keep drawing what they guessed at build time and no
+        panel setting ever reaches them.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FemGui
+
+        leg, _ = self._two_solid_leg(with_material=True)
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(table)
+        state.setColorMode("Toplevel")
+        self.assertEqual(
+            len(set(self._geometry_face_colours(imp.ViewObject))),
+            2,
+            "one colour per solid while the colour follows the elements",
+        )
+
+        # Both solids share a material, so the instance turns into one colour
+        state.setColorMode("Material")
+        material_colours = set(self._geometry_face_colours(imp.ViewObject))
+        self.assertEqual(len(material_colours), 1)
+        by_key = {
+            c["key"]: tuple(round(v, 3) for v in c["color"][:3]) for c in state.getCategories()
+        }
+        self.assertIn("CalculiX-Steel", by_key)
+        self.assertEqual(material_colours, {by_key["CalculiX-Steel"]})
+
+    @staticmethod
+    def _drawn_geometry(view_object):
+        """
+        What an instance hands to Coin for its geometry.
+
+        Returns the face indices, the parts they are grouped into and the points
+        those indices address, all of the branch that is traversed for
+        rendering.
+        """
+        from pivy import coin
+
+        search = coin.SoSearchAction()
+        search.setType(coin.SoIndexedFaceSet.getClassTypeId())
+        search.setInterest(coin.SoSearchAction.ALL)
+        search.apply(view_object.RootNode)
+        paths = search.getPaths()
+        for i in range(paths.getLength()):
+            path = paths[i]
+            node = path.getTail()
+            if node.getTypeId().getName() != "SoBrepFaceSet":
+                continue
+            parent = path.getNodeFromTail(1)
+            points = []
+            for child in range(parent.getNumChildren()):
+                candidate = parent.getChild(child)
+                if candidate.isOfType(coin.SoCoordinate3.getClassTypeId()):
+                    points = [
+                        candidate.point[j].getValue() for j in range(candidate.point.getNum())
+                    ]
+            indices = [node.coordIndex[j] for j in range(node.coordIndex.getNum())]
+            parts = [node.partIndex[j] for j in range(node.partIndex.getNum())]
+            return indices, parts, points
+        return None
+
+    @staticmethod
+    def _drawn_height(drawn):
+        """
+        Extent along z of the surfaces that are drawn.
+
+        Only the points the faces address: the edges share the same coordinates
+        and are not cut by a clip plane, so they say nothing about the surfaces.
+        """
+        indices, _, points = drawn
+        zs = [points[i][2] for i in set(indices) if i >= 0]
+        return max(zs) - min(zs)
+
+    def _assert_geometry_is_consistent(self, drawn, what):
+        """Every index names a point that exists and belongs to exactly one part."""
+        indices, parts, points = drawn
+        self.assertTrue(indices, f"{what}: something has to be drawn")
+        self.assertLess(
+            max(indices),
+            len(points),
+            f"{what}: an index past the last point draws a triangle between unrelated points",
+        )
+        self.assertEqual(
+            sum(parts),
+            indices.count(-1),
+            f"{what}: the parts have to add up to the triangles that were written",
+        )
+
+    def test_hiding_an_imported_solid_leaves_no_stale_triangles(self):
+        """
+        Coin fields keep what was written last time, so an update that draws
+        less than the one before it has to truncate them. Without that the tail
+        of the previous, longer geometry stays behind and is drawn as triangles
+        between whatever points are now at those indices.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FemGui
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(table)
+        whole = self._drawn_geometry(imp.ViewObject)
+        self._assert_geometry_is_consistent(whole, "both solids")
+
+        state.setElementHidden("Leg1.Solid1", True)
+        rest = self._drawn_geometry(imp.ViewObject)
+        self._assert_geometry_is_consistent(rest, "one solid hidden")
+        self.assertLess(len(rest[0]), len(whole[0]), "the hidden solid must be gone")
+
+        state.setElementHidden("Leg1.Solid1", False)
+        again = self._drawn_geometry(imp.ViewObject)
+        self._assert_geometry_is_consistent(again, "both solids again")
+        self.assertEqual(len(again[0]), len(whole[0]))
+
+    def test_clipping_an_import_cuts_its_surfaces(self):
+        """
+        A clip plane cuts the instance and caps the solids it cuts. The cap is
+        appended to the clipped geometry, which only keeps the cell metadata the
+        two share — so a cap without it takes the shape ids down with it and
+        leaves nothing that can be drawn.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FemGui
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(table)
+        whole = self._drawn_geometry(imp.ViewObject)
+        self._assert_geometry_is_consistent(whole, "unclipped")
+
+        # Halfway up the boxes, in the coordinates of the importing analysis
+        state.setClipPlane("clip", FreeCAD.Vector(80, 0, 5), FreeCAD.Vector(0, 0, 1))
+        clipped = self._drawn_geometry(imp.ViewObject)
+        self._assert_geometry_is_consistent(clipped, "clipped")
+        self.assertAlmostEqual(
+            self._drawn_height(clipped),
+            self._drawn_height(whole) / 2.0,
+            delta=0.5,
+            msg="half of the instance is cut away",
+        )
+
+        state.removeClipPlane("clip")
+        restored = self._drawn_geometry(imp.ViewObject)
+        self._assert_geometry_is_consistent(restored, "clip removed")
+        self.assertEqual(len(restored[0]), len(whole[0]))
+        self.assertAlmostEqual(self._drawn_height(restored), self._drawn_height(whole), places=4)
+
+    @staticmethod
+    def _picked_element(view_object, origin, direction):
+        """Name the instance gives the surface a ray from *origin* first meets."""
+        from pivy import coin
+
+        action = coin.SoRayPickAction(coin.SbViewportRegion(64, 64))
+        action.setRay(coin.SbVec3f(*origin), coin.SbVec3f(*direction))
+        action.setPickAll(False)
+        action.apply(view_object.RootNode)
+        point = action.getPickedPoint()
+        if point is None:
+            return None
+        return view_object.getElementPicked(point)
+
+    @staticmethod
+    def _part_indices(view_object, field):
+        """Face parts of an instance listed in *field*, e.g. selectionPartIndex."""
+        from pivy import coin
+
+        search = coin.SoSearchAction()
+        search.setType(coin.SoIndexedFaceSet.getClassTypeId())
+        search.setInterest(coin.SoSearchAction.ALL)
+        search.setSearchingAll(True)
+        search.apply(view_object.RootNode)
+        paths = search.getPaths()
+        indices = []
+        for i in range(paths.getLength()):
+            node = paths[i].getTail()
+            if node.getTypeId().getName() != "SoBrepFaceSet":
+                continue
+            values = node.getField(field)
+            indices += [values[j] for j in range(values.getNum())]
+        return indices
+
+    @staticmethod
+    def _drawn_ghost(view_object):
+        """
+        Faces of the ghost overlay an instance draws over its geometry.
+
+        Only the branch that is traversed for rendering, so in the geometry
+        stage the ghost of the mesh is out of reach. Counted by the separators
+        that close the faces, an index set that draws nothing still holds one
+        index.
+        """
+        from pivy import coin
+
+        search = coin.SoSearchAction()
+        search.setType(coin.SoIndexedFaceSet.getClassTypeId())
+        search.setInterest(coin.SoSearchAction.ALL)
+        search.apply(view_object.RootNode)
+        paths = search.getPaths()
+        faces = 0
+        for i in range(paths.getLength()):
+            node = paths[i].getTail()
+            if node.getTypeId().getName() != "IndexedFaceSet":
+                continue
+            faces += sum(1 for j in range(node.coordIndex.getNum()) if node.coordIndex[j] < 0)
+        return faces
+
+    def test_an_import_highlights_in_the_colour_the_user_picked(self):
+        """
+        Solids are highlighted through the overlay fields of the face set,
+        whose colours default to a red of their own rather than to the ones
+        every other preselection in the view uses.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        from pivy import coin
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        parameters = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/View")
+        expected = {}
+        for field, key, fallback in (
+            ("highlightColor", "HighlightColor", 0xFF9900FF),
+            ("selectionColor", "SelectionColor", 0x1ACC1AFF),
+        ):
+            packed = parameters.GetUnsigned(key, fallback)
+            expected[field] = tuple(
+                round(((packed >> shift) & 0xFF) / 255.0, 3) for shift in (24, 16, 8)
+            )
+
+        search = coin.SoSearchAction()
+        search.setType(coin.SoIndexedFaceSet.getClassTypeId())
+        search.setInterest(coin.SoSearchAction.ALL)
+        search.setSearchingAll(True)
+        search.apply(imp.ViewObject.RootNode)
+        paths = search.getPaths()
+        seen = 0
+        for i in range(paths.getLength()):
+            node = paths[i].getTail()
+            if node.getTypeId().getName() != "SoBrepFaceSet":
+                continue
+            seen += 1
+            for field, colour in expected.items():
+                value = node.getField(field).getValue().getValue()
+                self.assertEqual(tuple(round(c, 3) for c in value), colour, field)
+        self.assertTrue(seen, "the instance has to draw its faces through a BREP face set")
+
+    def test_an_import_ghosts_what_it_leaves_out(self):
+        """
+        The ghost overlay stands for the geometry that is not drawn, so it only
+        appears once something is missing — and above all when a clip plane
+        takes the whole instance, which is when nothing else is left to say
+        where it went.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FemGui
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(table)
+        self.assertEqual(self._drawn_ghost(imp.ViewObject), 0, "nothing is missing yet")
+
+        state.setElementHidden("Leg1.Solid1", True)
+        whole = self._drawn_ghost(imp.ViewObject)
+        self.assertGreater(whole, 0, "the hidden solid is what the ghost is there for")
+
+        # Well below the instance, so the clip leaves nothing of it
+        state.setElementHidden("Leg1.Solid1", False)
+        state.setClipPlane("clip", FreeCAD.Vector(0, 0, 1000), FreeCAD.Vector(0, 0, 1))
+        self.assertEqual(
+            self._drawn_ghost(imp.ViewObject),
+            whole,
+            "an instance clipped away entirely still has a ghost",
+        )
+
+        state.setOverlay(False)
+        self.assertEqual(self._drawn_ghost(imp.ViewObject), 0, "the user turned it off")
+
+        state.setOverlay(True)
+        state.removeClipPlane("clip")
+        self.assertEqual(self._drawn_ghost(imp.ViewObject), 0, "nothing is missing again")
+
+    def test_a_cut_face_of_an_import_names_the_solid_it_cuts(self):
+        """
+        The cut face a clip plane leaves behind stands for the whole solid, and
+        is tagged with its shape id rather than one of a face. Naming it from
+        the kind of element the caller expected turns that id into a face that
+        is somewhere else entirely.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FemGui
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(table)
+        above = ((85, 5, 100), (0, 0, -1))
+        below = ((85, 5, -100), (0, 0, 1))
+
+        for origin, direction in (above, below):
+            picked = self._picked_element(imp.ViewObject, origin, direction)
+            self.assertTrue(
+                picked and picked.startswith("Face"),
+                f"an uncut surface is a face of its own, got {picked}",
+            )
+
+        # Halfway up the boxes, in the coordinates of the importing analysis
+        state.setClipPlane("clip", FreeCAD.Vector(80, 0, 5), FreeCAD.Vector(0, 0, 1))
+        picks = {
+            self._picked_element(imp.ViewObject, origin, direction)
+            for origin, direction in (above, below)
+        }
+        self.assertIn("Solid1", picks, f"the cut face names the solid it cuts, got {picks}")
+
+    def test_selecting_an_imported_solid_lights_up_its_faces(self):
+        """
+        A solid has no part of its own to highlight, so the instance lights
+        every face of it. Nothing tells the view provider that a solid it never
+        rendered under its own name was selected, so it has to watch.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FreeCADGui
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        FreeCADGui.Selection.clearSelection()
+        self.assertEqual(self._part_indices(imp.ViewObject, "selectionPartIndex"), [])
+
+        FreeCADGui.Selection.addSelection(self.document.Name, imp.Name, "Solid1")
+        selected = self._part_indices(imp.ViewObject, "selectionPartIndex")
+        self.assertEqual(len(selected), 6, "every face of the box the solid is")
+
+        FreeCADGui.Selection.addSelection(self.document.Name, imp.Name, "Solid2")
+        both = self._part_indices(imp.ViewObject, "selectionPartIndex")
+        self.assertEqual(len(both), 12, "the faces of both solids")
+
+        FreeCADGui.Selection.clearSelection()
+        self.assertEqual(self._part_indices(imp.ViewObject, "selectionPartIndex"), [])
+
+    def test_hovering_an_imported_solid_lights_up_its_faces(self):
+        """
+        Hovering a cut face preselects the solid, which the detail behind the
+        pick can only name one face of. The rest of them go through the
+        highlight overlay instead.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FreeCADGui
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        FreeCADGui.Selection.clearPreselection()
+        self.assertEqual(self._part_indices(imp.ViewObject, "highlightPartIndex"), [])
+
+        FreeCADGui.Selection.setPreselection(imp, "Solid2")
+        self.assertEqual(len(self._part_indices(imp.ViewObject, "highlightPartIndex")), 6)
+
+        # A face is highlighted by the detail the pick already carries, so it
+        # has no business in the overlay.
+        FreeCADGui.Selection.setPreselection(imp, "Face1")
+        self.assertEqual(self._part_indices(imp.ViewObject, "highlightPartIndex"), [])
+
+        FreeCADGui.Selection.clearPreselection()
+        self.assertEqual(self._part_indices(imp.ViewObject, "highlightPartIndex"), [])
+
+    @staticmethod
+    def _drawn_mesh(view_object):
+        """
+        Number of mesh faces an instance hands to Coin, 0 while it draws none.
+
+        Counted by the separators that close them, since the field of an index
+        set that draws nothing is not empty but holds a single index. The mesh
+        renderer writes plain index sets, the geometry BREP ones.
+        """
+        from pivy import coin
+
+        search = coin.SoSearchAction()
+        search.setType(coin.SoIndexedFaceSet.getClassTypeId())
+        search.setInterest(coin.SoSearchAction.ALL)
+        search.setSearchingAll(True)
+        search.apply(view_object.RootNode)
+        paths = search.getPaths()
+        drawn = 0
+        for i in range(paths.getLength()):
+            node = paths[i].getTail()
+            if node.getTypeId().getName() != "IndexedFaceSet":
+                continue
+            faces = sum(1 for j in range(node.coordIndex.getNum()) if node.coordIndex[j] < 0)
+            drawn = max(drawn, faces)
+        return drawn
+
+    @staticmethod
+    def _mesh_categories(view_object):
+        """Category indices the mesh of an instance is coloured by."""
+        from pivy import coin
+
+        search = coin.SoSearchAction()
+        search.setType(coin.SoIndexedFaceSet.getClassTypeId())
+        search.setInterest(coin.SoSearchAction.ALL)
+        search.setSearchingAll(True)
+        search.apply(view_object.RootNode)
+        paths = search.getPaths()
+        used = set()
+        for i in range(paths.getLength()):
+            node = paths[i].getTail()
+            if node.getTypeId().getName() != "IndexedFaceSet":
+                continue
+            if node.coordIndex.getNum() == 0:
+                continue
+            used.update(node.materialIndex[j] for j in range(node.materialIndex.getNum()))
+        return used
+
+    def test_an_import_draws_its_mesh_after_a_reload(self):
+        """
+        A mesh comes out of its own file in the archive, later than the objects
+        that ask for it. An instance that read the merge of the source mesh
+        group in that window got an empty one, and nothing about restoring the
+        children afterwards says so.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FemGui
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        table_name = table.Name
+        import_name = imp.Name
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "import_mesh.FCStd")
+            self.document.saveAs(path)
+            FreeCAD.closeDocument(self.document.Name)
+            # tearDown closes self.document, so hand it the reloaded one
+            self.document = FreeCAD.openDocument(path)
+
+        table = self.document.getObject(table_name)
+        imp = self.document.getObject(import_name)
+        state = FemGui.getAnalysisViewState(table)
+        state.setActiveStage("Mesh")
+        self.assertGreater(
+            self._drawn_mesh(imp.ViewObject),
+            0,
+            "the instance draws the mesh of its source in the mesh stage",
+        )
+
+    def test_hiding_an_imported_solid_hides_its_mesh(self):
+        """
+        The mesh of an instance follows the panel like its geometry does. The
+        element names its cells carry are those of the source analysis, and
+        losing them on the way into the instance leaves a mesh that nothing can
+        be hidden from.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FemGui
+
+        leg, _ = self._two_solid_leg(per_solid_mesh=True)
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(table)
+        state.setActiveStage("Mesh")
+        # The ghost of what is hidden is drawn too, and says nothing about this
+        state.setOverlay(False)
+        whole = self._drawn_mesh(imp.ViewObject)
+        self.assertGreater(whole, 0, "the instance draws the mesh of its source")
+
+        state.setElementHidden("Leg1.Solid1", True)
+        rest = self._drawn_mesh(imp.ViewObject)
+        self.assertLess(rest, whole, "the cells of the hidden solid must be gone")
+        self.assertGreater(rest, 0, "the other solid keeps its cells")
+
+        state.setElementHidden("Leg1.Solid1", False)
+        self.assertEqual(self._drawn_mesh(imp.ViewObject), whole)
+
+    def test_two_instances_colour_their_meshes_apart(self):
+        """
+        Two instances of one source place the same mesh, and its cells name
+        their elements as the source does. Read without the path they lead to
+        the same categories for both instances, and to categories of a native
+        element where the names happen to meet.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FemGui
+
+        leg, _ = self._two_solid_leg(per_solid_mesh=True)
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        first, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        second, _ = self._add_import(table, leg, "Leg2", vector=FreeCAD.Vector(160, 0, 0))
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(table)
+        state.setActiveStage("Mesh")
+        state.setColorMode("Toplevel")
+
+        keys = [c["key"] for c in state.getCategories()]
+        self.assertIn("Leg1.Solid1", keys)
+        self.assertIn("Leg2.Solid1", keys)
+        self.assertEqual(
+            len(keys),
+            len(set(keys)),
+            "a category is named once",
+        )
+
+        by_key = {key: index for index, key in enumerate(keys)}
+        drawn_first = self._mesh_categories(first.ViewObject)
+        drawn_second = self._mesh_categories(second.ViewObject)
+        self.assertTrue(drawn_first and drawn_second, "both instances draw a mesh")
+        self.assertFalse(
+            drawn_first & drawn_second,
+            "the mesh of an instance wears the colours of its own elements",
+        )
+        self.assertEqual(
+            drawn_first,
+            {by_key["Leg1.Solid1"], by_key["Leg1.Solid2"]},
+            "a solid of an instance is coloured by the category of its path",
+        )
+        self.assertEqual(drawn_second, {by_key["Leg2.Solid1"], by_key["Leg2.Solid2"]})
+
+    def test_hiding_an_imported_element_reaches_the_view(self):
+        """Switching a solid of an instance off has to take it off the screen."""
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FemGui
+        from pivy import coin
+
+        def drawn_width(view_object):
+            action = coin.SoGetBoundingBoxAction(coin.SbViewportRegion(400, 400))
+            action.apply(view_object.RootNode)
+            box = action.getBoundingBox()
+            return None if box.isEmpty() else box.getSize().getValue()[0]
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(80, 0, 0))
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(table)
+        state.setOverlay(False)
+        whole = drawn_width(imp.ViewObject)
+        self.assertIsNotNone(whole, "the instance draws both solids")
+
+        state.setElementHidden("Leg1.Solid1", True)
+        rest = drawn_width(imp.ViewObject)
+        self.assertIsNotNone(rest, "the other solid stays on screen")
+        self.assertLess(rest, whole, "the hidden solid must be gone")
+
+        state.setElementHidden("Leg1.Solid1", False)
+        self.assertAlmostEqual(drawn_width(imp.ViewObject), whole, places=4)
+
+    @staticmethod
+    def _drawn_bound_box(view_object):
+        """Where in the analysis an instance puts the surfaces it draws."""
+        from pivy import coin
+
+        search = coin.SoSearchAction()
+        search.setType(coin.SoIndexedFaceSet.getClassTypeId())
+        search.setInterest(coin.SoSearchAction.ALL)
+        search.apply(view_object.RootNode)
+        paths = search.getPaths()
+        box = coin.SbBox3f()
+        for i in range(paths.getLength()):
+            if paths[i].getTail().getTypeId().getName() != "SoBrepFaceSet":
+                continue
+            action = coin.SoGetBoundingBoxAction(coin.SbViewportRegion(400, 400))
+            action.apply(paths[i])
+            box.extendBy(action.getBoundingBox())
+        return box
+
+    def test_a_nested_instance_is_drawn_where_the_model_places_it(self):
+        """
+        The branch of a nested instance hangs inside the branch of the one it
+        belongs to, which already carries that placement. Writing the whole
+        chain into it as well applies everything above twice, and the deeper a
+        level sits the further it drifts from the rest.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        leg, _ = self._two_solid_leg()
+        middle, _, _ = self._table_analysis(mesh_group=True)
+        inner, _ = self._add_import(middle, leg, "Leg1", vector=FreeCAD.Vector(0, 0, 30))
+        self.document.recompute()
+
+        outer, _, _ = self._table_analysis(mesh_group=True)
+        outer_imp, _ = self._add_import(outer, middle, "Middle1", vector=FreeCAD.Vector(0, 0, 100))
+        self.document.recompute()
+
+        expected = outer_imp.getSubObject(f"{inner.Name}.Solid1").BoundBox
+        drawn = self._drawn_bound_box(outer_imp.ViewObject)
+        self.assertFalse(drawn.isEmpty(), "the nested instance has to draw something")
+        self.assertAlmostEqual(drawn.getMin().getValue()[2], expected.ZMin, delta=1e-3)
+        self.assertAlmostEqual(drawn.getMax().getValue()[2], expected.ZMax, delta=1e-3)
+
+    def test_the_placement_panel_opens_with_a_dragger(self):
+        """
+        Placing the instance is what the panel is for, so the dragger is up
+        from the start. Its size is a fraction of the screen, which means
+        nothing to a dragger that follows no camera: it reads the number as a
+        length in millimetres and draws itself too small to find.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FreeCADGui
+        from pivy import coin
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(0, -200, 40))
+        self.document.recompute()
+
+        gui_document = FreeCADGui.getDocument(self.document.Name)
+        self.assertTrue(gui_document.setEdit(imp.ViewObject, 0))
+        try:
+            search = coin.SoSearchAction()
+            search.setType(coin.SoDragger.getClassTypeId())
+            search.setInterest(coin.SoSearchAction.FIRST)
+            search.setSearchingAll(True)
+            search.apply(imp.ViewObject.RootNode)
+            path = search.getPath()
+            self.assertIsNotNone(path, "the panel comes up with the dragger already there")
+
+            dragger = path.getTail()
+            self.assertFalse(
+                dragger.getField("autoScaleResult").isConnectedFromField(),
+                "a dragger that follows no camera is drawn microscopically small",
+            )
+            self.assertEqual(
+                dragger.getField("translation").getValue().getValue(),
+                (0.0, -200.0, 40.0),
+            )
+        finally:
+            gui_document.resetEdit()
+
+    def test_the_placement_panel_leaves_the_instance_where_it_is(self):
+        """
+        Setting a field up makes it report a value, and an empty field reports
+        zero. Read back as an edit, opening the panel drops the instance at the
+        origin before it has been touched.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        import FreeCADGui
+
+        leg, _ = self._two_solid_leg()
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(0, -200, 40))
+        self.document.recompute()
+        before = imp.Placement.Base
+
+        gui_document = FreeCADGui.getDocument(self.document.Name)
+        self.assertTrue(gui_document.setEdit(imp.ViewObject, 0))
+        try:
+            self.assertEqual(imp.Placement.Base, before)
+        finally:
+            gui_document.resetEdit()
+
+    def test_import_subobject_respects_placement(self):
+        """References on the import resolve through getSubObject with placement."""
+        leg, leg_geom, _ = self._leg_analysis()
+        table, _, _ = self._table_analysis()
+        offset = FreeCAD.Vector(100, 0, 0)
+        imp, _ = self._add_import(table, leg, "Leg1", offset)
+        self.document.recompute()
+
+        source = leg_geom.Shape.getElement("Face1").BoundBox.Center
+        placed = imp.getSubObject("Face1").BoundBox.Center
+        self.assertEqual(placed, source + offset)
+
+    def test_dragging_import_does_not_rebuild_source(self):
+        """Moving an import must not touch the source analysis mesh revision."""
+        leg, _, mesh_group = self._leg_analysis()
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+        before = mesh_group.FemMesh.NodeCount
+
+        imp.Placement = FreeCAD.Placement(FreeCAD.Vector(50, 0, 0), FreeCAD.Rotation())
+        self.document.recompute()
+        self.assertEqual(mesh_group.FemMesh.NodeCount, before)
+
+    def test_import_cycle_is_rejected(self):
+        leg, _, _ = self._leg_analysis()
+        table, _, _ = self._table_analysis()
+        self._add_import(table, leg)
+        self.document.recompute()
+        back, _ = self._add_import(leg, table, "BackImport")
+
+        # A link cycle is a cycle in the dependency graph too, and whether the
+        # document recompute still reaches the import depends on the rest of the
+        # graph. Recompute the import itself so this pins the guard rather than
+        # that ordering.
+        self.document.recompute()
+        back.recompute()
+        self.assertIn("Invalid", back.State)
+
+    def test_self_import_is_rejected(self):
+        leg, _, _ = self._leg_analysis()
+        imp, _ = self._add_import(leg, leg, "SelfImport")
+        self.document.recompute()
+        imp.recompute()
+        self.assertIn("Invalid", imp.State)
+
+    def test_imported_analysis_can_be_prepared_for_solving(self):
+        from femtools import membertools
+
+        leg, _, _, _, _ = self._leg_analysis_with_members(with_members=True)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        self._add_import(table, leg)
+        self.document.recompute()
+        mesh = membertools.get_mesh_to_solve(table)
+        self.assertIsNotNone(mesh)
+        self.assertTrue(mesh.FemMesh.NodeCount > 0)
+
+    def test_solve_assembly_follows_import_placement(self):
+        from femtools import membertools
+
+        leg, _, _ = self._leg_analysis()
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+        assembly = membertools.get_mesh_to_solve(table)
+        self.assertEqual(assembly.FemMesh.Nodes[1], FreeCAD.Vector(0, 0, 0))
+
+        offset = FreeCAD.Vector(50, 0, 0)
+        imp.Placement = FreeCAD.Placement(offset, FreeCAD.Rotation())
+        self.document.recompute()
+        assembly = membertools.get_mesh_to_solve(table)
+        self.assertEqual(assembly.FemMesh.Nodes[1], offset)
+
+    def test_solve_assembly_groups_use_path_names(self):
+        """
+        A group of an instance is named after the path to it, joined the way an
+        inherited member name is, so that the group-data lookup of meshtools
+        finds a member's group by name instead of searching geometrically.
+        """
+        from femtools import membertools
+
+        leg, _, _ = self._leg_analysis()
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+        assembly = membertools.get_mesh_to_solve(table)
+        names = self._group_names(assembly.FemMesh)
+        self.assertIn(f"{imp.Name}_Solid1", names)
+        self.assertNotIn(f"{imp.Name}.Solid1", names)
+
+    def test_two_instances_share_template_distinct_assembly_nodes(self):
+        from femtools import membertools
+
+        leg, _, mesh_group = self._leg_analysis()
+        table, _, _ = self._table_analysis(mesh_group=True)
+        self._add_import(table, leg, "Leg1")
+        self._add_import(table, leg, "Leg2", vector=FreeCAD.Vector(20, 0, 0))
+        self.document.recompute()
+
+        source_nodes = mesh_group.FemMesh.NodeCount
+        assembly = membertools.get_mesh_to_solve(table)
+        self.assertEqual(assembly.FemMesh.NodeCount, 2 * source_nodes)
+
+    def test_inherited_members_use_path_references(self):
+        from femtools import importmembers, membertools
+
+        leg, _, _, mat, fixed = self._leg_analysis_with_members(with_members=True)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+
+        member = membertools.AnalysisMember(table)
+        self.assertEqual(len(member.mats_linear), 1)
+        inherited_mat = member.mats_linear[0]["Object"]
+        self.assertEqual(inherited_mat.Name, f"Leg1_{mat.Name}")
+        self.assertEqual(inherited_mat.References[0], (imp, ["Solid1"]))
+
+        self.assertEqual(len(member.cons_fixed), 1)
+        inherited_fixed = member.cons_fixed[0]["Object"]
+        self.assertEqual(inherited_fixed.Name, f"Leg1_{fixed.Name}")
+        self.assertEqual(inherited_fixed.References[0], (imp, ["Face1"]))
+
+        _, sub = importmembers.translate_reference((imp,), leg, "Solid1")
+        self.assertEqual(sub, "Solid1")
+
+    def test_suppressed_members_are_omitted(self):
+        from femtools import membertools
+
+        leg, _, _, _, fixed = self._leg_analysis_with_members(with_members=True)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        imp.SuppressedMembers = [fixed.Name]
+        self.document.recompute()
+
+        member = membertools.AnalysisMember(table)
+        self.assertEqual(len(member.cons_fixed), 0)
+        self.assertEqual(len(member.mats_linear), 1)
+
+    def test_two_imports_yield_distinct_member_names(self):
+        from femtools import membertools
+
+        leg, _, _, mat, _ = self._leg_analysis_with_members(with_members=True)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp1, _ = self._add_import(table, leg, "Leg1")
+        imp2, _ = self._add_import(table, leg, "Leg2", vector=FreeCAD.Vector(20, 0, 0))
+        self.document.recompute()
+
+        member = membertools.AnalysisMember(table)
+        self.assertEqual(len(member.mats_linear), 2)
+        names = {entry["Object"].Name for entry in member.mats_linear}
+        self.assertEqual(names, {f"Leg1_{mat.Name}", f"Leg2_{mat.Name}"})
+        ref_objs = {entry["Object"].References[0][0] for entry in member.mats_linear}
+        ref_subs = {entry["Object"].References[0][1][0] for entry in member.mats_linear}
+        self.assertEqual(ref_objs, {imp1, imp2})
+        self.assertEqual(ref_subs, {"Solid1"})
+
+    def test_empty_material_references_cover_the_import_only(self):
+        from femtools import membertools
+
+        leg, leg_geom, _, _, _ = self._leg_analysis_with_members(with_members=False)
+        mat = ObjectsFem.makeMaterialSolid(self.document, "LegMaterial")
+        mat.References = []
+        leg.addObject(mat)
+        self.document.recompute()
+
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+
+        member = membertools.AnalysisMember(table)
+        self.assertEqual(len(member.mats_linear), 1)
+        entry = member.mats_linear[0]
+        refs = entry["Object"].References
+        self.assertEqual(refs[0][0], imp)
+        self.assertEqual(set(refs[0][1]), {"Solid1"})
+        self.assertEqual(entry["RefShapeType"], "Solid")
+
+    def test_an_empty_import_material_does_not_claim_native_elements(self):
+        from femtools import membertools
+
+        leg, _, _, _, _ = self._leg_analysis_with_members(with_members=False)
+        mat = ObjectsFem.makeMaterialSolid(self.document, "LegMaterial")
+        mat.References = []
+        leg.addObject(mat)
+        self.document.recompute()
+
+        table, table_geom, _ = self._table_analysis(mesh_group=True)
+        native = self.document.addObject("Part::Feature", "TablePart")
+        native.Shape = _box()
+        native_import = ObjectsFem.makeGeometryImport(self.document)
+        native_import.Import = [native]
+        table_geom.Group = [native_import]
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(40, 0, 0))
+        self.document.recompute()
+
+        member = membertools.AnalysisMember(table)
+        claimed = set(member.mats_linear[0]["Object"].References[0][1])
+        self.assertEqual(claimed, {"Solid1"})
+        self.assertEqual(member.mats_linear[0]["Object"].References[0][0], imp)
+
+    def test_nested_import_resolves_transitively(self):
+        from femtools import membertools
+
+        leg, _, _, mat, fixed = self._leg_analysis_with_members(with_members=True)
+
+        middle, _, _ = self._table_analysis(mesh_group=True)
+        middle.Label = "Middle"
+        inner, _ = self._add_import(middle, leg, "Leg1")
+        self.document.recompute()
+
+        outer, _, _ = self._table_analysis(mesh_group=True)
+        outer.Label = "Outer"
+        outer_imp, _ = self._add_import(outer, middle, "Middle1")
+        self.document.recompute()
+
+        member = membertools.AnalysisMember(outer)
+        self.assertEqual(len(member.mats_linear), 1)
+        self.assertEqual(len(member.cons_fixed), 1)
+
+        inherited_mat = member.mats_linear[0]["Object"]
+        self.assertEqual(inherited_mat.Name, f"Middle1_{inner.Name}_{mat.Name}")
+        self.assertEqual(inherited_mat.References[0], (outer_imp, [f"{inner.Name}.Solid1"]))
+
+        inherited_fixed = member.cons_fixed[0]["Object"]
+        self.assertEqual(inherited_fixed.Name, f"Middle1_{inner.Name}_{fixed.Name}")
+        self.assertEqual(inherited_fixed.References[0], (outer_imp, [f"{inner.Name}.Face1"]))
+        self.assertEqual(member.cons_fixed[0]["RefShapeType"], "Face")
+
+    def test_path_references_survive_save_and_reload(self):
+        from femtools import membertools
+
+        leg, _, _, mat, _ = self._leg_analysis_with_members(with_members=True)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+        refs = membertools.AnalysisMember(table).mats_linear[0]["Object"].References[0]
+        before_obj_name = refs[0].Name
+        before_subs = list(refs[1])
+
+        name = table.Name
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "import.FCStd")
+            self.document.saveAs(path)
+            FreeCAD.closeDocument(self.document.Name)
+            self.document = FreeCAD.openDocument(path)
+
+        table = self.document.getObject(name)
+        after_obj, after_subs = (
+            membertools.AnalysisMember(table).mats_linear[0]["Object"].References[0]
+        )
+        self.assertEqual(after_subs, before_subs)
+        self.assertEqual(after_obj.Name, before_obj_name)
+
+    def test_suppressed_component_absent_from_deck(self):
+        import tempfile
+
+        from femtools import ccxtools, membertools
+
+        leg, leg_geom, _, mat, _ = self._leg_analysis_with_members(with_members=True)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        imp.SuppressedComponents = [1]
+        solver = ObjectsFem.makeSolverCalculiXCcxTools(self.document)
+        table.addObject(solver)
+        self.document.recompute()
+
+        tools = ccxtools.FemToolsCcx(analysis=table, solver=solver, test_mode=True)
+        tools.update_objects()
+        with tempfile.TemporaryDirectory() as working_dir:
+            tools.setup_working_dir(working_dir)
+            tools.write_inp_file()
+            with open(tools.inp_file_name, encoding="utf-8") as deck_file:
+                deck = deck_file.read()
+
+        assembly = membertools.get_mesh_to_solve(table)
+        self.assertNotIn(f"{imp.Name}.Solid1", self._group_names(assembly.FemMesh))
+        self.assertNotIn("Leg1_LegMaterialSolid", deck)
+
+    def test_solve_assembly_follows_a_rotated_placement(self):
+        """
+        A rotation reaches the assembly nodes, not just a translation: the mesh
+        of an instance is transformed by the whole placement.
+        """
+        from femtools import membertools
+
+        leg, _, _ = self._leg_analysis()
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        # The source tet has a node at (1, 0, 0); a quarter turn about z puts it
+        # on the y axis.
+        imp.Placement = FreeCAD.Placement(
+            FreeCAD.Vector(), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 90)
+        )
+        self.document.recompute()
+
+        assembly = membertools.get_mesh_to_solve(table)
+        turned = [
+            node
+            for node in assembly.FemMesh.Nodes.values()
+            if node.distanceToPoint(FreeCAD.Vector(0, 1, 0)) < 1e-7
+        ]
+        self.assertEqual(len(turned), 1)
+        self.assertFalse(
+            any(
+                node.distanceToPoint(FreeCAD.Vector(1, 0, 0)) < 1e-7
+                for node in assembly.FemMesh.Nodes.values()
+            )
+        )
+
+    def test_solve_assembly_records_where_each_piece_came_from(self):
+        """
+        The assembly says which instance a cell and a node came from; a solver
+        reports per element and node, and nothing else survives the merge.
+        """
+        from femtools import membertools
+
+        leg, _, leg_mesh_group = self._leg_analysis()
+        table, _, _ = self._table_analysis(mesh_group=True, native=True)
+        first, _ = self._add_import(table, leg, "Leg1")
+        second, _ = self._add_import(table, leg, "Leg2", vector=FreeCAD.Vector(20, 0, 0))
+        self.document.recompute()
+
+        assembly = membertools.get_mesh_to_solve(table)
+        paths = set(assembly.CellSources)
+        self.assertIn("", paths)
+        self.assertIn(first.Name, paths)
+        self.assertIn(second.Name, paths)
+
+        # Every cell of the merged mesh is accounted for.
+        mesh = assembly.FemMesh
+        self.assertEqual(
+            len(assembly.CellSources), mesh.VolumeCount + mesh.FaceCount + mesh.EdgeCount
+        )
+        for element_id in list(mesh.Volumes) + list(mesh.Faces):
+            self.assertIn(assembly.path_of_cell(element_id), paths)
+
+        # Two instances of one source: the same source node twice over, each
+        # under the instance it belongs to.
+        source_node = min(leg_mesh_group.FemMesh.Nodes.keys())
+        self.assertEqual(set(assembly.NodeSources.keys()), {first.Name, second.Name})
+        for name in (first.Name, second.Name):
+            assembly_id = assembly.NodeSources[name][source_node]
+            self.assertEqual(assembly.source_node_of(assembly_id), (name, source_node))
+        self.assertNotEqual(
+            assembly.NodeSources[first.Name][source_node],
+            assembly.NodeSources[second.Name][source_node],
+        )
+
+    def test_solve_assembly_picks_up_a_changed_source(self):
+        """
+        Nothing about an import changes when its source is remeshed, so the
+        assembly has to be built from the source as it is now.
+        """
+        from femtools import membertools
+
+        leg, _, leg_mesh_group = self._leg_analysis()
+        table, _, _ = self._table_analysis(mesh_group=True)
+        self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+        before = membertools.get_mesh_to_solve(table).FemMesh.NodeCount
+
+        second = self.document.addObject("Fem::FemMeshObject", "LegMesh2")
+        mesh = Fem.FemMesh()
+        mesh.addNode(5, 5, 5, 1)
+        mesh.addNode(6, 5, 5, 2)
+        mesh.addNode(5, 6, 5, 3)
+        mesh.addNode(5, 5, 6, 4)
+        mesh.addVolume([1, 2, 3, 4])
+        second.FemMesh = mesh
+        leg_mesh_group.addObject(second)
+        self.document.recompute()
+
+        after = membertools.get_mesh_to_solve(table).FemMesh.NodeCount
+        self.assertEqual(after, before + 4)
+
+    def test_mixed_native_and_inherited_members_reach_the_deck(self):
+        """
+        An analysis that meshes something of its own and places another keeps
+        both in one deck, the native member on the native geometry and the
+        inherited one on the instance.
+        """
+        from femtools import ccxtools, membertools
+
+        leg, _, _, leg_mat, leg_fixed = self._leg_analysis_with_members(with_members=True)
+        table, table_geom, _ = self._table_analysis(mesh_group=True, native=True)
+        # Away from the native part, so that the deck can tell the two apart.
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(20, 0, 0))
+
+        table_mat = ObjectsFem.makeMaterialSolid(self.document, "TableMaterial")
+        card = table_mat.Material
+        card["Name"] = "CalculiX-Steel"
+        card["YoungsModulus"] = "210000 MPa"
+        card["PoissonRatio"] = "0.30"
+        card["Density"] = "7900 kg/m^3"
+        table_mat.Material = card
+        table_mat.References = [(table_geom, ["Solid1"])]
+        table.addObject(table_mat)
+
+        tie = ObjectsFem.makeConstraintTie(self.document, "TableTie")
+        tie.References = [(table_geom, ["Face1"]), (imp, ["Face1"])]
+        table.addObject(tie)
+
+        solver = ObjectsFem.makeSolverCalculiXCcxTools(self.document)
+        table.addObject(solver)
+        self.document.recompute()
+
+        member = membertools.AnalysisMember(table)
+        self.assertEqual(len(member.mats_linear), 2)
+        self.assertEqual(len(member.cons_tie), 1)
+
+        tools = ccxtools.FemToolsCcx(analysis=table, solver=solver, test_mode=True)
+        tools.update_objects()
+        with tempfile.TemporaryDirectory() as working_dir:
+            tools.setup_working_dir(working_dir)
+            tools.write_inp_file()
+            with open(tools.inp_file_name, encoding="utf-8") as deck_file:
+                deck = deck_file.read()
+
+        self.assertIn(table_mat.Name, deck)
+        self.assertIn(f"Leg1_{leg_mat.Name}", deck)
+        self.assertIn(f"Leg1_{leg_fixed.Name}", deck)
+        self.assertIn(tie.Name, deck)
+        self.assertIn("*TIE", deck)
+
+    def test_a_member_referencing_an_inner_import_keeps_the_whole_path(self):
+        """
+        A member of an imported analysis may reference an instance that analysis
+        places, and then the inner instance is part of the path as well.
+        """
+        from femtools import importmembers, membertools
+
+        leg, _, _ = self._leg_analysis()
+
+        middle, middle_geom, _ = self._table_analysis(mesh_group=True)
+        middle.Label = "Middle"
+        inner, _ = self._add_import(middle, leg, "Leg1")
+        fixed = ObjectsFem.makeConstraintFixed(self.document, "MiddleFixed")
+        fixed.References = [(inner, ["Face1"])]
+        middle.addObject(fixed)
+        self.document.recompute()
+
+        outer, _, _ = self._table_analysis(mesh_group=True)
+        outer.Label = "Outer"
+        outer_imp, _ = self._add_import(outer, middle, "Middle1")
+        self.document.recompute()
+
+        # Seen from the middle analysis the reference is already a path.
+        _, sub = importmembers.translate_reference((), inner, "Face1")
+        self.assertEqual(sub, "Face1")
+        _, sub = importmembers.translate_reference((outer_imp,), inner, "Face1")
+        self.assertEqual(sub, f"{inner.Name}.Face1")
+
+        member = membertools.AnalysisMember(outer)
+        inherited = [
+            m["Object"] for m in member.cons_fixed if m["Object"].Name.endswith(fixed.Name)
+        ]
+        self.assertEqual(len(inherited), 1)
+        self.assertEqual(inherited[0].References[0], (outer_imp, [f"{inner.Name}.Face1"]))
+
+    def test_an_instance_suppresses_a_nested_member_by_path(self):
+        """
+        Switching a member of a nested instance off names it by the path to it,
+        so the other instances of the same analysis keep it.
+        """
+        from femtools import membertools
+
+        leg, _, _, _, fixed = self._leg_analysis_with_members(with_members=True)
+
+        middle, _, _ = self._table_analysis(mesh_group=True)
+        middle.Label = "Middle"
+        inner, _ = self._add_import(middle, leg, "Leg1")
+        self.document.recompute()
+
+        outer, _, _ = self._table_analysis(mesh_group=True)
+        outer.Label = "Outer"
+        first, _ = self._add_import(outer, middle, "Middle1")
+        second, _ = self._add_import(outer, middle, "Middle2", vector=FreeCAD.Vector(30, 0, 0))
+        self.document.recompute()
+        self.assertEqual(len(membertools.AnalysisMember(outer).cons_fixed), 2)
+
+        first.SuppressedMembers = [f"{inner.Name}.{fixed.Name}"]
+        self.document.recompute()
+
+        remaining = membertools.AnalysisMember(outer).cons_fixed
+        self.assertEqual(len(remaining), 1)
+        self.assertTrue(remaining[0]["Object"].Name.startswith(f"{second.Name}_"))
+
+    def test_element_shape_of_an_imported_element_is_the_source_shape(self):
+        """
+        An element of an instance is numbered in the shape of the analysis it
+        came from; an import carries no shape of its own.
+        """
+        from femtools import geomtools
+
+        leg, leg_geom, _ = self._leg_analysis()
+        middle, _, _ = self._table_analysis(mesh_group=True)
+        inner, _ = self._add_import(middle, leg, "Leg1")
+        self.document.recompute()
+
+        outer, _, _ = self._table_analysis(mesh_group=True)
+        outer_imp, _ = self._add_import(outer, middle, "Middle1")
+        self.document.recompute()
+
+        shape = geomtools.get_element_shape(inner, "Face1")
+        self.assertIsNotNone(shape)
+        self.assertEqual(len(shape.Faces), len(leg_geom.Shape.Faces))
+
+        nested = geomtools.get_element_shape(outer_imp, f"{inner.Name}.Face1")
+        self.assertIsNotNone(nested)
+        self.assertEqual(len(nested.Faces), len(leg_geom.Shape.Faces))
+
+    def test_imported_analysis_mesh_sets_resolve(self):
+        from femmesh import meshtools
+        from femtools import membertools
+
+        leg, _, _, _, _ = self._leg_analysis_with_members(with_members=True)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+
+        member = membertools.AnalysisMember(table)
+        mesh = membertools.get_mesh_to_solve(table)
+        self.assertEqual(len(member.cons_fixed), 1)
+        nodes = meshtools.get_femnodes_by_references(
+            mesh.FemMesh, member.cons_fixed[0]["Object"].References
+        )
+        self.assertTrue(nodes)
+
+    def test_calculix_deck_names_the_inherited_members(self):
+        import tempfile
+
+        from femtools import ccxtools
+
+        leg, _, _, mat, fixed = self._leg_analysis_with_members(with_members=True)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        self._add_import(table, leg, "Leg1")
+        solver = ObjectsFem.makeSolverCalculiXCcxTools(self.document)
+        table.addObject(solver)
+        self.document.recompute()
+
+        tools = ccxtools.FemToolsCcx(analysis=table, solver=solver, test_mode=True)
+        tools.update_objects()
+        with tempfile.TemporaryDirectory() as working_dir:
+            tools.setup_working_dir(working_dir)
+            tools.write_inp_file()
+            self.assertTrue(tools.inp_file_name)
+            with open(tools.inp_file_name, encoding="utf-8") as deck_file:
+                deck = deck_file.read()
+
+        self.assertIn(f"Leg1_{fixed.Name}", deck)
+        self.assertIn(f"Leg1_{mat.Name}", deck)
+        self.assertIn("*BOUNDARY", deck)
+        self.assertIn("*MATERIAL", deck)
+
+    @staticmethod
+    def _symbol_copies(view_object, traverse_hidden=False):
+        """The SoMultipleCopy nodes of a view provider, one per drawn constraint.
+
+        By default only the branch that is actually traversed for rendering is
+        searched, so the result also tells whether the symbols are visible.
+        """
+        from pivy import coin
+
+        root = view_object.RootNode
+        search = coin.SoSearchAction()
+        search.setType(coin.SoMultipleCopy.getClassTypeId())
+        search.setInterest(coin.SoSearchAction.ALL)
+        search.setSearchingAll(traverse_hidden)
+        search.apply(root)
+        paths = search.getPaths()
+        return [paths[i].getTail() for i in range(paths.getLength())]
+
+    @staticmethod
+    def _copy_translation(multi_copy, index=0):
+        rows = multi_copy.matrix[index].getValue()
+        return FreeCAD.Vector(rows[3][0], rows[3][1], rows[3][2])
+
+    @staticmethod
+    def _symbol_position(view_object, index=0):
+        """
+        Where a symbol of *view_object* is drawn, in analysis coordinates.
+
+        The symbols hang below the placement of the instance rather than
+        carrying it each, so where they end up is what the scene graph makes of
+        their matrices on the way down.
+        """
+        from pivy import coin
+
+        search = coin.SoSearchAction()
+        search.setType(coin.SoMultipleCopy.getClassTypeId())
+        search.setInterest(coin.SoSearchAction.FIRST)
+        search.apply(view_object.RootNode)
+        path = search.getPath()
+        if path is None:
+            return None
+
+        action = coin.SoGetMatrixAction(coin.SbViewportRegion())
+        action.apply(path)
+        # Coin matrices multiply a row vector from the left, so the first three
+        # rows are the axes of the frame and the last one is its origin.
+        rows = action.getMatrix().getValue()
+        local = TestAnalysisImport._copy_translation(path.getTail(), index)
+        placed = FreeCAD.Vector(rows[3][0], rows[3][1], rows[3][2])
+        for distance, row in zip((local.x, local.y, local.z), rows[:3]):
+            placed += FreeCAD.Vector(row[0], row[1], row[2]) * distance
+        return placed
+
+    def test_inherited_constraint_symbols_follow_import_placement(self):
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for inherited constraint symbols")
+
+        leg, leg_geom, _, _, fixed = self._leg_analysis_with_members(with_members=True)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(50, 0, 0))
+        self.document.recompute()
+
+        source_points = list(fixed.Points)
+        self.assertTrue(source_points)
+
+        vp = imp.ViewObject
+        self.assertTrue(vp.ShowInheritedConstraints)
+
+        copies = self._symbol_copies(vp)
+        self.assertEqual(len(copies), 1)
+        self.assertEqual(copies[0].matrix.getNum(), len(source_points))
+
+        # The symbols are drawn in the coordinates of the importing analysis:
+        # the source point moved by the instance placement.
+        local = leg_geom.getGlobalPlacement().inverse().multVec(source_points[0])
+        expected = local + FreeCAD.Vector(50, 0, 0)
+        self.assertAlmostEqual((self._symbol_position(vp) - expected).Length, 0.0, places=4)
+
+        imp.Placement = FreeCAD.Placement(FreeCAD.Vector(90, 0, 0), FreeCAD.Rotation())
+        self.document.recompute()
+        copies = self._symbol_copies(vp)
+        self.assertEqual(len(copies), 1)
+        expected = local + FreeCAD.Vector(90, 0, 0)
+        self.assertAlmostEqual((self._symbol_position(vp) - expected).Length, 0.0, places=4)
+
+    def test_hiding_inherited_symbols_removes_them(self):
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for inherited constraint symbols")
+
+        leg, _, _, _, fixed = self._leg_analysis_with_members(with_members=True)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+
+        vp = imp.ViewObject
+        self.assertEqual(len(self._symbol_copies(vp)), 1)
+
+        vp.ShowInheritedConstraints = False
+        self.assertEqual(len(self._symbol_copies(vp)), 0)
+
+        vp.ShowInheritedConstraints = True
+        self.assertEqual(len(self._symbol_copies(vp)), 1)
+
+        imp.SuppressedMembers = [fixed.Name]
+        self.document.recompute()
+        self.assertEqual(len(self._symbol_copies(vp)), 0)
+
+    def test_hiding_the_import_hides_inherited_symbols(self):
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for inherited constraint symbols")
+
+        leg, _, _, _, _ = self._leg_analysis_with_members(with_members=True)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+
+        vp = imp.ViewObject
+        self.assertEqual(len(self._symbol_copies(vp)), 1)
+
+        vp.Visibility = False
+        self.assertEqual(len(self._symbol_copies(vp)), 0)
+        # Still built, just not traversed.
+        self.assertTrue(self._symbol_copies(vp, traverse_hidden=True))
+
+        vp.Visibility = True
+        self.assertEqual(len(self._symbol_copies(vp)), 1)
+
+    def test_a_source_constraint_added_later_gets_a_symbol(self):
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for inherited constraint symbols")
+
+        leg, leg_geom, _, _, _ = self._leg_analysis_with_members(with_members=False)
+        table, _, _ = self._table_analysis(mesh_group=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+
+        vp = imp.ViewObject
+        self.assertEqual(len(self._symbol_copies(vp)), 0)
+
+        fixed = ObjectsFem.makeConstraintFixed(self.document, "LegFixed")
+        fixed.References = [(leg_geom, ["Face1"])]
+        leg.addObject(fixed)
+        self.document.recompute()
+
+        self.assertEqual(len(self._symbol_copies(vp)), 1)
+
+        self.document.removeObject(fixed.Name)
+        self.document.recompute()
+        self.assertEqual(len(self._symbol_copies(vp)), 0)
+
+    def test_a_constraint_on_an_instance_gets_its_symbol_points(self):
+        """
+        An instance carries no shape property of its own, so the symbol
+        placement found nothing to measure and a constraint referencing an
+        instance drew no symbol at all.
+        """
+        leg, _, _ = self._leg_analysis()
+        table, _, _ = self._table_analysis()
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(0, 0, 20))
+        self.document.recompute()
+
+        fixed = ObjectsFem.makeConstraintFixed(self.document, "TableFixed")
+        fixed.References = [(imp, ["Face1"])]
+        table.addObject(fixed)
+        self.document.recompute()
+
+        self.assertTrue(fixed.Points)
+        self.assertEqual(len(fixed.Points), len(fixed.Normals))
+        # The symbols stand where the instance draws the face, not where the
+        # source analysis keeps it.
+        self.assertGreaterEqual(min(p.z for p in fixed.Points), 20.0 - 1e-6)
+
+    def test_group_data_answers_a_reference_on_an_instance(self):
+        """
+        The assembly names the group of an instance after its path, which is
+        the name a reference on that instance has to reach for. Missing it
+        sends the writer into a geometric search of the whole mesh.
+        """
+        from femmesh import meshtools
+        from femtools import solveassembly
+
+        leg, _, _ = self._leg_analysis()
+        table, geometry, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(0, 0, 20))
+        self.document.recompute()
+
+        mesh = solveassembly.build(table).FemMesh
+        self.assertEqual(meshtools.get_femmesh_group_name(imp, "Solid1"), "Leg1_Solid1")
+
+        imported = meshtools.get_femmesh_groupdata_sets_by_refs(mesh, [(imp, ["Solid1"])], "Volume")
+        native = meshtools.get_femmesh_groupdata_sets_by_refs(
+            mesh, [(geometry, ["Solid1"])], "Volume"
+        )
+        self.assertEqual(len(imported), 1)
+        self.assertEqual(len(native), 1)
+        self.assertFalse(set(imported) & set(native))
+
+    def test_an_unknown_reference_leaves_the_group_data_empty(self):
+        """A partial answer would leave an element set short without saying so."""
+        from femmesh import meshtools
+        from femtools import solveassembly
+
+        leg, _, _ = self._leg_analysis()
+        table, geometry, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+
+        mesh = solveassembly.build(table).FemMesh
+        self.assertEqual(
+            meshtools.get_femmesh_groupdata_sets_by_refs(
+                mesh, [(imp, ["Solid1"]), (geometry, ["Solid9"])], "Volume"
+            ),
+            (),
+        )
+
+    def test_a_reference_on_an_instance_names_only_its_own_nodes(self):
+        """
+        Parts that touch share the surface a reference names but no nodes of
+        it. A geometric search hands back the nodes of every part along that
+        surface, which ties a part to itself and buries the solver in
+        zero-coefficient warnings; the group of the instance answers with the
+        nodes of that instance alone.
+        """
+        from femmesh import meshtools
+        from femtools import solveassembly
+
+        leg, _, _ = self._leg_analysis()
+        table, geometry, _ = self._table_analysis(mesh_group=True, native=True)
+        # No offset, so both parts occupy the same place and any search that
+        # goes by position alone cannot tell one from the other.
+        imp, _ = self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+
+        mesh = solveassembly.build(table).FemMesh
+        imported = meshtools.get_femnodes_by_refs_group_data(mesh, [(imp, ["Face1"])])
+        native = meshtools.get_femnodes_by_refs_group_data(mesh, [(geometry, ["Face1"])])
+
+        self.assertEqual(len(imported), 3)
+        self.assertEqual(len(native), 3)
+        self.assertFalse(set(imported) & set(native))
+
+    def test_material_element_sets_come_from_group_data(self):
+        """
+        The element counts of the fast path have to add up over native and
+        imported materials alike, or every set is searched for geometrically.
+        """
+        from femmesh import meshtools
+        from femtools import membertools, solveassembly
+
+        leg, _, _, _, _ = self._leg_analysis_with_members(with_members=True)
+        table, geometry, _ = self._table_analysis(mesh_group=True, native=True)
+        table_material = ObjectsFem.makeMaterialSolid(self.document, "TableMaterial")
+        table_material.References = [(geometry, ["Solid1"])]
+        table.addObject(table_material)
+        self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(0, 0, 20))
+        self.document.recompute()
+
+        mesh = solveassembly.build(table).FemMesh
+        materials = membertools.AnalysisMember(table).mats_linear
+        self.assertEqual(len(materials), 2)
+        self.assertTrue(meshtools.get_femelement_sets_from_group_data(mesh, materials))
+        self.assertEqual(sum(len(m["FEMElements"]) for m in materials), mesh.VolumeCount)

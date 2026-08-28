@@ -365,6 +365,10 @@ void TaskFemConstraintTransform::addToSelection()
             return;
         }
         for (const auto& subName : subNames) {  // for every selected sub element
+
+            App::DocumentObject* refObj = obj;
+            std::string refSub = subName;
+            normalizeReference(refObj, refSub);
             bool addMe = true;
             Part::Feature* feat = static_cast<Part::Feature*>(obj);
             TopoDS_Shape ref = feat->Shape.getShape().getSubShape(subName.c_str());
@@ -397,12 +401,12 @@ void TaskFemConstraintTransform::addToSelection()
                 }
             }
 
-            for (auto itr = std::ranges::find(SubElements, subName); itr != SubElements.end(); itr
+            for (auto itr = std::ranges::find(SubElements, refSub); itr != SubElements.end(); itr
                  = std::find(++itr,
                              SubElements.end(),
-                             subName)) {  // for every sub element in selection that
+                             refSub)) {  // for every sub element in selection that
                                           // matches one in old list
-                if (obj
+                if (refObj
                     == Objects[std::distance(
                         SubElements.begin(),
                         itr
@@ -419,10 +423,10 @@ void TaskFemConstraintTransform::addToSelection()
                     &TaskFemConstraintTransform::setSelection
                 );
                 for (std::size_t i = 0; i < ObjDispl.size(); i++) {
-                    if ((makeRefText(ObjDispl[i], SubElemDispl[i])) == (makeRefText(obj, subName))) {
-                        Objects.push_back(obj);
-                        SubElements.push_back(subName);
-                        ui->lw_Rect->addItem(makeRefText(obj, subName));
+                    if ((makeRefText(ObjDispl[i], SubElemDispl[i])) == (makeRefText(refObj, refSub))) {
+                        Objects.push_back(refObj);
+                        SubElements.push_back(refSub);
+                        ui->lw_Rect->addItem(makeRefText(refObj, refSub));
                         connect(
                             ui->lw_Rect,
                             &QListWidget::currentItemChanged,

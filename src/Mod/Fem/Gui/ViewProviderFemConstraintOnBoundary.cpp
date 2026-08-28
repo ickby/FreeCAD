@@ -27,12 +27,15 @@
 #include <App/Document.h>
 #include <Gui/Application.h>
 #include "Mod/Fem/App/FemConstraint.h"
+#include <Mod/Fem/App/FemAnalysisImport.h>
 #include <Mod/Fem/App/FemGeometry.h>
+#include <Mod/Fem/App/FemTools.h>
 #include <Mod/Part/App/PartFeature.h>
 #include <Mod/Part/Gui/ReferenceHighlighter.h>
 #include <Mod/Part/Gui/ViewProvider.h>
 
 #include "TaskFemConstraintOnBoundary.h"
+#include "ViewProviderFemAnalysisImport.h"
 #include "ViewProviderFemConstraintOnBoundary.h"
 #include "ViewProviderFemGeometry.h"
 
@@ -56,6 +59,11 @@ void ViewProviderFemConstraintOnBoundary::markGeometryReferences(const bool on)
             if (Base::freecad_cast<Fem::FemGeometry*>(subSet.first)) {
                 marked[subSet.first].insert(subSet.second.begin(), subSet.second.end());
             }
+            else if (auto* imp = Base::freecad_cast<Fem::FemAnalysisImport*>(subSet.first)) {
+                for (const auto& sub : subSet.second) {
+                    marked[imp].insert(sub);
+                }
+            }
         }
     }
 
@@ -73,6 +81,32 @@ void ViewProviderFemConstraintOnBoundary::markGeometryReferences(const bool on)
         }
 
         auto elements = marked.find(geometry);
+        if (elements == marked.end()) {
+            vp->clearElementHighlight(role);
+        }
+        else {
+            vp->setElementHighlight(
+                role,
+                elements->second,
+                ViewProviderFemGeometry::defaultElementHighlightColor()
+            );
+        }
+    }
+
+    // An element of an imported analysis is referenced on the import, which
+    // draws it itself, so the mark has to go there rather than to a geometry.
+    const auto imports = constraint->getDocument()->getObjectsOfType(
+        Fem::FemAnalysisImport::getClassTypeId()
+    );
+    for (auto* importObj : imports) {
+        auto* vp = dynamic_cast<ViewProviderFemAnalysisImport*>(
+            Gui::Application::Instance->getViewProvider(importObj)
+        );
+        if (!vp) {
+            continue;
+        }
+
+        auto elements = marked.find(importObj);
         if (elements == marked.end()) {
             vp->clearElementHighlight(role);
         }

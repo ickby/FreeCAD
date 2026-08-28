@@ -92,6 +92,11 @@ protected:
      * why it cannot when it may not be referenced.
      */
     bool checkReference(const App::DocumentObject* obj);
+    /**
+     * Convert a pick on the analysis geometry to (AnalysisImport, source sub)
+     * when the element belongs to an import.
+     */
+    void normalizeReference(App::DocumentObject*& obj, std::string& subName) const;
     void keyPressEvent(QKeyEvent* ke) override;
     void createActions(QListWidget* parentList);
     void createClearListAction(QListWidget* parentList);

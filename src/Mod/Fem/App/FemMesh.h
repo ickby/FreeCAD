@@ -24,6 +24,7 @@
 
 #pragma once
 
+#include <functional>
 #include <list>
 #include <map>
 #include <memory>
@@ -35,6 +36,7 @@
 #include <SMESH_Version.h>
 
 #include <App/ComplexGeoData.h>
+#include <Base/Matrix.h>
 #include <Base/Quantity.h>
 #include <Mod/Fem/FemGlobal.h>
 
@@ -278,6 +280,23 @@ public:
         const FemMesh& mesh,
         const std::string& sourceName = {},
         std::vector<std::string>* cellSources = nullptr
+    );
+
+    /**
+     * Append with an explicit node transform and optional mesh-group renamer.
+     * When transformOverride is null, mesh.getTransform() is used.
+     * When groupRenamer is set, SMESH group names are mapped before merge; a
+     * group whose mapped name is empty is dropped.
+     * When nodeIdMap is set, it receives source node ID -> appended node ID,
+     * which is the only way back from a merged node to where it came from.
+     */
+    void appendMeshData(
+        const FemMesh& mesh,
+        const std::string& sourceName,
+        std::vector<std::string>* cellSources,
+        const Base::Matrix4D* transformOverride,
+        const std::function<std::string(const std::string&)>* groupRenamer,
+        std::map<int, int>* nodeIdMap = nullptr
     );
 
 private:

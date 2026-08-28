@@ -54,6 +54,20 @@ def makeAnalysis(doc, name="Analysis"):
     return obj
 
 
+def makeImportGroup(doc, name="Imports"):
+    """makeImportGroup(document, [name]):
+    creates a container group for analysis imports"""
+    obj = doc.addObject("App::DocumentObjectGroup", name)
+    return obj
+
+
+def makeAnalysisImport(doc, name="Import"):
+    """makeAnalysisImport(document, [name]):
+    creates one imported analysis instance"""
+    obj = doc.addObject("Fem::FemAnalysisImport", name)
+    return obj
+
+
 def makeGeometryGroup(doc, name="Geometry"):
     """makeGeometryGroup(document, [name]):
     makes a FemGeometryPython object with GeometryGroup proxy"""

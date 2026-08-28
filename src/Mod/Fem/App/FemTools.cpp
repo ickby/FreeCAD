@@ -46,13 +46,20 @@
 #include <gp_Pln.hxx>
 #include <gp_Vec.hxx>
 
+#include <algorithm>
+#include <array>
+#include <set>
+
 #include <App/Application.h>
+#include <App/DocumentObjectGroup.h>
 #include <App/GeoFeature.h>
+#include <App/PropertyLinks.h>
 #include <Mod/Part/App/PartFeature.h>
 #include <Mod/Part/App/PropertyTopoShape.h>
 #include <Mod/Part/App/Tools.h>
 
 #include "FemAnalysis.h"
+#include "FemAnalysisImport.h"
 #include "FemGeometry.h"
 #include "FemTools.h"
 
@@ -360,6 +367,15 @@ void Fem::Tools::setSubShapeGlobalLocation(const App::GeoFeature* feat, TopoDS_S
 
 const Part::TopoShape* Fem::Tools::getFeatureShape(const App::DocumentObject* obj)
 {
+    // An instance stores no shape of its own; the one it places is the shape
+    // the source analysis builds. Callers ask for it to size a symbol or to
+    // tell a shape carrier from one without a shape, and both answers are the
+    // same whether the instance has moved the shape or not.
+    if (auto* imp = Base::freecad_cast<FemAnalysisImport*>(obj)) {
+        auto* geom = imp->sourceGeometry();
+        return geom ? &geom->Shape.getShape() : nullptr;
+    }
+
     auto* prop = dynamic_cast<const Part::PropertyPartShape*>(
         App::GeoFeature::getPropertyOfGeometry(obj)
     );
@@ -371,6 +387,22 @@ TopoDS_Shape
 Fem::Tools::getFeatureSubShape(const App::GeoFeature* feat, const char* subName, bool silent)
 {
     TopoDS_Shape sh;
+
+    // A reference on an instance is a dotted path through the instances it
+    // nests, which only the instance itself can follow.
+    if (auto* imp = Base::freecad_cast<FemAnalysisImport*>(feat)) {
+        Part::TopoShape placed = imp->placedSubShape(subName);
+        if (placed.isNull()) {
+            return sh;
+        }
+        sh = placed.getShape();
+        // The path put the instance chain into the shape, so all that is left
+        // is whatever places the outermost instance in the document.
+        const Base::Placement outer = imp->globalPlacement() * imp->Placement.getValue().inverse();
+        sh.Move(Part::Tools::fromPlacement(outer));
+        return sh;
+    }
+
     const Part::TopoShape* toposhape = getFeatureShape(feat);
     if (!toposhape || toposhape->isNull()) {
         return sh;
@@ -414,6 +446,135 @@ Fem::FemGeometry* Fem::Tools::getAnalysisGeometry(const App::DocumentObject* mem
     }
 
     return nullptr;
+}
+
+std::vector<Fem::FemAnalysisImport*> Fem::Tools::analysisImports(const Fem::FemAnalysis* analysis)
+{
+    std::vector<Fem::FemAnalysisImport*> out;
+    if (!analysis) {
+        return out;
+    }
+
+    auto add = [&out](App::DocumentObject* obj) {
+        if (auto* imp = Base::freecad_cast<Fem::FemAnalysisImport*>(obj)) {
+            if (std::ranges::find(out, imp) == out.end()) {
+                out.push_back(imp);
+            }
+        }
+    };
+
+    for (auto* obj : analysis->Group.getValues()) {
+        if (!obj) {
+            continue;
+        }
+        add(obj);
+        if (auto* group = Base::freecad_cast<App::DocumentObjectGroup*>(obj)) {
+            for (auto* child : group->Group.getValues()) {
+                add(child);
+            }
+        }
+    }
+
+    return out;
+}
+
+namespace
+{
+
+void collectImportedToplevels(
+    const Fem::FemAnalysis* analysis,
+    const std::string& prefix,
+    std::vector<const Fem::FemAnalysisImport*>& chain,
+    std::vector<std::string>& out
+)
+{
+    for (auto* imp : Fem::Tools::analysisImports(analysis)) {
+        if (std::ranges::find(chain, imp) != chain.end()) {
+            continue;
+        }
+        const char* name = imp->getNameInDocument();
+        const std::string path = prefix.empty() ? std::string(name ? name : "Import")
+                                                : prefix + "." + (name ? name : "Import");
+
+        if (auto* geom = imp->sourceGeometry()) {
+            const auto suppressedValues = imp->SuppressedComponents.getValues();
+            const std::set<long> suppressed(suppressedValues.begin(), suppressedValues.end());
+            Fem::componentIdType componentId = 0;
+            for (auto& component : geom->getComponents()) {
+                ++componentId;
+                if (suppressed.contains(static_cast<long>(componentId))) {
+                    continue;
+                }
+                for (const auto& element : geom->getToplevelElements(component)) {
+                    out.push_back(path + "." + element);
+                }
+            }
+        }
+
+        if (auto* src = Base::freecad_cast<Fem::FemAnalysis*>(imp->Analysis.getValue())) {
+            chain.push_back(imp);
+            collectImportedToplevels(src, path, chain, out);
+            chain.pop_back();
+        }
+    }
+}
+
+}  // namespace
+
+std::vector<std::string> Fem::Tools::importedToplevelElements(const Fem::FemAnalysis* analysis)
+{
+    std::vector<std::string> out;
+    std::vector<const Fem::FemAnalysisImport*> chain;
+    collectImportedToplevels(analysis, {}, chain, out);
+    return out;
+}
+
+bool Fem::Tools::isMemberSuppressed(
+    const std::vector<const Fem::FemAnalysisImport*>& chain,
+    const App::DocumentObject* member
+)
+{
+    const char* name = member ? member->getNameInDocument() : nullptr;
+    if (!name) {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < chain.size(); ++i) {
+        const auto values = chain[i]->SuppressedMembers.getValues();
+        if (values.empty()) {
+            continue;
+        }
+        std::string path;
+        for (std::size_t j = i + 1; j < chain.size(); ++j) {
+            const char* nested = chain[j]->getNameInDocument();
+            path += (nested ? nested : "Import");
+            path += '.';
+        }
+        path += name;
+        if (std::ranges::find(values, path) != values.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Fem::Tools::isInheritableMember(const App::DocumentObject* member)
+{
+    if (!member) {
+        return false;
+    }
+    static const std::array<const char*, 7> excluded {
+        "Fem::FemGeometry",
+        "Fem::FemMeshObject",
+        "Fem::FemMeshShapeGroup",
+        "Fem::FemAnalysisImport",
+        "Fem::FemSolverObject",
+        "Fem::FemResultObject",
+        "App::DocumentObjectGroup",
+    };
+    return std::ranges::none_of(excluded, [member](const char* type) {
+        return member->isDerivedFrom(Base::Type::fromName(type));
+    });
 }
 
 bool Fem::Tools::getCylinderParams(

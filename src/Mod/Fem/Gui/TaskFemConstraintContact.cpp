@@ -249,6 +249,10 @@ void TaskFemConstraintContact::addToSelectionSlave()
             return;
         }
         for (const auto& subName : subNames) {  // for every selected sub element
+
+            App::DocumentObject* refObj = obj;
+            std::string refSub = subName;
+            normalizeReference(refObj, refSub);
             bool addMe = true;
             if ((subName.substr(0, 4) != "Face") && (subName.substr(0, 4) != "Edge")) {
                 QMessageBox::warning(
@@ -258,12 +262,12 @@ void TaskFemConstraintContact::addToSelectionSlave()
                 );
                 return;
             }
-            for (auto itr = std::ranges::find(SubElements, subName); itr != SubElements.end(); itr
+            for (auto itr = std::ranges::find(SubElements, refSub); itr != SubElements.end(); itr
                  = std::find(++itr,
                              SubElements.end(),
-                             subName)) {  // for every sub element in selection that
+                             refSub)) {  // for every sub element in selection that
                                           // matches one in old list
-                if (obj
+                if (refObj
                     == Objects[std::distance(
                         SubElements.begin(),
                         itr
@@ -274,9 +278,9 @@ void TaskFemConstraintContact::addToSelectionSlave()
             }
             if (addMe) {
                 QSignalBlocker block(ui->lw_referencesSlave);
-                Objects.push_back(obj);
-                SubElements.push_back(subName);
-                ui->lw_referencesSlave->addItem(makeRefText(obj, subName));
+                Objects.push_back(refObj);
+                SubElements.push_back(refSub);
+                ui->lw_referencesSlave->addItem(makeRefText(refObj, refSub));
             }
         }
     }
@@ -392,6 +396,10 @@ void TaskFemConstraintContact::addToSelectionMaster()
             return;
         }
         for (const auto& subName : subNames) {  // for every selected sub element
+
+            App::DocumentObject* refObj = obj;
+            std::string refSub = subName;
+            normalizeReference(refObj, refSub);
             bool addMe = true;
             if ((subName.substr(0, 4) != "Face") && (subName.substr(0, 4) != "Edge")) {
                 QMessageBox::warning(
@@ -409,7 +417,7 @@ void TaskFemConstraintContact::addToSelectionMaster()
                      subName
                  )) {  // for every sub element in selection that
                        // matches one in old list
-                if (obj
+                if (refObj
                     == Objects[std::distance(
                         SubElements.begin(),
                         itr
@@ -420,9 +428,9 @@ void TaskFemConstraintContact::addToSelectionMaster()
             }
             if (addMe) {
                 QSignalBlocker block(ui->lw_referencesMaster);
-                Objects.push_back(obj);
-                SubElements.push_back(subName);
-                ui->lw_referencesMaster->addItem(makeRefText(obj, subName));
+                Objects.push_back(refObj);
+                SubElements.push_back(refSub);
+                ui->lw_referencesMaster->addItem(makeRefText(refObj, refSub));
             }
         }
     }

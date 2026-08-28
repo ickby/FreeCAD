@@ -214,8 +214,22 @@ void ViewProviderFemConstraint::setRotateSymbol(bool rotate)
 
 void ViewProviderFemConstraint::updateSymbol()
 {
+    // A subclass constructor may already ask for an update, before there is an
+    // object to read the symbol placement from.
+    if (!pMultCopy || !getObject<const Fem::Constraint>()) {
+        return;
+    }
+    fillSymbolMatrices(pMultCopy);
+    transformExtraSymbol();
+}
+
+void ViewProviderFemConstraint::fillSymbolMatrices(
+    SoMultipleCopy* multCopy,
+    const Base::Placement* pre
+) const
+{
     auto obj = this->getObject<const Fem::Constraint>();
-    if (!obj) {
+    if (!obj || !multCopy) {
         return;
     }
 
@@ -225,16 +239,70 @@ void ViewProviderFemConstraint::updateSymbol()
         return;
     }
 
-    pMultCopy->matrix.setNum(points.size());
-    SbMatrix* mat = pMultCopy->matrix.startEditing();
+    multCopy->matrix.setNum(static_cast<int>(points.size()));
+    SbMatrix* mat = multCopy->matrix.startEditing();
 
     for (size_t i = 0; i < points.size(); ++i) {
-        transformSymbol(points[i], normals[i], mat[i]);
+        Base::Vector3d point = points[i];
+        Base::Vector3d normal = normals[i];
+        if (pre) {
+            pre->multVec(points[i], point);
+            normal = pre->getRotation().multVec(normals[i]);
+        }
+        transformSymbol(point, normal, mat[i]);
     }
 
-    pMultCopy->matrix.finishEditing();
+    multCopy->matrix.finishEditing();
+}
 
-    transformExtraSymbol();
+SoSeparator* ViewProviderFemConstraint::makeSymbolInstance(const Base::Placement& pre) const
+{
+    auto* constraint = getObject<const Fem::Constraint>();
+    if (!constraint || !pSymbol) {
+        return nullptr;
+    }
+
+    const std::vector<Base::Vector3d>& points = constraint->Points.getValue();
+    const std::vector<Base::Vector3d>& normals = constraint->Normals.getValue();
+    if (points.size() != normals.size() || points.empty()) {
+        return nullptr;
+    }
+
+    // Mirrors what attach() and loadSymbol() build for this constraint's own
+    // symbols. Without the pick style the copy would be selectable and pick the
+    // unrelated object it hangs under, and without the material it would take
+    // that object's colour instead of the constraint colour.
+    auto* root = new SoSeparator();
+
+    auto* pickStyle = new SoPickStyle();
+    pickStyle->style = SoPickStyle::UNPICKABLE;
+    root->addChild(pickStyle);
+
+    auto* hints = new SoShapeHints();
+    hints->shapeType.setValue(SoShapeHints::UNKNOWN_SHAPE_TYPE);
+    hints->vertexOrdering.setValue(SoShapeHints::COUNTERCLOCKWISE);
+    root->addChild(hints);
+
+    root->addChild(pcShapeMaterial);
+
+    auto* multCopy = new SoMultipleCopy();
+    multCopy->ref();
+    multCopy->addChild(pSymbol);
+    root->addChild(multCopy);
+    fillSymbolMatrices(multCopy, &pre);
+    multCopy->unref();
+
+    if (pExtraSymbol) {
+        auto* extraTrans = new SoTransform();
+        float s = constraint->getScaleFactor();
+        SbMatrix scaleMat;
+        scaleMat.setScale(s);
+        extraTrans->setMatrix(scaleMat);
+        root->addChild(extraTrans);
+        root->addChild(pExtraSymbol);
+    }
+
+    return root;
 }
 
 void ViewProviderFemConstraint::transformSymbol(

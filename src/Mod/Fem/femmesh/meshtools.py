@@ -42,6 +42,10 @@ def get_femnodes_by_femobj_with_references(femmesh, femobj):
     if femmesh.GroupCount:
         node_set = get_femmesh_groupdata_sets_by_name(femmesh, femobj, "Node")
         # FreeCAD.Console.PrintMessage("node_set_group: {}\n".format(node_set))
+        if not node_set:
+            node_set = get_femnodes_by_refs_group_data(
+                femmesh, getattr(femobj["Object"], "References", None) or ()
+            )
         if node_set:
             FreeCAD.Console.PrintLog(
                 "    Finite element mesh nodes where retrieved "
@@ -692,6 +696,95 @@ def get_femmesh_groupdata_sets_by_name(femmesh, fem_object, group_data_type):
 
 
 # ************************************************************************************************
+def get_femmesh_group_name(feat, sub):
+    """Name of the mesh group holding the elements meshed from *sub* on *feat*.
+
+    A mesh names its groups after the geometry elements they were meshed from.
+    The solve assembly keeps those names but puts the path of the instance in
+    front of them, joined with underscores, so a reference to "Solid3" on the
+    instance "Import" reaches the group "Import_Solid3".
+    """
+    if feat is not None and feat.isDerivedFrom("Fem::FemAnalysisImport"):
+        return f"{feat.Name}.{sub}".replace(".", "_")
+    return sub
+
+
+def get_femmesh_group_type(sub):
+    """Type of the mesh group that holds the elements of the named geometry element."""
+    leaf = sub.rsplit(".", 1)[-1]
+    for prefix, group_type in (
+        ("Solid", "Volume"),
+        ("Face", "Face"),
+        ("Edge", "Edge"),
+        ("Vertex", "Node"),
+    ):
+        if leaf.startswith(prefix) and leaf[len(prefix) :].isdigit():
+            return group_type
+    return None
+
+
+def get_femmesh_groupdata_sets_by_refs(femmesh, references, group_data_type):
+    """Elements of the mesh groups *references* name, or () if one of them is missing.
+
+    All references have to be found, because a partial answer would silently
+    leave a constraint or a material short of the elements it stands for.
+    """
+    if not femmesh.GroupCount or not references:
+        return ()
+
+    groups = {}
+    for g in femmesh.Groups:
+        if femmesh.getGroupElementType(g) == group_data_type:
+            groups[femmesh.getGroupName(g)] = g
+
+    elements = []
+    for feat, subs in references:
+        if isinstance(subs, str):
+            subs = (subs,)
+        if not subs:
+            return ()
+        for sub in subs:
+            g = groups.get(get_femmesh_group_name(feat, sub))
+            if g is None:
+                return ()
+            elements += femmesh.getGroupElements(g)
+    return tuple(elements)
+
+
+def get_femnodes_by_refs_group_data(femmesh, references):
+    """Nodes of the mesh groups *references* name, or () if one of them is missing.
+
+    An assembly mesh holds the parts side by side, and parts that touch share
+    no nodes but do share the surface a reference names. A geometric search
+    cannot tell those apart and hands back the nodes of every part along that
+    surface, which ties a part to itself; the group of the part answers the
+    question the reference actually asked.
+    """
+    if not femmesh.GroupCount or not references:
+        return ()
+
+    nodes = set()
+    for feat, subs in references:
+        if isinstance(subs, str):
+            subs = (subs,)
+        if not subs:
+            return ()
+        for sub in subs:
+            group_type = get_femmesh_group_type(sub)
+            if group_type is None:
+                return ()
+            elements = get_femmesh_groupdata_sets_by_refs(femmesh, [(feat, (sub,))], group_type)
+            if not elements:
+                return ()
+            if group_type == "Node":
+                nodes.update(elements)
+            else:
+                for element in elements:
+                    nodes.update(femmesh.getElementNodes(element))
+    return tuple(sorted(nodes))
+
+
+# ************************************************************************************************
 def get_femelement_sets_from_group_data(femmesh, fem_objects):
     # get femelements from femmesh groupdata for reference shapes of each obj.References
     count_femelements = 0
@@ -706,6 +799,10 @@ def get_femelement_sets_from_group_data(femmesh, fem_objects):
         fem_object["ShortName"] = get_elset_short_name(obj, fem_object_i)
         # see comments over there !
         group_elements = get_femmesh_groupdata_sets_by_name(femmesh, fem_object, "Volume")
+        if not group_elements:
+            group_elements = get_femmesh_groupdata_sets_by_refs(
+                femmesh, getattr(obj, "References", None) or (), "Volume"
+            )
         sum_group_elements += group_elements
         count_femelements += len(group_elements)
         fem_object["FEMElements"] = group_elements
@@ -761,7 +858,7 @@ def get_force_obj_vertex_nodeload_table(femmesh, frc_obj):
     for o, elem_tup in frc_obj.References:
         node_count = len(elem_tup)
         for elem in elem_tup:
-            ref_node = o.Shape.getElement(elem)
+            ref_node = sub_shape_at_global_placement(o, elem)
             FreeCAD.Console.PrintMessage(
                 "    "
                 "ReferenceShape ... Type: {}, "
@@ -799,7 +896,7 @@ def get_force_obj_edge_nodeload_table(femmesh, femelement_table, femnodes_mesh, 
     sum_node_load = 0  # for debugging
     for o, elem_tup in frc_obj.References:
         for elem in elem_tup:
-            ref_edge = o.Shape.getElement(elem)
+            ref_edge = sub_shape_at_global_placement(o, elem)
             FreeCAD.Console.PrintMessage(
                 "    "
                 "ReferenceShape ... Type: {}, "
@@ -813,7 +910,7 @@ def get_force_obj_edge_nodeload_table(femmesh, femelement_table, femnodes_mesh, 
         force_per_sum_ref_edge_length = force_quantity / sum_ref_edge_length
     for o, elem_tup in frc_obj.References:
         for elem in elem_tup:
-            ref_edge = o.Shape.getElement(elem)
+            ref_edge = sub_shape_at_global_placement(o, elem)
 
             # edge_table:
             #     { meshedgeID : ( nodeID, ... , nodeID ) }
@@ -1564,80 +1661,86 @@ def get_elements(sets_getter, ref_pair, face_masks, edge_masks):
     return (*elem, is_sub_element)
 
 
-def get_elements_by_references(sets_getter, femobj_ref):
-    node_set = []
-    result = []
-    # TODO get elements from mesh groups
-    # if femmesh.GroupCount:
-    #     node_set = get_femmesh_groupdata_sets_by_name(femmesh, femobj, "Node")
-    #     # FreeCAD.Console.PrintMessage("node_set_group: {}\n".format(node_set))
-    #     if node_set:
-    #         FreeCAD.Console.PrintLog(
-    #             "    Finite element mesh nodes where retrieved "
-    #             "from existent finite element mesh group data.\n"
-    #         )
-    if not node_set:
-        elem = []
+def get_nodes_of_reference(femmesh, sub):
+    """Mesh nodes of one reference, from group data where the mesh offers it."""
+    node_set = get_femnodes_by_refs_group_data(femmesh, [sub])
+    if node_set:
         FreeCAD.Console.PrintLog(
-            "    Finite element mesh nodes will be retrieved "
-            "by searching the appropriate nodes in the finite element mesh.\n"
+            "    Finite element mesh nodes where retrieved "
+            "from existent finite element mesh group data.\n"
         )
-        feat, sub_ref = femobj_ref
-        sub = (feat, (sub_ref,))
-        node_set = get_femnodes_by_references(sets_getter.femmesh, [sub])
-        charged_volume_node_set = sorted(set(node_set))
+        return sorted(node_set)
 
-        bit_pattern_dict = get_bit_pattern_dict(
-            sets_getter.femelement_table, sets_getter.femnodes_ele_table, charged_volume_node_set
-        )
-        sh = feat.getSubObject(sub_ref)
-        if sh.ShapeType == "Solid":
-            elem = get_element_volumes_elements_from_binary_search(bit_pattern_dict)
-        elif sh.ShapeType == "Face":
-            elem = get_element_faces_elements_from_binary_search(bit_pattern_dict)
-        elif sh.ShapeType == "Edge":
-            elem = get_element_edges_elements_from_binary_search(bit_pattern_dict)
+    FreeCAD.Console.PrintLog(
+        "    Finite element mesh nodes will be retrieved "
+        "by searching the appropriate nodes in the finite element mesh.\n"
+    )
+    return sorted(set(get_femnodes_by_references(femmesh, [sub])))
 
-        result = (sub, elem)
 
-    return result
+def get_model_group_type(femmesh):
+    """Type of the mesh groups that hold the elements the mesh is made of."""
+    if is_solid_femmesh(femmesh):
+        return "Volume"
+    if is_face_femmesh(femmesh):
+        return "Face"
+    if is_edge_femmesh(femmesh):
+        return "Edge"
+    return None
+
+
+def get_elements_by_references(sets_getter, femobj_ref):
+    elem = []
+    feat, sub_ref = femobj_ref
+    sub = (feat, (sub_ref,))
+    femmesh = sets_getter.femmesh
+
+    # A group of the dimension the mesh is made of already is the element set
+    # the search would arrive at, so there is nothing left to search for. A
+    # group of a lower dimension holds surface or edge elements instead and
+    # only serves to name the nodes below.
+    group_type = get_femmesh_group_type(sub_ref)
+    if group_type is not None and group_type == get_model_group_type(femmesh):
+        group_elements = get_femmesh_groupdata_sets_by_refs(femmesh, [sub], group_type)
+        if group_elements:
+            FreeCAD.Console.PrintLog(
+                "    Finite elements where retrieved "
+                "from existent finite element mesh group data.\n"
+            )
+            return (sub, sorted(group_elements))
+
+    charged_volume_node_set = get_nodes_of_reference(sets_getter.femmesh, sub)
+
+    bit_pattern_dict = get_bit_pattern_dict(
+        sets_getter.femelement_table, sets_getter.femnodes_ele_table, charged_volume_node_set
+    )
+    sh = feat.getSubObject(sub_ref)
+    if sh.ShapeType == "Solid":
+        elem = get_element_volumes_elements_from_binary_search(bit_pattern_dict)
+    elif sh.ShapeType == "Face":
+        elem = get_element_faces_elements_from_binary_search(bit_pattern_dict)
+    elif sh.ShapeType == "Edge":
+        elem = get_element_edges_elements_from_binary_search(bit_pattern_dict)
+
+    return (sub, elem)
 
 
 def get_subelements_by_references(sets_getter, femobj_ref, face_masks, edge_masks):
-    node_set = []
-    result = []
-    # TODO get elements from mesh groups
-    # if femmesh.GroupCount:
-    #     node_set = get_femmesh_groupdata_sets_by_name(femmesh, femobj, "Node")
-    #     # FreeCAD.Console.PrintMessage("node_set_group: {}\n".format(node_set))
-    #     if node_set:
-    #         FreeCAD.Console.PrintLog(
-    #             "    Finite element mesh nodes where retrieved "
-    #             "from existent finite element mesh group data.\n"
-    #         )
-    if not node_set:
-        sub_elem = []
-        FreeCAD.Console.PrintLog(
-            "    Finite element mesh nodes will be retrieved "
-            "by searching the appropriate nodes in the finite element mesh.\n"
-        )
-        feat, sub_ref = femobj_ref
-        sub = (feat, (sub_ref,))
-        node_set = get_femnodes_by_references(sets_getter.femmesh, [sub])
-        charged_face_node_set = sorted(set(node_set))
+    sub_elem = []
+    feat, sub_ref = femobj_ref
+    sub = (feat, (sub_ref,))
+    charged_face_node_set = get_nodes_of_reference(sets_getter.femmesh, sub)
 
-        bit_pattern_dict = get_bit_pattern_dict(
-            sets_getter.femelement_table, sets_getter.femnodes_ele_table, charged_face_node_set
-        )
-        sh = feat.getSubObject(sub_ref)
-        if sh.ShapeType == "Face":
-            sub_elem = get_element_faces_from_binary_search(bit_pattern_dict, **face_masks)
-        elif sh.ShapeType == "Edge":
-            sub_elem = get_element_edges_from_binary_search(bit_pattern_dict, **edge_masks)
+    bit_pattern_dict = get_bit_pattern_dict(
+        sets_getter.femelement_table, sets_getter.femnodes_ele_table, charged_face_node_set
+    )
+    sh = feat.getSubObject(sub_ref)
+    if sh.ShapeType == "Face":
+        sub_elem = get_element_faces_from_binary_search(bit_pattern_dict, **face_masks)
+    elif sh.ShapeType == "Edge":
+        sub_elem = get_element_edges_from_binary_search(bit_pattern_dict, **edge_masks)
 
-        result = (sub, sub_elem)
-
-    return result
+    return (sub, sub_elem)
 
 
 # ************************************************************************************************

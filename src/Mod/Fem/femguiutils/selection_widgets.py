@@ -42,11 +42,12 @@ import FreeCADGui as Gui
 import FemGui
 
 from femtools import femutils
+from femtools import importtools
 from femtools import geomtools
 from femguiutils.disambiguate_solid_selection import disambiguate_solid_selection
 
 if TYPE_CHECKING:
-    from Part import Face, Edge, PartFeature
+    from Part import Face, Edge, Shape
 
 
 def editing_object():
@@ -71,26 +72,26 @@ def reference_geometry():
     return femutils.get_reference_geometry(FemGui.getActiveAnalysis())
 
 
-def solids_with_edge(parent_part: "PartFeature", edge: "Edge") -> List[int]:
+def solids_with_edge(parent_shape: "Shape", edge: "Edge") -> List[int]:
     """
-    Return the indices in the parent's list of solids that are partially bounded by edge.
+    Return the indices in the shape's list of solids that are partially bounded by edge.
     """
 
     solids_with_edge: List[int] = []
-    for idx, solid in enumerate(parent_part.Shape.Solids):
+    for idx, solid in enumerate(parent_shape.Solids):
         if any([edge.isSame(e) for e in solid.Edges]):
             solids_with_edge.append(idx)
 
     return solids_with_edge
 
 
-def solids_with_face(parent_part: "PartFeature", face: "Face") -> List[int]:
+def solids_with_face(parent_shape: "Shape", face: "Face") -> List[int]:
     """
-    Return the indices in the parent's list of solids that are partially bounded by face.
+    Return the indices in the shape's list of solids that are partially bounded by face.
     """
 
     solids_with_face: List[int] = []
-    for idx, solid in enumerate(parent_part.Shape.Solids):
+    for idx, solid in enumerate(parent_shape.Solids):
         if any([face.isSame(f) for f in solid.Faces]):
             solids_with_face.append(idx)
 
@@ -212,8 +213,8 @@ class SolidSelector(_Selector):
         selection = []
         for selObj in Gui.Selection.getSelectionEx():
             solids = set()
-            for sub in self._getObjects(selObj.Object, selObj.SubElementNames):
-                s = self._getSolidOfSub(selObj.Object, sub)
+            for name in selObj.SubElementNames:
+                s = self._getSolidOfSub(selObj.Object, name)
                 if s is not None:
                     solids.add(s)
             if solids:
@@ -225,45 +226,35 @@ class SolidSelector(_Selector):
             )
         return selection
 
-    def _getObjects(self, obj, names):
-        objects = []
-        if not hasattr(obj, "Shape"):
-            FreeCAD.Console.PrintMessage("Selected object has no Shape.\n")
-            return objects
-        shape = obj.Shape
-        for n in names:
-            if n.startswith("Face"):
-                objects.append(shape.Faces[int(n[4:]) - 1])
-            elif n.startswith("Edge"):
-                objects.append(shape.Edges[int(n[4:]) - 1])
-            elif n.startswith("Vertex"):
-                objects.append(shape.Vertexes[int(n[6:]) - 1])
-            elif n.startswith("Solid"):
-                objects.append(shape.Solids[int(n[5:]) - 1])
-        return objects
+    def _getSolidOfSub(self, obj, name):
+        """
+        Name of the one solid the element *name* belongs to, or None.
 
-    def _getSolidOfSub(self, obj, sub):
-        foundSolids = set()
-        if sub.ShapeType == "Solid":
-            for solidId, solid in enumerate(obj.Shape.Solids):
-                if sub.isSame(solid):
-                    foundSolids.add("Solid" + str(solidId + 1))
-        elif sub.ShapeType == "Face":
-            for solidId, solid in enumerate(obj.Shape.Solids):
-                if self._findSub(sub, solid.Faces):
-                    foundSolids.add("Solid" + str(solidId + 1))
-        elif sub.ShapeType == "Edge":
-            for solidId, solid in enumerate(obj.Shape.Solids):
-                if self._findSub(sub, solid.Edges):
-                    foundSolids.add("Solid" + str(solidId + 1))
-        elif sub.ShapeType == "Vertex":
-            for solidId, solid in enumerate(obj.Shape.Solids):
-                if self._findSub(sub, solid.Vertexes):
-                    foundSolids.add("Solid" + str(solidId + 1))
-        if len(foundSolids) == 1:
-            it = iter(foundSolids)
-            return next(it)
-        return None
+        Keeps the path the pick came with, so a solid of an imported analysis is
+        named as a reference on the import names it.
+        """
+        sub = geomtools.get_element(obj, name)
+        shape = geomtools.get_element_shape(obj, name)
+        if sub is None or shape is None:
+            return None
+
+        members = {
+            "Solid": lambda solid: sub.isSame(solid),
+            "Face": lambda solid: self._findSub(sub, solid.Faces),
+            "Edge": lambda solid: self._findSub(sub, solid.Edges),
+            "Vertex": lambda solid: self._findSub(sub, solid.Vertexes),
+        }.get(sub.ShapeType)
+        if members is None:
+            return None
+
+        prefix = name.rpartition(".")[0]
+        found = {
+            f"Solid{index + 1}" for index, solid in enumerate(shape.Solids) if members(solid)
+        }
+        if len(found) != 1:
+            return None
+        solid = next(iter(found))
+        return f"{prefix}.{solid}" if prefix else solid
 
     def _findSub(self, sub, subList):
         for i, s in enumerate(subList):
@@ -401,7 +392,9 @@ class GeometryElementsSelection(QtGui.QWidget):
                 self.references.append((ref[0], elem))
 
     def get_item_text(self, ref):
-        return ref[0].Name + ":" + ref[1]
+        obj, sub = ref
+        label = obj.Label if hasattr(obj, "Label") else obj.Name
+        return f"{label}:{sub}"
 
     def get_allitems_text(self):
         items = []
@@ -434,8 +427,10 @@ class GeometryElementsSelection(QtGui.QWidget):
                         self.obj_notvisible.append(ref[0])
                         ref[0].ViewObject.Visibility = True
                     FreeCADGui.Selection.clearSelection()
-                    ref_sh_type = ref[0].Shape.ShapeType
-                    if ref[1].startswith("Solid") and (
+                    owner_shape = geomtools.get_element_shape(ref[0], ref[1])
+                    ref_sh_type = owner_shape.ShapeType if owner_shape is not None else ""
+                    leaf = ref[1].rpartition(".")
+                    if leaf[2].startswith("Solid") and (
                         ref_sh_type == "Compound" or ref_sh_type == "CompSolid"
                     ):
                         # selection of Solids of Compounds or CompSolids is not possible
@@ -448,14 +443,18 @@ class GeometryElementsSelection(QtGui.QWidget):
                             return
                         faces = []
                         for fs in solid.Faces:
-                            # find these faces in ref[0]
-                            for i, fref in enumerate(ref[0].Shape.Faces):
+                            # find these faces in the shape the solid is part of
+                            for i, fref in enumerate(owner_shape.Faces):
                                 if fs.isSame(fref):
                                     fref_elstring = "Face" + str(i + 1)
                                     if fref_elstring not in faces:
                                         faces.append(fref_elstring)
                         for f in faces:
-                            FreeCADGui.Selection.addSelection(ref[0], f)
+                            # Same path as the reference, so the 3D view resolves
+                            # the face on the instance the solid was picked on.
+                            FreeCADGui.Selection.addSelection(
+                                ref[0], f"{leaf[0]}.{f}" if leaf[0] else f
+                            )
                     else:
                         # Selection of all other element types is supported
                         FreeCADGui.Selection.addSelection(ref[0], ref[1])
@@ -540,6 +539,8 @@ class GeometryElementsSelection(QtGui.QWidget):
         geometry = reference_geometry()
         if geometry is None or obj == geometry:
             return True
+        if obj.isDerivedFrom("Fem::FemAnalysisImport"):
+            return True
 
         FreeCADGui.Selection.clearSelection()
         message = "Select on the geometry of the analysis, {}.\n".format(geometry.Label)
@@ -550,23 +551,26 @@ class GeometryElementsSelection(QtGui.QWidget):
     def selectionParser(self, selection):
         if not self.may_reference(selection[0]):
             return
-        if hasattr(selection[0], "Shape") and selection[1]:
+        sobj = selection[0]
+        # An import carries no shape of its own; the element is resolved through
+        # the path on it, which is also what the reference records.
+        elt = geomtools.get_element(sobj, selection[1]) if selection[1] else None
+        if elt is not None:
             FreeCAD.Console.PrintMessage(
-                "Selection: {}  {}  {}\n".format(
-                    selection[0].Shape.ShapeType, selection[0].Name, selection[1]
-                )
+                "Selection: {}  {}  {}\n".format(elt.ShapeType, sobj.Name, selection[1])
             )
-            sobj = selection[0]
-            elt = sobj.Shape.getElement(selection[1])
             ele_ShapeType = elt.ShapeType
             if self.selection_mode_solid and "Solid" in self.sel_elem_types:
                 # in solid selection mode use edges and faces for selection of a solid
                 # adapt selection variable to hold the Solid
                 solid_to_add = None
+                owner_shape = geomtools.get_element_shape(sobj, selection[1])
+                if owner_shape is None:
+                    return
                 if ele_ShapeType == "Edge":
-                    solid_indices = solids_with_edge(sobj, elt)
+                    solid_indices = solids_with_edge(owner_shape, elt)
                 elif ele_ShapeType == "Face":
-                    solid_indices = solids_with_face(sobj, elt)
+                    solid_indices = solids_with_face(owner_shape, elt)
                 else:
                     raise ValueError(f"Unexpected shape type: {ele_ShapeType}")
 
@@ -582,11 +586,15 @@ class GeometryElementsSelection(QtGui.QWidget):
                         solid_to_add = selected_solid[len("Solid") :]
 
                 if solid_to_add:
-                    selection = (sobj, "Solid" + solid_to_add)
+                    # The solid is numbered in the shape the element came from,
+                    # so it is named the same way: same path, other element.
+                    prefix = selection[1].rpartition(".")[0]
+                    name = f"Solid{solid_to_add}"
+                    selection = (sobj, f"{prefix}.{name}" if prefix else name)
                     ele_ShapeType = "Solid"
                     FreeCAD.Console.PrintMessage(
-                        "    Selection variable adapted to hold the Solid: {}  {}  {}\n".format(
-                            sobj.Shape.ShapeType, sobj.Name, selection[1]
+                        "    Selection variable adapted to hold the Solid: {}  {}\n".format(
+                            sobj.Name, selection[1]
                         )
                     )
                 else:

@@ -32,6 +32,7 @@
 
 
 #include <App/Document.h>
+#include <App/DocumentObjectGroup.h>
 #include <App/MaterialObject.h>
 #include <App/TextDocument.h>
 #include <Gui/ActionFunction.h>
@@ -44,6 +45,7 @@
 #include <Gui/Workbench.h>
 #include <Gui/WorkbenchManager.h>
 #include <Mod/Fem/App/FemAnalysis.h>
+#include <Mod/Fem/App/FemAnalysisImport.h>
 #include <Mod/Fem/App/FemConstraint.h>
 #include <Mod/Fem/App/FemMeshObject.h>
 #include <Mod/Fem/App/FemResultObject.h>
@@ -297,6 +299,8 @@ bool ViewProviderFemAnalysis::canDragObject(App::DocumentObject* obj) const
         || obj->isDerivedFrom<Fem::FemResultObject>()
         || obj->isDerivedFrom<Fem::Constraint>()
         || obj->isDerivedFrom<Fem::FemSetObject>()
+        || obj->isDerivedFrom<Fem::FemAnalysisImport>()
+        || obj->isDerivedFrom<App::DocumentObjectGroup>()
         || obj->isDerivedFrom(Base::Type::fromName("Fem::FeaturePython"))
         || obj->isDerivedFrom<App::MaterialObject>()
         || obj->isDerivedFrom<App::TextDocument>()) {

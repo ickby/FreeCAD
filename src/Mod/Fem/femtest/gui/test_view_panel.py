@@ -268,6 +268,30 @@ class TestViewPanelGui(unittest.TestCase):
             "hiding to clear the way for a pick is scratch, what was hidden before is not",
         )
 
+    def test_the_ghost_outlives_a_clip_that_takes_everything(self):
+        """
+        The ghost is what says where the geometry went, so a clip plane that
+        leaves nothing of it is the one moment it matters most. Writing it
+        after the surfaces means an empty result never reaches it.
+        """
+        state = FemGui.getAnalysisViewState(self.analysis)
+        whole = _drawn_size(self.group.ViewObject)
+        self.assertIsNotNone(whole)
+
+        # Well above the geometry, so the clip keeps none of it
+        state.setClipPlane("clip", FreeCAD.Vector(0, 0, 1000), FreeCAD.Vector(0, 0, 1))
+        try:
+            self.assertEqual(_drawn_size(self.group.ViewObject), whole)
+            state.setOverlay(False)
+            self.assertIsNone(
+                _drawn_size(self.group.ViewObject),
+                "with the ghost off there is nothing left to draw",
+            )
+        finally:
+            state.setOverlay(True)
+            state.removeClipPlane("clip")
+        self.assertEqual(_drawn_size(self.group.ViewObject), whole)
+
     def test_a_lost_analysis_drops_what_was_hidden_for_the_step(self):
         state = FemGui.getAnalysisViewState(self.analysis)
         self._enter_edit()
@@ -322,6 +346,89 @@ class TestViewPanelGui(unittest.TestCase):
         self._enter_edit()
         self._leave_edit()
         self.assertEqual(state.getActiveStage(), "Geometry")
+
+    # -- placed instances in the tree ---------------------------------------
+
+    def _import_another_analysis(self, name="Leg1", analysis=None):
+        """A second analysis, placed in the one the panel describes."""
+        from femtools import importtools
+
+        analysis = analysis if analysis is not None else self.analysis
+
+        source = self.document.addObject("Part::Feature", "LegPart")
+        source.Shape = Part.makeBox(5, 5, 5)
+        leg = ObjectsFem.makeAnalysis(self.document, "LegAnalysis")
+        leg_geom = ObjectsFem.makeGeometryGroup(self.document, "LegGeometry")
+        leg.addObject(leg_geom)
+        leg_step = ObjectsFem.makeGeometryImport(self.document)
+        leg_step.Import = [source]
+        leg_geom.Group = [leg_step]
+        ObjectsFem.makeMeshShapeGroup(self.document, geometry=leg_geom, analysis=leg)
+        self.document.recompute()
+
+        imp = ObjectsFem.makeAnalysisImport(self.document, name)
+        imp.Analysis = leg
+        importtools.wire_import(analysis, imp)
+        self.document.recompute()
+        return imp
+
+    def test_an_import_added_later_shows_up_in_the_tree(self):
+        """
+        An import lands in a container group inside the analysis, so neither it
+        nor the analysis' own Group property announces it. Without watching the
+        container the tree keeps describing the analysis as it was.
+        """
+        self.assertNotIn("Leg1.Solid1", _row_names(self.explorer._model))
+        imp = self._import_another_analysis()
+        names = _row_names(self.explorer._model)
+        self.assertIn("Leg1.Solid1", names, "the placed analysis brings elements of its own")
+
+        # And the row is gone again once the instance is
+        self.document.removeObject(imp.Name)
+        self.document.recompute()
+        self.assertNotIn("Leg1.Solid1", _row_names(self.explorer._model))
+
+    def test_suppressing_a_component_of_an_import_updates_the_tree(self):
+        imp = self._import_another_analysis()
+        self.assertIn("Leg1.Solid1", _row_names(self.explorer._model))
+        imp.SuppressedComponents = [1]
+        self.document.recompute()
+        self.assertNotIn("Leg1.Solid1", _row_names(self.explorer._model))
+
+    def test_an_import_makes_the_mesh_stage_reachable(self):
+        """
+        An analysis that only places others has no mesh of its own, and the
+        meshes it solves with come from its imports.
+        """
+        self.assertFalse(self.settings.widget.MeshButton.isEnabled())
+        self._import_another_analysis()
+        self.assertTrue(self.settings.widget.MeshButton.isEnabled())
+
+    def _assembly_analysis(self):
+        """An analysis that has nothing of its own but a placed instance."""
+        assembly = ObjectsFem.makeAnalysis(self.document, "Assembly")
+        FemGui.setActiveAnalysis(assembly)
+        imp = self._import_another_analysis(name="Placed1", analysis=assembly)
+        self.explorer.setup_analysis()
+        self.settings.setup_analysis()
+        return imp
+
+    def test_an_analysis_of_nothing_but_instances_lists_them(self):
+        """
+        What such an analysis is made of is entirely what it places, so a tree
+        that only describes geometry of its own has nothing to say about it.
+        """
+        self._assembly_analysis()
+        self.assertIn("Placed1.Solid1", _row_names(self.explorer._model))
+
+    def test_both_stages_are_reachable_with_nothing_but_instances(self):
+        """
+        Both stages draw what the instances draw, and the way back from the
+        mesh must not depend on geometry the analysis does not have.
+        """
+        self._assembly_analysis()
+        self.assertTrue(self.settings.widget.MeshButton.isEnabled())
+        self.assertTrue(self.settings.widget.GeometryButton.isEnabled())
 
     # -- the entry point the user takes -------------------------------------
 

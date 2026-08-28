@@ -80,6 +80,7 @@ set(FemGui_UIC_SRCS
     TaskFemConstraintContact.ui
     TaskFemConstraintTransform.ui
     TaskFemConstraintSpring.ui
+    TaskFemAnalysisImport.ui
     TaskTetParameter.ui
     TaskAnalysisInfo.ui
     TaskDriver.ui
@@ -183,6 +184,9 @@ SET(FemGui_DLG_SRCS
     TaskFemConstraintTransform.ui
     TaskFemConstraintTransform.cpp
     TaskFemConstraintTransform.h
+    TaskFemAnalysisImport.ui
+    TaskFemAnalysisImport.cpp
+    TaskFemAnalysisImport.h
 )
 SOURCE_GROUP("Constraint-Dialogs" FILES ${FemGui_DLG_SRCS})
 
@@ -206,6 +210,12 @@ SET(FemGui_SRCS_ViewProvider
     ViewProviderFemMeshShapeNetgen.h
     ViewProviderFemMeshGroup.cpp
     ViewProviderFemMeshGroup.h
+    ViewProviderFemAnalysisImport.cpp
+    ViewProviderFemAnalysisImport.h
+    FemGeometryViewHelper.cpp
+    FemGeometryViewHelper.h
+    FemPreprocessMeshViewHelper.cpp
+    FemPreprocessMeshViewHelper.h
     ViewProviderAnalysis.cpp
     ViewProviderAnalysis.h
     ViewProviderSolver.cpp

@@ -94,6 +94,17 @@ PyObject* ViewProviderFemGeometryPy::setChainPreview(PyObject* args)
     Py_Return;
 }
 
+PyObject* ViewProviderFemGeometryPy::isChainPreview(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    if (this->getViewProviderFemGeometryPtr()->isChainPreview()) {
+        Py_RETURN_TRUE;
+    }
+    Py_RETURN_FALSE;
+}
+
 PyObject* ViewProviderFemGeometryPy::isChainRenderSuppressed(PyObject* args)
 {
     if (!PyArg_ParseTuple(args, "")) {

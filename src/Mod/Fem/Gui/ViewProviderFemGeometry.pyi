@@ -54,6 +54,10 @@ class ViewProviderFemGeometry(ViewProviderDocumentObject):
         """
         ...
 
+    def isChainPreview(self) -> bool:
+        """True while this shape stands in for the chain result, see setChainPreview()."""
+        ...
+
     def isChainRenderSuppressed(self) -> bool:
         """True while a chain step preview hides this group's render."""
         ...
@@ -73,8 +77,9 @@ class ViewProviderFemGeometry(ViewProviderDocumentObject):
             clears only its own. Where roles overlap, the one set last wins.
         elements : sequence of str
             Element names, either toplevel (Solid2) or sub-element (Face7,
-            Edge3, Vertex1). A toplevel marks everything belonging to it. An
-            empty sequence clears the role.
+            Edge3, Vertex1). A toplevel marks its faces and only those, so its
+            edges and vertices stay free for marks of their own. An empty
+            sequence clears the role.
         color : tuple of float, optional
             (r, g, b) in 0..1. Defaults to a distinct marking colour.
         """

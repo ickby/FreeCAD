@@ -342,6 +342,7 @@ void ClipPlaneHandle::initializePlane()
             // saved document: take it over instead of moving it.
             m_active = true;
             adopted = true;
+            m_scope = it->second.Scope;
             setPlane(it->second.Origin, it->second.Direction);
         }
     }
@@ -447,6 +448,17 @@ void ClipPlaneHandle::setActive(bool on)
     }
 }
 
+void ClipPlaneHandle::setScope(const std::string& scope)
+{
+    if (m_removed || m_scope == scope) {
+        return;
+    }
+    m_scope = scope;
+    if (m_active) {
+        applyToViewState();
+    }
+}
+
 void ClipPlaneHandle::setWidgetVisible(bool on)
 {
     m_widgetVisible = on;
@@ -511,6 +523,7 @@ void ClipPlaneHandle::refresh()
         auto it = planes.find(m_name);
         m_active = it != planes.end();
         if (m_active) {
+            m_scope = it->second.Scope;
             m_dragger->translation.setValue(toSb(it->second.Origin));
             Base::Vector3d dir = it->second.Direction;
             if (dir.Length() > minNormalLength) {
@@ -533,6 +546,7 @@ void ClipPlaneHandle::applyToViewState()
     ClippingPlane plane;
     plane.Origin = origin();
     plane.Direction = normal();
+    plane.Scope = m_scope;
     state->setClipPlane(m_name, plane);
 }
 

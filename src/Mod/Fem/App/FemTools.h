@@ -29,6 +29,8 @@
 #include <gp_XYZ.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include <vector>
+
 class TopoDS_Edge;
 class TopoDS_Face;
 
@@ -51,6 +53,8 @@ class TopoShape;
 namespace Fem
 {
 
+class FemAnalysis;
+class FemAnalysisImport;
 class FemGeometry;
 
 class FemExport Tools
@@ -120,6 +124,42 @@ public:
      documents whose members reference part features directly.
     */
     static Fem::FemGeometry* getAnalysisGeometry(const App::DocumentObject* member);
+    /*!
+     The analysis imports of an analysis, in no particular order.
+
+     An import sits either directly in the analysis or in a group inside it;
+     both count, and each import is listed once. Only the analysis itself is
+     looked at, so imports of an imported analysis are not included.
+    */
+    static std::vector<Fem::FemAnalysisImport*> analysisImports(const Fem::FemAnalysis* analysis);
+    /*!
+     Toplevel elements the imports of *analysis* contribute, as dotted paths.
+
+     Recursive, so an imported analysis that places instances of its own is
+     covered as well, under the path leading to them. A suppressed component is
+     left out: it is not part of the analysis, so nothing may name it.
+    */
+    static std::vector<std::string> importedToplevelElements(const Fem::FemAnalysis* analysis);
+    /*!
+     Whether *member* is switched off for the instance chain leading to it.
+
+     *chain* lists the imports from the outermost inwards, the innermost one
+     being the instance *member* belongs to. An instance names a member of a
+     nested instance by the path to it, so switching a member off in one
+     instance leaves the other instances of the same analysis alone.
+    */
+    static bool isMemberSuppressed(
+        const std::vector<const Fem::FemAnalysisImport*>& chain,
+        const App::DocumentObject* member
+    );
+    /*!
+     Whether *member* of an imported analysis can be inherited at all.
+
+     Everything an analysis holds is inheritable but the parts that describe
+     the analysis itself rather than a condition on it: its geometry, its mesh,
+     the imports it places and the solvers and results it drives.
+    */
+    static bool isInheritableMember(const App::DocumentObject* member);
     /*!
      Get cylinder parameters. Base is located at the center of the cylinder
     */

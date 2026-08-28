@@ -1786,11 +1786,15 @@ void ViewProviderFemGeometry::updateColors()
 
 void ViewProviderFemGeometry::update3D()
 {
+    // Before anything that gives up on the geometry: a clip plane that takes
+    // the whole shape is exactly when the ghost is the only thing left to say
+    // where it went.
+    updateGeometryOverlay();
+
     if (!m_visdata || m_visdata->GetNumberOfCells() == 0) {
         m_faces->coordIndex.setNum(0);
         m_lines->coordIndex.setNum(0);
         m_markers->numPoints = 0;
-        m_geometryoverlay->coordIndex.setNum(0);
         m_faceids.clear();
         m_lineids.clear();
         m_pointids.clear();
@@ -2006,10 +2010,15 @@ void ViewProviderFemGeometry::update3D()
 
     updateColors();
     resetSelectionVisuals();
+}
 
+void ViewProviderFemGeometry::updateGeometryOverlay()
+{
+    auto* state = m_boundViewState;
     const auto& clipper = state ? state->clipPlanes() : std::map<std::string, ClippingPlane> {};
     const std::set<std::string> empty_hidden;
     const auto& hidden = state ? state->hiddenElements() : empty_hidden;
+    const bool wireframe = state ? state->wireframe() : (DisplayMode.getValue() == 1);
     const bool overlay_enabled = !state || state->overlay();
     const bool show_geometry_overlay =
         overlay_enabled && (wireframe || !clipper.empty() || !hidden.empty());
@@ -2019,7 +2028,7 @@ void ViewProviderFemGeometry::update3D()
     }
 
     auto* visdata = m_visgeometryoverlay.Get();
-    pntData = visdata->GetPointData();
+    auto* pntData = visdata->GetPointData();
     FemMeshRenderer::writePointData(
         m_geometryoverlaycoordinates,
         m_geometryoverlaynormals,

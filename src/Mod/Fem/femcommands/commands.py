@@ -94,6 +94,23 @@ class _Analysis(CommandManager):
         FreeCAD.ActiveDocument.recompute()
 
 
+class _AnalysisImport(CommandManager):
+    "The FEM_AnalysisImport command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.pixmap = "FEM_AnalysisImport"
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_AnalysisImport", "Import Analysis")
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_AnalysisImport",
+            "Imports another analysis geometry and mesh into the active analysis",
+        )
+        self.is_active = "with_analysis"
+
+    def Activated(self):
+        self.add_analysis_import()
+
+
 class _GeometryImport(CommandManager):
     "The FEM_GeometryImport command definition"
 
@@ -1482,6 +1499,7 @@ class _CompSolvers(CommandManager):
 
 # the string in add command will be the page name on FreeCAD wiki
 FreeCADGui.addCommand("FEM_Analysis", _Analysis())
+FreeCADGui.addCommand("FEM_AnalysisImport", _AnalysisImport())
 FreeCADGui.addCommand("FEM_GeometryImport", _GeometryImport())
 FreeCADGui.addCommand("FEM_GeometryPartition", _GeometryPartition())
 FreeCADGui.addCommand("FEM_ClippingPlaneAdd", _ClippingPlaneAdd())

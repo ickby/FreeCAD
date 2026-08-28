@@ -304,6 +304,10 @@ void TaskFemConstraintHeatflux::addToSelection()
         const std::vector<std::string>& subNames = it.getSubNames();
         if (!subNames.empty()) {
             for (const auto& subName : subNames) {
+
+            App::DocumentObject* refObj = obj;
+            std::string refSub = subName;
+            normalizeReference(refObj, refSub);
                 if ((subName.substr(0, 4) != "Face") && (subName.substr(0, 4) != "Edge")) {
                     QMessageBox::warning(
                         this,
@@ -319,6 +323,10 @@ void TaskFemConstraintHeatflux::addToSelection()
             // SubElements
         }
         for (const auto& subName : subNames) {  // for every selected sub element
+
+            App::DocumentObject* refObj = obj;
+            std::string refSub = subName;
+            normalizeReference(refObj, refSub);
             bool addMe = true;
             for (auto itr = std::ranges::find(SubElements.begin(), SubElements.end(), subName);
                  itr != SubElements.end();
@@ -328,7 +336,7 @@ void TaskFemConstraintHeatflux::addToSelection()
                      subName
                  )) {  // for every sub element in selection that
                        // matches one in old list
-                if (obj
+                if (refObj
                     == Objects[std::distance(
                         SubElements.begin(),
                         itr
@@ -339,9 +347,9 @@ void TaskFemConstraintHeatflux::addToSelection()
             }
             if (addMe) {
                 QSignalBlocker block(ui->lw_references);
-                Objects.push_back(obj);
-                SubElements.push_back(subName);
-                ui->lw_references->addItem(makeRefText(obj, subName));
+                Objects.push_back(refObj);
+                SubElements.push_back(refSub);
+                ui->lw_references->addItem(makeRefText(refObj, refSub));
             }
         }
     }

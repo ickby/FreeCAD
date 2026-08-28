@@ -86,12 +86,14 @@ public:
     /**
      * Build the classification for the active colour mode.
      * @param meshGrid Optional; required for CellType (and cell lookups for mesh modes).
+     * @param gridSource Where the element names of @a meshGrid come from.
      */
     static std::unique_ptr<Classification> create(
         ColorMode mode,
         Fem::FemAnalysis* analysis,
         Fem::FemGeometry* geometry,
-        vtkUnstructuredGrid* meshGrid = nullptr
+        vtkUnstructuredGrid* meshGrid = nullptr,
+        const GridSource& gridSource = {}
     );
 };
 
@@ -99,14 +101,24 @@ public:
 class FemGuiExport SubelementClassification: public Classification
 {
 public:
-    SubelementClassification(Fem::FemGeometry* geometry, vtkUnstructuredGrid* meshGrid);
+    SubelementClassification(
+        Fem::FemAnalysis* analysis,
+        Fem::FemGeometry* geometry,
+        vtkUnstructuredGrid* meshGrid,
+        const GridSource& gridSource = {}
+    );
 
     std::vector<Category> categories() const override;
     int categoryOfElement(const std::string& element) const override;
     int categoryOfCell(vtkIdType cell) const override;
 
 private:
-    void build(Fem::FemGeometry* geometry, vtkUnstructuredGrid* meshGrid);
+    void build(
+        Fem::FemAnalysis* analysis,
+        Fem::FemGeometry* geometry,
+        vtkUnstructuredGrid* meshGrid,
+        const GridSource& gridSource
+    );
 
     Fem::FemGeometry* m_geometry {nullptr};
     std::vector<Category> m_categories;
@@ -118,14 +130,24 @@ private:
 class FemGuiExport ToplevelClassification: public Classification
 {
 public:
-    ToplevelClassification(Fem::FemGeometry* geometry, vtkUnstructuredGrid* meshGrid);
+    ToplevelClassification(
+        Fem::FemAnalysis* analysis,
+        Fem::FemGeometry* geometry,
+        vtkUnstructuredGrid* meshGrid,
+        const GridSource& gridSource = {}
+    );
 
     std::vector<Category> categories() const override;
     int categoryOfElement(const std::string& element) const override;
     int categoryOfCell(vtkIdType cell) const override;
 
 private:
-    void build(Fem::FemGeometry* geometry, vtkUnstructuredGrid* meshGrid);
+    void build(
+        Fem::FemAnalysis* analysis,
+        Fem::FemGeometry* geometry,
+        vtkUnstructuredGrid* meshGrid,
+        const GridSource& gridSource
+    );
 
     Fem::FemGeometry* m_geometry {nullptr};
     std::vector<Category> m_categories;
@@ -144,7 +166,7 @@ public:
     static constexpr const char* NoMaterialKey = "__no_material__";
 
     MaterialClassification(Fem::FemAnalysis* analysis, Fem::FemGeometry* geometry,
-                           vtkUnstructuredGrid* meshGrid);
+                           vtkUnstructuredGrid* meshGrid, const GridSource& gridSource = {});
 
     std::vector<Category> categories() const override;
     int categoryOfElement(const std::string& element) const override;
@@ -152,7 +174,7 @@ public:
 
 private:
     void build(Fem::FemAnalysis* analysis, Fem::FemGeometry* geometry,
-               vtkUnstructuredGrid* meshGrid);
+               vtkUnstructuredGrid* meshGrid, const GridSource& gridSource);
 
     Fem::FemGeometry* m_geometry {nullptr};
     std::vector<Category> m_categories;

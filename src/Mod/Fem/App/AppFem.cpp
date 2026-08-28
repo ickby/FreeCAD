@@ -52,6 +52,7 @@
 #include "FemMeshShapeNetgenObject.h"
 #include "FemMeshShapeObject.h"
 #include "FemMeshShapeGroup.h"
+#include "FemAnalysisImport.h"
 #include "FemGeometry.h"
 #include "FemResultObject.h"
 #include "FemSetElementNodesObject.h"
@@ -141,6 +142,7 @@ PyMOD_INIT_FUNC(Fem)
 
     Fem::FemAnalysis                          ::init();
     Fem::FemAnalysisPython                    ::init();
+    Fem::FemAnalysisImport                    ::init();
 
     Fem::Constraint                           ::init();
     Fem::ConstraintPython                     ::init();

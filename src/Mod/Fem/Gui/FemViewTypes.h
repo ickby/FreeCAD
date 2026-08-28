@@ -22,21 +22,46 @@
 
 #pragma once
 
+#include <string>
+
 #include <Base/Vector3D.h>
 #include <Mod/Fem/FemGlobal.h>
 
+namespace Fem
+{
+class FemGeometry;
+}
+
 namespace FemGui
 {
+
+/**
+ * Where the element names on a mesh grid come from.
+ *
+ * A grid of a placed instance is meshed and named in the source analysis, so
+ * its cells say "Solid1" where the importing analysis means "Import1.Solid1".
+ * Without that path a category of the source is taken for a native one of the
+ * same name, and every instance of one source ends up sharing its colours.
+ */
+struct FemGuiExport GridSource
+{
+    /// Path the elements of the grid are addressed under, "Import1." or empty
+    std::string pathPrefix;
+    /// Geometry the element names of the grid belong to, null for the analysis one
+    Fem::FemGeometry* geometry {nullptr};
+};
 
 /** Clipping plane used by mesh and geometry view providers. */
 struct FemGuiExport ClippingPlane
 {
     Base::Vector3d Origin;
     Base::Vector3d Direction;
+    /** Import path prefix, or empty to clip the whole analysis. */
+    std::string Scope;
 
     bool operator==(const ClippingPlane& other) const
     {
-        return Origin == other.Origin && Direction == other.Direction;
+        return Origin == other.Origin && Direction == other.Direction && Scope == other.Scope;
     }
     bool operator!=(const ClippingPlane& other) const
     {

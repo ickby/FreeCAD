@@ -32,14 +32,9 @@ namespace FemGui
 {
 
 /**
- * Thin view provider for FemMeshShapeGroup.
+ * View provider for FemMeshShapeGroup.
  *
- * Claims children and aggregates stage-aware visibility. Does not own scene
- * graph mesh content — per-object mesh VPs render via FemMeshRenderer.
- *
- * Mesh children should call FemMeshRenderer::applyVisibilityMask() with
- * AnalysisViewState filters and FemMeshRenderer::setClassification() with
- * AnalysisViewState::classification() (Stages 6–7).
+ * Child mesh objects render themselves. This VP only wires view-state updates.
  */
 class FemGuiExport ViewProviderFemMeshGroup: public Gui::ViewProviderDocumentObjectGroup
 {
@@ -50,13 +45,9 @@ public:
     ~ViewProviderFemMeshGroup() override;
 
     void attach(App::DocumentObject* pcObject) override;
-    void updateData(const App::Property*) override;
+    void updateData(const App::Property* prop) override;
     void onChanged(const App::Property* prop) override;
 
-    std::vector<std::string> getDisplayModes() const override;
-    void setDisplayMode(const char* ModeName) override;
-
-    /// Hide / show children according to AnalysisViewState active stage.
     void updateStageVisibility();
 
 protected:

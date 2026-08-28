@@ -74,10 +74,23 @@ public:
     /** Ensure FemMesh holds a current merge (used by PropertyFemMesh lazy access). */
     void ensureMergedMesh();
 
+    /**
+     * Counter bumped on every merge.
+     *
+     * The merge fills FemMesh and CellSources without a property change - it is
+     * a cache fill, not a user edit, and notifying would mark the document
+     * modified. Anything caching what it read from the merge therefore has no
+     * signal to react to and has to compare this instead.
+     */
+    std::size_t mergeRevision() const
+    {
+        return m_mergeRevision;
+    }
+
     void invalidateMergedCache();
 
     /**
-     * Mesh child claiming each component of the geometry, by 1-based index.
+     * Object claiming each component of the geometry, by 1-based index.
      *
      * A child with an empty Components sub-list claims every component, which
      * is the "all components" convention of that property. Where more than one
@@ -90,6 +103,7 @@ public:
 
 protected:
     void onChanged(const App::Property* prop) override;
+    void onDocumentRestored() override;
 
 private:
     /// Component claims of the mesh children, the base of every coverage check.
@@ -113,6 +127,7 @@ private:
 
     bool m_mergedValid {false};
     bool m_merging {false};
+    std::size_t m_mergeRevision {0};
     std::map<const App::DocumentObject*, fastsignals::scoped_connection> m_childConns;
 };
 

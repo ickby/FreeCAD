@@ -324,13 +324,16 @@ void TaskFemConstraintRigidBody::addToSelection()
         const std::vector<std::string>& subNames = it.getSubNames();
         for (size_t subIt = 0; subIt < (subNames.size());
              ++subIt) {  // for every selected sub element
+            App::DocumentObject* refObj = obj;
+            std::string refSub = subNames[subIt];
+            normalizeReference(refObj, refSub);
             bool addMe = true;
-            for (auto itr = std::ranges::find(SubElements, subNames[subIt]); itr != SubElements.end(); itr
+            for (auto itr = std::ranges::find(SubElements, refSub); itr != SubElements.end(); itr
                  = std::find(++itr,
                              SubElements.end(),
-                             subNames[subIt])) {  // for every sub element in selection that
+                             refSub)) {  // for every sub element in selection that
                                                   // matches one in old list
-                if (obj
+                if (refObj
                     == Objects[std::distance(
                         SubElements.begin(),
                         itr
@@ -342,10 +345,10 @@ void TaskFemConstraintRigidBody::addToSelection()
             // limit constraint such that only vertexes or faces or edges can be used depending on
             // what was selected first
             std::string searchStr;
-            if (subNames[subIt].find("Vertex") != std::string::npos) {
+            if (refSub.find("Vertex") != std::string::npos) {
                 searchStr = "Vertex";
             }
-            else if (subNames[subIt].find("Edge") != std::string::npos) {
+            else if (refSub.find("Edge") != std::string::npos) {
                 searchStr = "Edge";
             }
             else {
@@ -364,9 +367,9 @@ void TaskFemConstraintRigidBody::addToSelection()
             }
             if (addMe) {
                 QSignalBlocker block(ui->lw_references);
-                Objects.push_back(obj);
-                SubElements.push_back(subNames[subIt]);
-                ui->lw_references->addItem(makeRefText(obj, subNames[subIt]));
+                Objects.push_back(refObj);
+                SubElements.push_back(refSub);
+                ui->lw_references->addItem(makeRefText(refObj, refSub));
             }
         }
     }

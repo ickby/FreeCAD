@@ -41,6 +41,17 @@ void ClipPlaneHandlePy::init_type()
     add_varargs_method("setActive", &ClipPlaneHandlePy::setActive, "setActive(bool)");
     add_varargs_method("isWidgetVisible", &ClipPlaneHandlePy::isWidgetVisible, "isWidgetVisible()");
     add_varargs_method("setWidgetVisible", &ClipPlaneHandlePy::setWidgetVisible, "setWidgetVisible(bool)");
+    add_varargs_method(
+        "getScope",
+        &ClipPlaneHandlePy::getScope,
+        "getScope() -- path of the instance the plane cuts, empty for all of them"
+    );
+    add_varargs_method(
+        "setScope",
+        &ClipPlaneHandlePy::setScope,
+        "setScope(str) -- restrict the plane to the instance at that path and "
+        "everything inside it. An empty path cuts the whole analysis."
+    );
     add_varargs_method("getOrigin", &ClipPlaneHandlePy::getOrigin, "getOrigin()");
     add_varargs_method("getNormal", &ClipPlaneHandlePy::getNormal, "getNormal()");
     add_varargs_method("setPlane", &ClipPlaneHandlePy::setPlane, "setPlane(Vector origin, Vector normal)");
@@ -138,6 +149,24 @@ Py::Object ClipPlaneHandlePy::setWidgetVisible(const Py::Tuple& args)
     }
     if (m_handle) {
         m_handle->setWidgetVisible(PyObject_IsTrue(value) != 0);
+    }
+    return Py::None();
+}
+
+Py::Object ClipPlaneHandlePy::getScope(const Py::Tuple& args)
+{
+    (void)args;
+    return Py::String(m_handle ? m_handle->scope() : std::string());
+}
+
+Py::Object ClipPlaneHandlePy::setScope(const Py::Tuple& args)
+{
+    const char* scope = nullptr;
+    if (!PyArg_ParseTuple(args.ptr(), "s", &scope)) {
+        throw Py::Exception();
+    }
+    if (m_handle) {
+        m_handle->setScope(scope ? scope : "");
     }
     return Py::None();
 }

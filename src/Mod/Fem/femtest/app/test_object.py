@@ -79,10 +79,11 @@ class TestObjectCreate(unittest.TestCase):
         # gmsh mesh children: group, region, boundary layer etc. --> 10
         # result children: mesh result --> 1
         # analysis itself is not in analysis group --> 1
+        # import group children: the analysis import --> 1
         # vtk post pipeline children: region, scalar, cut, wrap, contour --> 5
         # vtk python post objects: glyph, 6x data extraction --> 7
 
-        subtraction = 22
+        subtraction = 23
         if vtk_objects_used:
             subtraction += 12
             if not ("BUILD_FEM_VTK_PYTHON" in FreeCAD.__cmake__):
@@ -150,6 +151,12 @@ class TestObjectType(unittest.TestCase):
         from femtools.femutils import type_of_obj
 
         self.assertEqual("Fem::FemAnalysis", type_of_obj(ObjectsFem.makeAnalysis(doc)))
+        self.assertEqual(
+            "Fem::FemAnalysisImport", type_of_obj(ObjectsFem.makeAnalysisImport(doc))
+        )
+        self.assertEqual(
+            "App::DocumentObjectGroup", type_of_obj(ObjectsFem.makeImportGroup(doc))
+        )
         self.assertEqual(
             "Fem::ConstantVacuumPermittivity",
             type_of_obj(ObjectsFem.makeConstantVacuumPermittivity(doc)),
@@ -353,6 +360,10 @@ class TestObjectType(unittest.TestCase):
         from femtools.femutils import is_of_type
 
         self.assertTrue(is_of_type(ObjectsFem.makeAnalysis(doc), "Fem::FemAnalysis"))
+        self.assertTrue(
+            is_of_type(ObjectsFem.makeAnalysisImport(doc), "Fem::FemAnalysisImport")
+        )
+        self.assertTrue(is_of_type(ObjectsFem.makeImportGroup(doc), "App::DocumentObjectGroup"))
         self.assertTrue(
             is_of_type(
                 ObjectsFem.makeConstantVacuumPermittivity(doc), "Fem::ConstantVacuumPermittivity"
@@ -571,6 +582,17 @@ class TestObjectType(unittest.TestCase):
         analysis = ObjectsFem.makeAnalysis(doc)
         self.assertTrue(is_derived_from(analysis, "App::DocumentObject"))
         self.assertTrue(is_derived_from(analysis, "Fem::FemAnalysis"))
+
+        # AnalysisImport
+        analysis_import = ObjectsFem.makeAnalysisImport(doc)
+        self.assertTrue(is_derived_from(analysis_import, "App::DocumentObject"))
+        self.assertTrue(is_derived_from(analysis_import, "App::GeoFeature"))
+        self.assertTrue(is_derived_from(analysis_import, "Fem::FemAnalysisImport"))
+
+        # ImportGroup
+        import_group = ObjectsFem.makeImportGroup(doc)
+        self.assertTrue(is_derived_from(import_group, "App::DocumentObject"))
+        self.assertTrue(is_derived_from(import_group, "App::DocumentObjectGroup"))
 
         # ConstantVacuumPermittivity
         constant_vacuumpermittivity = ObjectsFem.makeConstantVacuumPermittivity(doc)
@@ -1037,6 +1059,12 @@ class TestObjectType(unittest.TestCase):
 
         self.assertTrue(ObjectsFem.makeAnalysis(doc).isDerivedFrom("Fem::FemAnalysis"))
         self.assertTrue(
+            ObjectsFem.makeAnalysisImport(doc).isDerivedFrom("Fem::FemAnalysisImport")
+        )
+        self.assertTrue(
+            ObjectsFem.makeImportGroup(doc).isDerivedFrom("App::DocumentObjectGroup")
+        )
+        self.assertTrue(
             ObjectsFem.makeConstantVacuumPermittivity(doc).isDerivedFrom("Fem::ConstraintPython")
         )
         self.assertTrue(
@@ -1239,6 +1267,10 @@ class TestObjectType(unittest.TestCase):
 # helper
 def create_all_fem_objects_doc(doc):
     analysis = ObjectsFem.makeAnalysis(doc)
+
+    import_group = ObjectsFem.makeImportGroup(doc)
+    analysis.addObject(import_group)
+    import_group.addObject(ObjectsFem.makeAnalysisImport(doc))
 
     analysis.addObject(ObjectsFem.makeConstantVacuumPermittivity(doc))
     analysis.addObject(ObjectsFem.makeConstraintBearing(doc, name="ConstraintBearing"))

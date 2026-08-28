@@ -192,14 +192,20 @@ void AnalysisViewStatePy::init_type()
     add_varargs_method(
         "setClipPlane",
         &AnalysisViewStatePy::setClipPlane,
-        "setClipPlane(name, origin, direction)"
+        "setClipPlane(name, origin, direction, scope='')\n\n"
+        "An empty scope clips the whole analysis, otherwise the path of the\n"
+        "instance to clip (e.g. 'Import1') and everything inside it."
     );
     add_varargs_method(
         "removeClipPlane",
         &AnalysisViewStatePy::removeClipPlane,
         "removeClipPlane(name)"
     );
-    add_varargs_method("getClipPlanes", &AnalysisViewStatePy::getClipPlanes, "getClipPlanes()");
+    add_varargs_method(
+        "getClipPlanes",
+        &AnalysisViewStatePy::getClipPlanes,
+        "getClipPlanes() -> {name: (origin, direction, scope)}"
+    );
 
     add_varargs_method("getCategories", &AnalysisViewStatePy::getCategories, "getCategories()");
     add_varargs_method(
@@ -497,14 +503,16 @@ Py::Object AnalysisViewStatePy::setClipPlane(const Py::Tuple& args)
     char* name = nullptr;
     PyObject* origin = nullptr;
     PyObject* direction = nullptr;
+    const char* scope = "";
     if (!PyArg_ParseTuple(
             args.ptr(),
-            "sO!O!",
+            "sO!O!|s",
             &name,
             &(Base::VectorPy::Type),
             &origin,
             &(Base::VectorPy::Type),
-            &direction
+            &direction,
+            &scope
         )) {
         throw Py::Exception();
     }
@@ -512,6 +520,7 @@ Py::Object AnalysisViewStatePy::setClipPlane(const Py::Tuple& args)
         ClippingPlane plane;
         plane.Origin = *static_cast<Base::VectorPy*>(origin)->getVectorPtr();
         plane.Direction = *static_cast<Base::VectorPy*>(direction)->getVectorPtr();
+        plane.Scope = scope ? scope : "";
         state()->setClipPlane(name, plane);
     }
     return Py::None();
@@ -535,10 +544,11 @@ Py::Object AnalysisViewStatePy::getClipPlanes(const Py::Tuple& args)
     Py::Dict dict;
     if (state()) {
         for (const auto& entry : state()->clipPlanes()) {
-            Py::Tuple pair(2);
-            pair.setItem(0, Py::asObject(new Base::VectorPy(entry.second.Origin)));
-            pair.setItem(1, Py::asObject(new Base::VectorPy(entry.second.Direction)));
-            dict.setItem(entry.first, pair);
+            Py::Tuple triple(3);
+            triple.setItem(0, Py::asObject(new Base::VectorPy(entry.second.Origin)));
+            triple.setItem(1, Py::asObject(new Base::VectorPy(entry.second.Direction)));
+            triple.setItem(2, Py::String(entry.second.Scope));
+            dict.setItem(entry.first, triple);
         }
     }
     return dict;

@@ -661,8 +661,9 @@ void TaskFemConstraintFluidBoundary::onButtonDirection(const bool pressed)
     // we only handle the first selected object
     Gui::SelectionObject& selectionElement = selection.at(0);
 
-    // we can only handle part objects
-    if (!selectionElement.isObjectTypeOf(Part::Feature::getClassTypeId())) {
+    // we can only handle objects carrying a shape
+    const Part::TopoShape* shape = Fem::Tools::getFeatureShape(selectionElement.getObject());
+    if (!shape) {
         QMessageBox::warning(this, tr("Wrong Selection"), tr("Selected object is not a part object!"));
         return;
     }
@@ -683,8 +684,11 @@ void TaskFemConstraintFluidBoundary::onButtonDirection(const bool pressed)
     // vector for the direction
     std::vector<std::string> direction(1, subNamesElement);
 
-    Part::Feature* feat = static_cast<Part::Feature*>(selectionElement.getObject());
-    TopoDS_Shape ref = feat->Shape.getShape().getSubShape(subNamesElement.c_str());
+    TopoDS_Shape ref = shape->getSubShape(subNamesElement.c_str(), true);
+    if (ref.IsNull()) {
+        QMessageBox::warning(this, tr("Wrong Selection"), tr("Select an edge or a face."));
+        return;
+    }
 
     if (subNamesElement.substr(0, 4) == "Face") {
         if (!Fem::Tools::isPlanar(TopoDS::Face(ref))) {
@@ -716,8 +720,9 @@ void TaskFemConstraintFluidBoundary::onButtonDirection(const bool pressed)
     }
 
     // update the direction
-    pcConstraint->Direction.setValue(feat, direction);
-    ui->lineDirection->setText(makeRefText(feat, subNamesElement));
+    App::DocumentObject* directionObj = selectionElement.getObject();
+    pcConstraint->Direction.setValue(directionObj, direction);
+    ui->lineDirection->setText(makeRefText(directionObj, subNamesElement));
 
     // Update UI
     updateUI();
@@ -855,8 +860,7 @@ void TaskFemConstraintFluidBoundary::addToSelection()
     std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
 
     for (auto& it : selection) {  // for every selected object
-        if (!it.isObjectTypeOf(Part::Feature::getClassTypeId())) {
-            QMessageBox::warning(this, tr("Selection Error"), tr("Selected object is not a part!"));
+        if (!checkReference(it.getObject())) {
             return;
         }
 
@@ -938,8 +942,7 @@ void TaskFemConstraintFluidBoundary::removeFromSelection()
     std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
     std::vector<size_t> itemsToDel;
     for (const auto& it : selection) {  // for every selected object
-        if (!it.isObjectTypeOf(Part::Feature::getClassTypeId())) {
-            QMessageBox::warning(this, tr("Selection Error"), tr("Selected object is not a part!"));
+        if (!checkReference(it.getObject())) {
             return;
         }
         const std::vector<std::string>& subNames = it.getSubNames();

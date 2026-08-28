@@ -118,8 +118,7 @@ void TaskFemConstraintFixed::addToSelection()
     std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
 
     for (auto& it : selection) {  // for every selected object
-        if (!it.isObjectTypeOf(Part::Feature::getClassTypeId())) {
-            QMessageBox::warning(this, tr("Selection Error"), tr("Selected object is not a part!"));
+        if (!checkReference(it.getObject())) {
             return;
         }
 
@@ -199,8 +198,7 @@ void TaskFemConstraintFixed::removeFromSelection()
     std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
     std::vector<size_t> itemsToDel;
     for (const auto& it : selection) {  // for every selected object
-        if (!it.isObjectTypeOf(Part::Feature::getClassTypeId())) {
-            QMessageBox::warning(this, tr("Selection Error"), tr("Selected object is not a part!"));
+        if (!checkReference(it.getObject())) {
             return;
         }
         const std::vector<std::string>& subNames = it.getSubNames();

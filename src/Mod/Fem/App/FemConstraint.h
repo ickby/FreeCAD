@@ -70,13 +70,14 @@ public:
      *
      * @details
      *  This is a list of subobjects (e.g. Faces, Edges, ...) the constraint
-     *  applies to. It's only supposed to contain objects of or derived from
-     *  Part::Feature. Altering this property triggers a update of @ref
+     *  applies to. It's supposed to contain objects that carry a part shape,
+     *  which are the geometry an analysis builds and, in older documents,
+     *  Part::Feature objects. Altering this property triggers a update of @ref
      *  NormalDirection and @ref Scale.
      *
      * @note
-     *  Undefined behaviour if a unsupported (not derived from Part::Feature)
-     *  Document Object is added to the @References.
+     *  Objects without a part shape are ignored when the constraint reads its
+     *  references.
      */
     App::PropertyLinkSubList References;
 

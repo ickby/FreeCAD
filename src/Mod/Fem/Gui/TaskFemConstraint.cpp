@@ -38,6 +38,8 @@
 #include <Gui/Tools.h>
 #include <Gui/ViewProvider.h>
 #include <Mod/Fem/App/FemConstraint.h>
+#include <Mod/Fem/App/FemGeometry.h>
+#include <Mod/Fem/App/FemTools.h>
 
 #include "TaskFemConstraint.h"
 #include "ui_TaskFemConstraint.h"
@@ -99,6 +101,41 @@ const std::string TaskFemConstraint::getReferences(const std::vector<std::string
     }
 
     return result;
+}
+
+Fem::FemGeometry* TaskFemConstraint::referenceGeometry() const
+{
+    if (ConstraintView.expired()) {
+        return nullptr;
+    }
+
+    return Fem::Tools::getAnalysisGeometry(ConstraintView->getObject());
+}
+
+bool TaskFemConstraint::checkReference(const App::DocumentObject* obj)
+{
+    // An analysis that builds its own geometry keeps every reference on it, so
+    // that the shape the mesh is made of is the one the references address.
+    if (Fem::FemGeometry* geometry = referenceGeometry()) {
+        if (obj == geometry) {
+            return true;
+        }
+
+        QMessageBox::warning(
+            this,
+            tr("Selection Error"),
+            tr("Select on the geometry of the analysis, %1.")
+                .arg(QString::fromUtf8(geometry->Label.getValue()))
+        );
+        return false;
+    }
+
+    if (!Fem::Tools::getFeatureShape(obj)) {
+        QMessageBox::warning(this, tr("Selection Error"), tr("Selected object is not a part!"));
+        return false;
+    }
+
+    return true;
 }
 
 const std::string TaskFemConstraint::getScale() const

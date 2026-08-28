@@ -149,7 +149,8 @@ void TaskFemConstraintBearing::onSelectionChanged(const Gui::SelectionChanges& m
         }
         std::string subName(msg.pSubName);
 
-        if (selectionMode == selnone) {
+        // the direction of the derived constraints is picked by their own handler
+        if (selectionMode != selref && selectionMode != selloc) {
             return;
         }
 
@@ -157,8 +158,14 @@ void TaskFemConstraintBearing::onSelectionChanged(const Gui::SelectionChanges& m
         App::DocumentObject* obj = ConstraintView->getObject()->getDocument()->getObject(
             msg.pObjectName
         );
-        Part::Feature* feat = static_cast<Part::Feature*>(obj);
-        TopoDS_Shape ref = feat->Shape.getShape().getSubShape(subName.c_str());
+        if (!checkReference(obj)) {
+            return;
+        }
+        const Part::TopoShape* shape = Fem::Tools::getFeatureShape(obj);
+        TopoDS_Shape ref = shape ? shape->getSubShape(subName.c_str(), true) : TopoDS_Shape();
+        if (ref.IsNull()) {
+            return;
+        }
 
         if (selectionMode == selref) {
             std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();

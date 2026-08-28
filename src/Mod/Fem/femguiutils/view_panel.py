@@ -37,6 +37,8 @@ import FemGui
 
 import femtools.membertools as mt
 
+from femtools import femutils
+
 from PySide import QtCore, QtGui
 from PySide.QtCore import QModelIndex, Qt, QAbstractItemModel
 
@@ -102,6 +104,21 @@ def _chain_preview_input(viewprovider):
         return base if view.isChainPreview() else None
     except (AttributeError, ReferenceError, RuntimeError):
         return None
+
+
+def _picks_references(viewprovider, analysis):
+    """
+    Whether the open editor picks references on the geometry of the analysis.
+
+    Constraints, materials, mesh refinements and equations all hold references
+    into that geometry, so they are picked on the same shape a chain step is.
+    """
+    if analysis is None:
+        return False
+    obj = _vp_object(viewprovider)
+    if obj is None or not hasattr(obj, "References"):
+        return False
+    return femutils.get_analysis(obj) == analysis
 
 
 def _app_document_object(arg):
@@ -1267,7 +1284,7 @@ class ViewSettings(QtGui.QWidget):
         self._vs_callback = None
         self._updating = False
         self._clip_key = None
-        self._edit_step = None
+        self._edit_obj = None
         self._edit_stage = None
         self.setup_analysis()
 
@@ -1339,7 +1356,7 @@ class ViewSettings(QtGui.QWidget):
                     self.view_state.setActiveStage("Geometry")
         else:
             # No analysis left to put the stage back on.
-            self._edit_step = None
+            self._edit_obj = None
             self._edit_stage = None
 
         self._connect_view_state()
@@ -1360,7 +1377,7 @@ class ViewSettings(QtGui.QWidget):
         self._updating = True
         try:
             has_vs = self.view_state is not None
-            editing = self._edit_step is not None
+            editing = self._edit_obj is not None
             self.widget.GeometryButton.setEnabled(has_vs and self.geom_obj is not None)
             self.widget.MeshButton.setEnabled(has_vs and self.mesh_obj is not None and not editing)
             self.widget.ClipButton.setEnabled(has_vs)
@@ -1398,7 +1415,7 @@ class ViewSettings(QtGui.QWidget):
     def slotActiveFemAnalysisUpdated(self, analysis):
         if analysis != self.active_analysis:
             # The stage to go back to belonged to the analysis being left.
-            self._edit_step = None
+            self._edit_obj = None
             self._edit_stage = None
             self.active_analysis = analysis
             self.setup_analysis()
@@ -1456,26 +1473,29 @@ class ViewSettings(QtGui.QWidget):
 
     def slotInEdit(self, viewprovider):
         """
-        Put the view into the geometry stage for as long as a chain step is
-        edited. The step is picked on geometry, and a mesh drawn over it only
-        gets in the way, so the stage stays where it is put.
+        Put the view into the geometry stage for as long as geometry is picked,
+        be it by a chain step or by a member holding references into the
+        geometry. What is picked is geometry, and a mesh drawn over it only gets
+        in the way, so the stage stays where it is put.
         """
-        if self._edit_step is not None or not self.view_state:
+        if self._edit_obj is not None or not self.view_state:
             return
-        if _chain_preview_input(viewprovider) is None:
+        if _chain_preview_input(viewprovider) is None and not _picks_references(
+            viewprovider, self.active_analysis
+        ):
             return
 
-        self._edit_step = _vp_object(viewprovider)
+        self._edit_obj = _vp_object(viewprovider)
         self._edit_stage = self.view_state.getActiveStage()
         self.view_state.setActiveStage("Geometry")
         self.setup_widgets()
 
     def slotResetEdit(self, viewprovider):
-        if self._edit_step is None or _vp_object(viewprovider) != self._edit_step:
+        if self._edit_obj is None or _vp_object(viewprovider) != self._edit_obj:
             return
 
         stage = self._edit_stage
-        self._edit_step = None
+        self._edit_obj = None
         self._edit_stage = None
         if self.view_state and stage:
             self.view_state.setActiveStage(stage)

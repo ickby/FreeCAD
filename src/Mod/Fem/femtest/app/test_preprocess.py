@@ -206,6 +206,43 @@ class TestFemGeometry(unittest.TestCase):
         self.assertIn(3, dims)
         self.assertIn(2, dims)
 
+    def test_a_bridge_joins_the_components_it_touches(self):
+        """
+        A candidate went to the first component it shared topology with, so a
+        candidate bridging two of them left the second behind: geometry that is
+        connected throughout was reported as two components.
+        """
+        left = Part.makeBox(10, 10, 10)
+        right = Part.makeBox(10, 10, 10, FreeCAD.Vector(20, 0, 0))
+        bridge = Part.makeBox(10, 10, 10, FreeCAD.Vector(10, 0, 0))
+        pieces = sorted(
+            left.generalFuse([right, bridge])[0].Solids,
+            key=lambda solid: solid.CenterOfMass.x,
+        )
+
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        # The bridge comes last, so by the time it arrives the two ends are
+        # components of their own and both of them have to be joined.
+        geom.Shape = Part.makeCompound([pieces[0], pieces[2], pieces[1]])
+        self.document.recompute()
+
+        self.assertEqual(geom.getComponentCount(), 1)
+        self.assertEqual(len(geom.getToplevelElements(0)), 3)
+
+    def test_shapes_that_only_touch_stay_apart(self):
+        """
+        Coincident faces are not shared faces. Two boxes brought in separately
+        touch without sharing topology, and that is what keeps them two
+        components the bridge test must not paper over.
+        """
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        geom.Shape = Part.makeCompound(
+            [Part.makeBox(10, 10, 10), Part.makeBox(10, 10, 10, FreeCAD.Vector(10, 0, 0))]
+        )
+        self.document.recompute()
+
+        self.assertEqual(geom.getComponentCount(), 2)
+
     def test_dimension_override(self):
         geom = self.document.addObject("Fem::FemGeometry", "Geometry")
         geom.Shape = _box()
@@ -866,6 +903,76 @@ class TestGeometryPartition(unittest.TestCase):
         self.assertEqual(len(shared), 1, "the two pieces must share the cut face")
         # 6 + 6 faces minus the one they share
         self.assertEqual(len(part.Shape.Faces), 11)
+
+    def _plane_cut(self, imp, part, target, x=10):
+        from femobjects import geometry_partition as gp
+
+        part.Method = gp.METHOD_PLANE_REF
+        part.Tool = (self._datum(FreeCAD.Vector(x, 0, 0), FreeCAD.Vector(1, 0, 0)), "")
+        part.Elements = [(imp, (target,))]
+        self.document.recompute()
+        self.assertValid(part)
+
+    def test_a_cut_leaves_the_component_beside_it_alone(self):
+        """
+        The pieces of a cut were glued by fusing the whole input at once, which
+        also welded parts that merely touch: two components ended up sharing the
+        face and the edges they were coincident on, so what the user built as
+        separate parts came out as one piece of geometry.
+        """
+        left = Part.makeBox(20, 10, 10)
+        right = Part.makeBox(20, 10, 10, FreeCAD.Vector(20, 0, 0))
+        _, imp, part = self._chain(left, right)
+        self.assertEqual(
+            imp.getComponentCount(),
+            2,
+            "the boxes are imported separately, so they only touch",
+        )
+
+        target = _find_sub(imp.Shape, "Solid", lambda solid: solid.CenterOfMass.x < 20)
+        self._plane_cut(imp, part, target)
+
+        self.assertEqual(len(part.Shape.Solids), 3)
+        self.assertMeasurePreserved(imp.Shape, part.Shape)
+        self.assertEqual(part.getComponentCount(), 2, "the cut may not join the two boxes")
+
+        beside = [solid for solid in part.Shape.Solids if solid.CenterOfMass.x > 20][0]
+        for piece in [solid for solid in part.Shape.Solids if solid.CenterOfMass.x < 20]:
+            self.assertFalse(
+                any(face.isSame(other) for face in piece.Faces for other in beside.Faces),
+                "a piece of the cut solid shares a face with the box next to it",
+            )
+            self.assertFalse(
+                any(vertex.isSame(other) for vertex in piece.Vertexes for other in beside.Vertexes),
+                "a piece of the cut solid shares a vertex with the box next to it",
+            )
+
+    def test_a_cut_keeps_its_own_component_connected(self):
+        """
+        Gluing has to reach the rest of the component: the solid that was cut
+        shared a face with its neighbour, and that connection has to survive the
+        rebuild or the mesh comes out non-conformal where it used to be fine.
+        """
+        left = Part.makeBox(20, 10, 10)
+        right = Part.makeBox(20, 10, 10, FreeCAD.Vector(20, 0, 0))
+        _, imp, part = self._chain(left, right)
+        imp.Embed = "Embed import"
+        self.document.recompute()
+        self.assertEqual(imp.getComponentCount(), 1, "an embedded import fuses what it brings in")
+
+        target = _find_sub(imp.Shape, "Solid", lambda solid: solid.CenterOfMass.x < 20)
+        self._plane_cut(imp, part, target)
+
+        self.assertEqual(len(part.Shape.Solids), 3)
+        self.assertMeasurePreserved(imp.Shape, part.Shape)
+        self.assertEqual(part.getComponentCount(), 1)
+
+        pieces = sorted(part.Shape.Solids, key=lambda solid: solid.CenterOfMass.x)
+        for first, second in zip(pieces, pieces[1:]):
+            shared = [
+                face for face in first.Faces if any(face.isSame(other) for other in second.Faces)
+            ]
+            self.assertEqual(len(shared), 1, "neighbours in a component share their interface")
 
     def test_mixed_solid_and_sub_element_targets_are_rejected(self):
         from femobjects import geometry_partition as gp

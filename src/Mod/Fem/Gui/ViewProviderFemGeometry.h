@@ -85,8 +85,6 @@ public:
     ViewProviderFemGeometry();
     ~ViewProviderFemGeometry() override;
 
-    App::PropertyColorList Colors;
-
     /// Convenience API: forwards to the active analysis AnalysisViewState.
     void setClippingPlane(const std::string& name, const ClippingPlane& plane);
     void removeClippingPlane(const std::string& name);

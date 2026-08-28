@@ -282,24 +282,6 @@ class ElementNode:
     def color(self):
         return self._color
 
-    def set_color(self, color, geom_obj=None):
-        """Read-modify-assign Colors on the geometry VP (toplevel swatch edit)."""
-        self._color = color
-        if not geom_obj or not self.element:
-            return
-        cmp = geom_obj.getComponentCount()
-        toplevel = []
-        for i in range(cmp):
-            toplevel += geom_obj.getToplevelElements(i)
-        if self.element not in toplevel:
-            return
-        idx = toplevel.index(self.element)
-        colors = list(geom_obj.ViewObject.Colors)
-        while len(colors) <= idx:
-            colors.append((0.7, 0.7, 0.7, 1.0))
-        colors[idx] = color
-        geom_obj.ViewObject.Colors = colors
-
     def display_name(self):
         label = self.name or ""
         extras = []
@@ -376,8 +358,6 @@ class GeometryModel(QAbstractItemModel):
                     pass
                 cat = categories.get(sub)
                 color = _color_tuple(cat["color"]) if cat else None
-                if color is None:
-                    color = self._toplevel_color(sub)
                 node = ElementNode(
                     sub,
                     geometry_node,
@@ -399,24 +379,6 @@ class GeometryModel(QAbstractItemModel):
                     )
                     node.children.append(child)
         return root
-
-    def _toplevel_color(self, name):
-        if not self.geom_obj:
-            return None
-        try:
-            cmp = self.geom_obj.getComponentCount()
-            toplevel = []
-            for i in range(cmp):
-                toplevel += self.geom_obj.getToplevelElements(i)
-            if name not in toplevel:
-                return None
-            idx = toplevel.index(name)
-            colors = self.geom_obj.ViewObject.Colors
-            if idx < len(colors):
-                return _color_tuple(colors[idx])
-        except Exception:
-            return None
-        return None
 
     def _build_category_tree(self, color_mode, under):
         root = ElementNode(self.geom_obj.Label)

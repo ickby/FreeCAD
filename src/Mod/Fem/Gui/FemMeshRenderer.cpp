@@ -60,39 +60,42 @@ using namespace FemGui;
 
 const std::vector<Base::Color>& FemMeshRenderer::distinctColors()
 {
+    // Twelve hue families in three tones (mid, deep, pale), ordered so that
+    // every prefix is as separable as a palette of that size can be. A later
+    // FEM setting can replace this list; nothing in a document stores it.
     static const std::vector<Base::Color> colors = {
-        Base::Color(0.863f, 0.196f, 0.184f),  //  1 Crimson red
-        Base::Color(0.102f, 0.451f, 0.910f),  //  2 Cobalt blue
-        Base::Color(0.196f, 0.804f, 0.314f),  //  3 Lime green
-        Base::Color(1.000f, 0.647f, 0.000f),  //  4 Amber orange
-        Base::Color(0.706f, 0.235f, 0.824f),  //  5 Violet purple
-        Base::Color(0.000f, 0.784f, 0.824f),  //  6 Cyan teal
-        Base::Color(0.941f, 0.863f, 0.118f),  //  7 Vivid yellow
-        Base::Color(0.863f, 0.353f, 0.588f),  //  8 Hot pink
-        Base::Color(0.118f, 0.627f, 0.392f),  //  9 Emerald green
-        Base::Color(1.000f, 0.392f, 0.118f),  // 10 Burnt orange
-        Base::Color(0.314f, 0.314f, 0.863f),  // 11 Royal blue
-        Base::Color(0.784f, 0.784f, 0.235f),  // 12 Olive yellow
-        Base::Color(0.627f, 0.118f, 0.235f),  // 13 Deep crimson
-        Base::Color(0.235f, 0.784f, 0.706f),  // 14 Aquamarine
-        Base::Color(1.000f, 0.784f, 0.471f),  // 15 Peach
-        Base::Color(0.471f, 0.157f, 0.784f),  // 16 Indigo
-        Base::Color(0.392f, 0.784f, 0.157f),  // 17 Chartreuse
-        Base::Color(0.784f, 0.157f, 0.471f),  // 18 Magenta rose
-        Base::Color(0.157f, 0.471f, 0.784f),  // 19 Sky blue
-        Base::Color(0.824f, 0.627f, 0.196f),  // 20 Gold
-        Base::Color(0.314f, 0.784f, 0.627f),  // 21 Seafoam
-        Base::Color(0.784f, 0.314f, 0.157f),  // 22 Tomato
-        Base::Color(0.549f, 0.314f, 0.863f),  // 23 Lavender purple
-        Base::Color(0.157f, 0.627f, 0.157f),  // 24 Forest green
-        Base::Color(0.863f, 0.510f, 0.706f),  // 25 Orchid pink
-        Base::Color(0.078f, 0.314f, 0.706f),  // 26 Navy blue
-        Base::Color(0.706f, 0.863f, 0.314f),  // 27 Yellow-green
-        Base::Color(0.784f, 0.235f, 0.784f),  // 28 Fuchsia
-        Base::Color(0.118f, 0.706f, 0.863f),  // 29 Azure
-        Base::Color(0.941f, 0.706f, 0.235f),  // 30 Sunflower
-        Base::Color(0.235f, 0.549f, 0.314f),  // 31 Sage green
-        Base::Color(0.706f, 0.157f, 0.157f),  // 32 Dark red
+        Base::Color(0.949f, 0.459f, 0.442f),  //  1 red
+        Base::Color(0.090f, 0.515f, 0.649f),  //  2 deep cyan
+        Base::Color(0.810f, 0.715f, 0.950f),  //  3 pale violet
+        Base::Color(0.356f, 0.475f, 0.122f),  //  4 deep lime
+        Base::Color(0.520f, 0.569f, 0.948f),  //  5 indigo
+        Base::Color(0.599f, 0.337f, 0.638f),  //  6 deep violet
+        Base::Color(0.637f, 0.372f, 0.133f),  //  7 deep orange
+        Base::Color(0.697f, 0.829f, 0.594f),  //  8 pale green
+        Base::Color(0.144f, 0.500f, 0.243f),  //  9 deep green
+        Base::Color(0.707f, 0.286f, 0.499f),  // 10 deep magenta
+        Base::Color(0.130f, 0.611f, 0.947f),  // 11 blue
+        Base::Color(0.090f, 0.538f, 0.433f),  // 12 deep emerald
+        Base::Color(0.950f, 0.702f, 0.889f),  // 13 pale magenta
+        Base::Color(0.589f, 0.776f, 0.950f),  // 14 pale blue
+        Base::Color(0.740f, 0.587f, 0.212f),  // 15 amber
+        Base::Color(0.817f, 0.800f, 0.545f),  // 16 pale lime
+        Base::Color(0.130f, 0.746f, 0.725f),  // 17 teal
+        Base::Color(0.742f, 0.519f, 0.877f),  // 18 violet
+        Base::Color(0.435f, 0.393f, 0.724f),  // 19 deep indigo
+        Base::Color(0.090f, 0.445f, 0.763f),  // 20 deep blue
+        Base::Color(0.090f, 0.528f, 0.540f),  // 21 deep teal
+        Base::Color(0.926f, 0.762f, 0.547f),  // 22 pale amber
+        Base::Color(0.538f, 0.464f, 0.096f),  // 23 deep amber
+        Base::Color(0.383f, 0.675f, 0.344f),  // 24 green
+        Base::Color(0.714f, 0.312f, 0.252f),  // 25 deep red
+        Base::Color(0.950f, 0.691f, 0.696f),  // 26 pale red
+        Base::Color(0.130f, 0.718f, 0.862f),  // 27 cyan
+        Base::Color(0.577f, 0.640f, 0.235f),  // 28 lime
+        Base::Color(0.895f, 0.459f, 0.730f),  // 29 magenta
+        Base::Color(0.880f, 0.516f, 0.301f),  // 30 orange
+        Base::Color(0.134f, 0.760f, 0.552f),  // 31 emerald
+        Base::Color(0.950f, 0.699f, 0.603f),  // 32 pale orange
     };
     return colors;
 }

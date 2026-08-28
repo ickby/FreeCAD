@@ -320,6 +320,38 @@ def _shape_members(shape):
     return members
 
 
+def _connected_groups(members):
+    """
+    The members grouped into the components they form, in input order.
+
+    Two shapes are in one component when they share topology, which is what
+    makes them a single part of the geometry. Shapes that merely touch, the
+    coincident faces of two separate imports for example, share nothing and stay
+    apart. Sharing a vertex is enough, and it is what tells shared topology
+    apart from coincidence, so that is the test.
+    """
+    parent = list(range(len(members)))
+
+    def root(index):
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    owner = {}
+    for index, member in enumerate(members):
+        for vertex in member.Vertexes:
+            first = owner.setdefault(hash(vertex), index)
+            low, high = sorted((root(index), root(first)))
+            if low != high:
+                parent[high] = low
+
+    groups = {}
+    for index, member in enumerate(members):
+        groups.setdefault(root(index), []).append(member)
+    return list(groups.values())
+
+
 def _default_targets(base_shape):
     """
     What "no targets selected" means: every element of the input.
@@ -408,28 +440,46 @@ def _solid_pieces_by_slice(element, tool_shape):
 
 def _split_solids(base_shape, targets, tool_shape):
     """
-    Replace every target solid by its pieces, rebuilding the shape once.
+    Replace every target solid by its pieces, one component at a time.
 
-    Splitting one solid at a time rebuilds the whole shape, which invalidates
-    the sub-shapes the remaining targets point at; those cuts are then either
-    skipped or applied on top of a solid that is still there, duplicating it.
+    All targets are cut in a single rebuild: splitting one solid at a time
+    rebuilds the whole shape, which invalidates the sub-shapes the remaining
+    targets point at.
+
+    The pieces of a cut have to be glued for the mesher to see a conformal
+    interface instead of two solids that merely touch, and gluing takes the rest
+    of the component with it, so that the topology the component already shared
+    survives the rebuild. A component the tool does not cut is handed through
+    untouched: its faces may well be coincident with the cut ones, and a fuse
+    reaching across would weld two separate parts of the geometry into one.
     """
     placement = _plane_placement(_tool_face(tool_shape))
     rebuilt = []
     split_any = False
     matched = 0
-    for child in _shape_members(base_shape):
-        if child.ShapeType == "Solid" and any(child.isSame(target) for target in targets):
-            matched += 1
-            if placement is not None:
-                pieces = _solid_pieces_by_plane(child, placement)
-            else:
-                pieces = _solid_pieces_by_slice(child, tool_shape)
-            if pieces:
-                rebuilt.extend(pieces)
-                split_any = True
-                continue
-        rebuilt.append(child)
+    for group in _connected_groups(_shape_members(base_shape)):
+        shapes = []
+        cut_here = False
+        for child in group:
+            if child.ShapeType == "Solid" and any(child.isSame(target) for target in targets):
+                matched += 1
+                if placement is not None:
+                    pieces = _solid_pieces_by_plane(child, placement)
+                else:
+                    pieces = _solid_pieces_by_slice(child, tool_shape)
+                if pieces:
+                    shapes.extend(pieces)
+                    cut_here = True
+                    continue
+            shapes.append(child)
+
+        if cut_here:
+            # A cut always yields at least two pieces, so there is something to
+            # glue whenever it happened.
+            split_any = True
+            rebuilt.append(shapes[0].generalFuse(shapes[1:])[0])
+        else:
+            rebuilt.extend(shapes)
 
     if not matched:
         # Distinct from a tool that misses: the picks do not name a solid of the
@@ -440,9 +490,7 @@ def _split_solids(base_shape, targets, tool_shape):
         return base_shape
     if len(rebuilt) == 1:
         return rebuilt[0]
-    # generalFuse glues the coincident faces at the cut so the mesher sees a
-    # conformal interface instead of two solids that merely touch.
-    return rebuilt[0].generalFuse(rebuilt[1:])[0]
+    return Part.makeCompound(rebuilt)
 
 
 def _split_sub_elements(base_shape, targets, tool_shape):

@@ -47,17 +47,6 @@ using namespace FemGui;
 namespace
 {
 
-uint32_t stableHash(const std::string& key)
-{
-    // FNV-1a 32-bit — deterministic across runs (unlike std::hash).
-    uint32_t h = 2166136261u;
-    for (unsigned char c : key) {
-        h ^= c;
-        h *= 16777619u;
-    }
-    return h;
-}
-
 int ensureCategory(
     std::vector<Category>& categories,
     std::map<std::string, int>& keyToIndex,
@@ -72,8 +61,8 @@ int ensureCategory(
     Category cat;
     cat.key = key;
     cat.label = label.empty() ? key : label;
-    cat.color = Classification::colorForKey(key);
     const int idx = static_cast<int>(categories.size());
+    cat.color = Classification::colorForIndex(idx);
     categories.push_back(std::move(cat));
     keyToIndex[key] = idx;
     return idx;
@@ -95,22 +84,15 @@ std::string toplevelOfEntity(const Fem::FemGeometry* geometry, const std::string
 
 }  // namespace
 
-Base::Color Classification::colorForKey(const std::string& key)
+Base::Color Classification::colorForIndex(int index)
 {
     const auto& colors = FemMeshRenderer::distinctColors();
     if (colors.empty()) {
         return Base::Color(0.8f, 0.8f, 0.8f);
     }
-    return colors[paletteIndexForKey(key) % static_cast<int>(colors.size())];
-}
-
-int Classification::paletteIndexForKey(const std::string& key)
-{
-    const auto& colors = FemMeshRenderer::distinctColors();
-    if (colors.empty()) {
-        return 0;
-    }
-    return static_cast<int>(stableHash(key) % colors.size());
+    const int n = static_cast<int>(colors.size());
+    const int wrapped = ((index % n) + n) % n;
+    return colors[static_cast<size_t>(wrapped)];
 }
 
 std::unique_ptr<Classification> Classification::create(

@@ -73,9 +73,15 @@ public:
     virtual int categoryOfElement(const std::string& element) const = 0;
     virtual int categoryOfCell(vtkIdType cell) const = 0;
 
-    /** Deterministic palette index from a stable key (not iteration order). */
-    static Base::Color colorForKey(const std::string& key);
-    static int paletteIndexForKey(const std::string& key);
+    /**
+     * Colour of the n-th category, wrapping the live palette.
+     *
+     * Categories are sorted by key before they are numbered, so the same set
+     * of names always lands on the same colours, and the first twelve names
+     * take the twelve most distinct entries. A later FEM setting can replace
+     * the palette without anything in a document having to change.
+     */
+    static Base::Color colorForIndex(int index);
 
     /**
      * Build the classification for the active colour mode.

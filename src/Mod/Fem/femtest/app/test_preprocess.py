@@ -1014,6 +1014,109 @@ class TestGeometryPartition(unittest.TestCase):
             self.assertEqual(len(restored.Shape.Solids), 2)
 
 
+class TestGeometryReferences(unittest.TestCase):
+    """Members of an analysis reference the geometry it builds, which is a
+    Fem::FemGeometry and not the Part::Feature the constraints once held."""
+
+    fcc_print("import TestGeometryReferences")
+
+    def setUp(self):
+        self.document = FreeCAD.newDocument(self.__class__.__name__)
+        self.source = self.document.addObject("Part::Feature", "Source")
+        self.source.Shape = Part.makeBox(20, 10, 10)
+        self.analysis = ObjectsFem.makeAnalysis(self.document)
+        self.group = ObjectsFem.makeGeometryGroup(self.document)
+        imp = ObjectsFem.makeGeometryImport(self.document)
+        imp.Import = [self.source]
+        self.group.Group = [imp]
+        self.analysis.addObject(self.group)
+        self.document.recompute()
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.document.Name)
+
+    def test_00print(self):
+        fcc_print(
+            "\n{0}\n{1} run FEM TestGeometryReferences tests {2}\n{0}".format(
+                100 * "*", 10 * "*", 47 * "*"
+            )
+        )
+
+    def test_the_geometry_of_an_analysis_is_what_members_reference(self):
+        from femtools import femutils
+
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        self.assertIs(femutils.get_analysis(constraint), self.analysis)
+        self.assertIs(femutils.get_reference_geometry(constraint), self.group)
+
+    def test_a_member_of_a_member_finds_the_analysis(self):
+        """A mesh refinement hangs two groups deep, in the mesher of the mesh."""
+        from femtools import femutils
+
+        mesh = ObjectsFem.makeMeshShapeGroup(
+            self.document, geometry=self.group, analysis=self.analysis
+        )
+        mesher = ObjectsFem.makeMeshGmsh(self.document)
+        ObjectsFem.addMeshToShapeGroup(mesh, mesher)
+        region = ObjectsFem.makeMeshRegion(self.document, mesher)
+        self.document.recompute()
+
+        self.assertIs(femutils.get_analysis(region), self.analysis)
+        self.assertIs(femutils.get_reference_geometry(region), self.group)
+
+    def test_an_analysis_without_geometry_leaves_references_free(self):
+        from femtools import femutils
+
+        analysis = ObjectsFem.makeAnalysis(self.document, "Legacy")
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        analysis.addObject(constraint)
+        self.document.recompute()
+
+        self.assertIsNone(
+            femutils.get_reference_geometry(constraint),
+            "documents that reference part features directly have to keep working",
+        )
+
+    def test_a_constraint_reads_the_geometry_it_references(self):
+        """
+        The constraint reads the referenced face to aim its symbols. It used to
+        cast every referenced object to a Part::Feature, which a geometry is
+        not, so this went through unrelated memory.
+        """
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        constraint.References = [(self.group, "Face1")]
+        self.document.recompute()
+
+        self.assertNotIn("Invalid", constraint.State)
+        normal = constraint.NormalDirection
+        expected = self.group.Shape.getElement("Face1").normalAt(0, 0)
+        self.assertAlmostEqual(abs(normal.dot(expected)), 1.0, places=6)
+
+    def test_a_force_takes_its_direction_from_the_geometry(self):
+        constraint = ObjectsFem.makeConstraintForce(self.document)
+        self.analysis.addObject(constraint)
+        constraint.References = [(self.group, "Face2")]
+        constraint.Direction = (self.group, ["Face2"])
+        self.document.recompute()
+
+        self.assertNotIn("Invalid", constraint.State)
+        self.assertAlmostEqual(constraint.DirectionVector.Length, 1.0, places=6)
+
+    def test_a_reference_without_a_shape_is_passed_over(self):
+        """Nothing to read from, but nothing to crash over either."""
+        shapeless = self.document.addObject("App::FeaturePython", "Shapeless")
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        constraint.References = [(shapeless, "Face1")]
+        self.document.recompute()
+
+        self.assertNotIn("Invalid", constraint.State)
+
+
 class TestMeshMerge(unittest.TestCase):
     fcc_print("import TestMeshMerge")
 

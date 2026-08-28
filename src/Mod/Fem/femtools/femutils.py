@@ -119,6 +119,51 @@ def is_derived_from(obj, t):
 
 
 # ************************************************************************************************
+# analysis membership
+def get_analysis(obj):
+    """Return the analysis *obj* is a member of, or None.
+
+    Members that live in a member are followed up to the analysis they end up
+    in: a mesh refinement hangs in the mesher, which hangs in the mesh, which is
+    the member of the analysis. The way up is any link, so ask this about
+    objects of an analysis, not about the parts an analysis reads geometry from.
+    """
+    if obj is None:
+        return None
+    if obj.isDerivedFrom("Fem::FemAnalysis"):
+        return obj
+
+    seen = {obj.Name}
+    candidates = [obj]
+    while candidates:
+        for parent in candidates.pop(0).InList:
+            if parent.isDerivedFrom("Fem::FemAnalysis"):
+                return parent
+            if parent.Name not in seen:
+                seen.add(parent.Name)
+                candidates.append(parent)
+    return None
+
+
+def get_reference_geometry(obj):
+    """Return the geometry the members of an analysis reference, or None.
+
+    An analysis that builds its own geometry keeps every reference of its
+    members on it, so that the shape the mesh is made of is the one the
+    references address. None means the analysis of *obj* builds no geometry,
+    which is the case for documents whose members reference part features
+    directly.
+    """
+    analysis = get_analysis(obj)
+    if analysis is None:
+        return None
+    for member in analysis.Group:
+        if member.isDerivedFrom("Fem::FemGeometry"):
+            return member
+    return None
+
+
+# ************************************************************************************************
 # working dir
 def get_pref_working_dir(solver_obj):
     """Return working directory for solver honoring user settings.

@@ -39,12 +39,36 @@ from PySide import QtCore
 import FreeCAD
 import FreeCADGui
 import FreeCADGui as Gui
+import FemGui
 
+from femtools import femutils
 from femtools import geomtools
 from femguiutils.disambiguate_solid_selection import disambiguate_solid_selection
 
 if TYPE_CHECKING:
     from Part import Face, Edge, PartFeature
+
+
+def editing_object():
+    """The FEM object whose task panel is open, or None."""
+    document = FreeCADGui.editDocument()
+    in_edit = document.getInEdit() if document else None
+    return getattr(in_edit, "Object", None) if in_edit is not None else None
+
+
+def reference_geometry():
+    """
+    The geometry the references picked right now have to point at, or None when
+    they may point anywhere.
+
+    Which analysis is asked comes from the object being edited, falling back to
+    the active one for panels opened without an editor.
+    """
+    obj = editing_object()
+    if obj is not None:
+        return femutils.get_reference_geometry(obj)
+
+    return femutils.get_reference_geometry(FemGui.getActiveAnalysis())
 
 
 def solids_with_edge(parent_part: "PartFeature", edge: "Edge") -> List[int]:
@@ -509,7 +533,23 @@ class GeometryElementsSelection(QtGui.QWidget):
         if self.sel_server:
             FreeCADGui.Selection.removeObserver(self.sel_server)
 
+    def may_reference(self, obj):
+        """
+        Whether obj can carry a reference, telling the user why when it cannot.
+        """
+        geometry = reference_geometry()
+        if geometry is None or obj == geometry:
+            return True
+
+        FreeCADGui.Selection.clearSelection()
+        message = "Select on the geometry of the analysis, {}.\n".format(geometry.Label)
+        FreeCAD.Console.PrintMessage(message)
+        QtGui.QMessageBox.critical(None, "Selection Error", message)
+        return False
+
     def selectionParser(self, selection):
+        if not self.may_reference(selection[0]):
+            return
         if hasattr(selection[0], "Shape") and selection[1]:
             FreeCAD.Console.PrintMessage(
                 "Selection: {}  {}  {}\n".format(

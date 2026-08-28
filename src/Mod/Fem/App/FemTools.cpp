@@ -47,9 +47,13 @@
 #include <gp_Vec.hxx>
 
 #include <App/Application.h>
+#include <App/GeoFeature.h>
 #include <Mod/Part/App/PartFeature.h>
+#include <Mod/Part/App/PropertyTopoShape.h>
 #include <Mod/Part/App/Tools.h>
 
+#include "FemAnalysis.h"
+#include "FemGeometry.h"
 #include "FemTools.h"
 
 
@@ -337,7 +341,8 @@ std::string Fem::Tools::checkIfBinaryExists(
     return "";
 }
 
-Base::Placement Fem::Tools::getSubShapeGlobalLocation(const Part::Feature* feat, const TopoDS_Shape& sh)
+Base::Placement
+Fem::Tools::getSubShapeGlobalLocation(const App::GeoFeature* feat, const TopoDS_Shape& sh)
 {
     Base::Matrix4D matrix = Part::TopoShape::convert(sh.Location().Transformation());
     Base::Placement shPla {matrix};
@@ -347,22 +352,31 @@ Base::Placement Fem::Tools::getSubShapeGlobalLocation(const Part::Feature* feat,
     return shGlobalPla;
 }
 
-void Fem::Tools::setSubShapeGlobalLocation(const Part::Feature* feat, TopoDS_Shape& sh)
+void Fem::Tools::setSubShapeGlobalLocation(const App::GeoFeature* feat, TopoDS_Shape& sh)
 {
     Base::Placement pla = getSubShapeGlobalLocation(feat, sh);
     sh.Location(Part::Tools::fromPlacement(pla));
 }
 
+const Part::TopoShape* Fem::Tools::getFeatureShape(const App::DocumentObject* obj)
+{
+    auto* prop = dynamic_cast<const Part::PropertyPartShape*>(
+        App::GeoFeature::getPropertyOfGeometry(obj)
+    );
 
-TopoDS_Shape Fem::Tools::getFeatureSubShape(const Part::Feature* feat, const char* subName, bool silent)
+    return prop ? &prop->getShape() : nullptr;
+}
+
+TopoDS_Shape
+Fem::Tools::getFeatureSubShape(const App::GeoFeature* feat, const char* subName, bool silent)
 {
     TopoDS_Shape sh;
-    const Part::TopoShape& toposhape = feat->Shape.getShape();
-    if (toposhape.isNull()) {
+    const Part::TopoShape* toposhape = getFeatureShape(feat);
+    if (!toposhape || toposhape->isNull()) {
         return sh;
     }
 
-    sh = toposhape.getSubShape(subName, silent);
+    sh = toposhape->getSubShape(subName, silent);
     if (sh.IsNull()) {
         return sh;
     }
@@ -370,6 +384,36 @@ TopoDS_Shape Fem::Tools::getFeatureSubShape(const Part::Feature* feat, const cha
     setSubShapeGlobalLocation(feat, sh);
 
     return sh;
+}
+
+Fem::FemGeometry* Fem::Tools::getAnalysisGeometry(const App::DocumentObject* member)
+{
+    if (!member) {
+        return nullptr;
+    }
+
+    auto geometryOf = [](const Fem::FemAnalysis* analysis) -> Fem::FemGeometry* {
+        for (auto* obj : analysis->Group.getValues()) {
+            if (auto* geometry = Base::freecad_cast<Fem::FemGeometry*>(obj)) {
+                return geometry;
+            }
+        }
+        return nullptr;
+    };
+
+    if (auto* analysis = Base::freecad_cast<Fem::FemAnalysis*>(member)) {
+        return geometryOf(analysis);
+    }
+
+    for (auto* parent : member->getInList()) {
+        if (auto* analysis = Base::freecad_cast<Fem::FemAnalysis*>(parent)) {
+            if (analysis->hasObject(member)) {
+                return geometryOf(analysis);
+            }
+        }
+    }
+
+    return nullptr;
 }
 
 bool Fem::Tools::getCylinderParams(

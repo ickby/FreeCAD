@@ -47,6 +47,12 @@ public:
     void highlightReferences(const bool on) override;
 
 private:
+    /**
+     * Mark the referenced elements on the geometry of an analysis, which draws
+     * its own shape and carries no per element colours of a part feature.
+     */
+    void markGeometryReferences(const bool on);
+
     std::map<Part::Feature*, std::vector<Base::Color>> originalPointColors;
     std::map<Part::Feature*, std::vector<Base::Color>> originalLineColors;
     std::map<Part::Feature*, std::vector<Base::Color>> originalFaceColors;

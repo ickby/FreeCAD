@@ -146,8 +146,11 @@ void TaskFemConstraintGear::onSelectionChanged(const Gui::SelectionChanges& msg)
         App::DocumentObject* obj = ConstraintView->getObject()->getDocument()->getObject(
             msg.pObjectName
         );
-        Part::Feature* feat = static_cast<Part::Feature*>(obj);
-        TopoDS_Shape ref = feat->Shape.getShape().getSubShape(subName.c_str());
+        const Part::TopoShape* shape = Fem::Tools::getFeatureShape(obj);
+        TopoDS_Shape ref = shape ? shape->getSubShape(subName.c_str(), true) : TopoDS_Shape();
+        if (ref.IsNull()) {
+            return;
+        }
 
         if (selectionMode == seldir) {
             if (subName.substr(0, 4) == "Face") {

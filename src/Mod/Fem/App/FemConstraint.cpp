@@ -178,8 +178,10 @@ void Constraint::onChanged(const App::Property* prop)
 
         bool execute = this->isRecomputing();
         for (std::size_t i = 0; i < Objects.size(); i++) {
-            App::DocumentObject* obj = Objects[i];
-            Part::Feature* feat = static_cast<Part::Feature*>(obj);
+            auto* feat = Base::freecad_cast<App::GeoFeature*>(Objects[i]);
+            if (!feat) {
+                continue;
+            }
             sh = Tools::getFeatureSubShape(feat, SubElements[i].c_str(), !execute);
             if (!sh.IsNull() && sh.ShapeType() == TopAbs_FACE) {
                 // Get face normal in center point
@@ -275,7 +277,11 @@ bool Constraint::getPoints(
     TopoDS_Shape sh;
 
     for (std::size_t i = 0; i < Objects.size(); i++) {
-        Part::Feature* feat = static_cast<Part::Feature*>(Objects[i]);
+        auto* feat = Base::freecad_cast<App::GeoFeature*>(Objects[i]);
+        const Part::TopoShape* featShape = Tools::getFeatureShape(Objects[i]);
+        if (!feat || !featShape) {
+            return false;
+        }
         sh = Tools::getFeatureSubShape(feat, SubElements[i].c_str(), true);
         if (sh.IsNull()) {
             return false;
@@ -283,7 +289,7 @@ bool Constraint::getPoints(
 
         // Scale by bounding box of the object
         Bnd_Box box;
-        BRepBndLib::Add(feat->Shape.getShape().getShape(), box);
+        BRepBndLib::Add(featShape->getShape(), box);
         double l = sqrt(box.SquareExtent() / 3.0);
         *scale = this->calcSizeFactor(l);
 
@@ -482,8 +488,11 @@ Base::Vector3d Constraint::getBasePoint(
         return Base::Vector3d(0, 0, 0);
     }
     std::string subName = names.front();
-    Part::Feature* featLoc = static_cast<Part::Feature*>(objLoc);
-    TopoDS_Shape shloc = featLoc->Shape.getShape().getSubShape(subName.c_str());
+    const Part::TopoShape* locShape = Tools::getFeatureShape(objLoc);
+    if (!locShape) {
+        return Base::Vector3d(0, 0, 0);
+    }
+    TopoDS_Shape shloc = locShape->getSubShape(subName.c_str());
 
     // Get a plane from the Location reference
     gp_Pln plane;
@@ -536,9 +545,9 @@ const Base::Vector3d Constraint::getDirection(const App::PropertyLinkSub& direct
         return rot.multVec(Base::Vector3d(0, 0, 1));
     }
 
-    if (!obj->isDerivedFrom<Part::Feature>()) {
+    if (!Tools::getFeatureShape(obj)) {
         std::stringstream str;
-        str << "Type is not a line, plane or Part object";
+        str << "Type is not a line, plane or shape carrying object";
         throw Base::TypeError(str.str());
     }
 
@@ -547,8 +556,7 @@ const Base::Vector3d Constraint::getDirection(const App::PropertyLinkSub& direct
         return Base::Vector3d(0, 0, 0);
     }
     std::string subName = names.front();
-    Part::Feature* feat = static_cast<Part::Feature*>(obj);
-    TopoDS_Shape sh = Tools::getFeatureSubShape(feat, subName.c_str(), !this->isRecomputing());
+    TopoDS_Shape sh = Tools::getFeatureSubShape(obj, subName.c_str(), !this->isRecomputing());
     if (sh.IsNull()) {
         return Base::Vector3d(0, 0, 0);
     }

@@ -132,6 +132,7 @@ class FemMesh(ComplexGeoData):
         volVariant: str = "standard",
         faceVariant: str = "shell",
         edgeVariant: str = "beam",
+        elementIds: object = None,
     ) -> None:
         """
         Write out as ABAQUS inp.
@@ -169,6 +170,10 @@ class FemMesh(ComplexGeoData):
             "beam reduced": Seg2 -> B31R, Seg3 -> B32R
             "truss": Seg2 -> T3D2, eg3 -> T3D3
             "network": Seg3 -> D
+
+        elementIds:
+            Optional iterable of element IDs used when elemParam is 1. When given,
+            replaces the built-in highest-element filter.
 
         Elements are selected according to CalculiX availability.
         For example if volume variant "modified" is selected, Tetra10 mesh
@@ -336,6 +341,9 @@ class FemMesh(ComplexGeoData):
 
     FacesOnly: Final[tuple]
     """Tuple of face IDs which does not belong to any volume"""
+
+    HighestElements: Final[tuple]
+    """Tuple of element IDs kept by the highest-element export filter"""
 
     FaceCount: Final[int]
     """Number of Faces in the Mesh."""

@@ -1,0 +1,178 @@
+** written by FreeCAD inp file writer for CalculiX,Abaqus meshes
+** highest dimension mesh elements only.
+
+** Nodes
+*Node, NSET=Nall
+1, 0, 0, 0
+2, 0, 10, 0
+3, 10, 10, 0
+4, 10, 0, 0
+5, 0, 0, 10
+6, 0, 10, 10
+7, 10, 10, 10
+8, 10, 0, 10
+9, 30, 0, 0
+10, 40, 0, 0
+11, 40, 10, 0
+12, 30, 10, 0
+13, 60, 0, 0
+14, 70, 0, 0
+
+
+** Volume elements
+*Element, TYPE=C3D8R, ELSET=Evolumes
+1, 6, 7, 8, 5, 2, 3, 4, 1
+
+** Face elements
+*Element, TYPE=S4R, ELSET=Efaces
+2, 9, 10, 11, 12
+
+** Edge elements
+*Element, TYPE=B31R, ELSET=Eedges
+3, 13, 14
+
+** Define element set Eall
+*ELSET, ELSET=Eall
+Evolumes, Efaces, Eedges
+
+
+
+***********************************************************
+** Element sets for materials and FEM element type (solid, shell, beam, fluid)
+*ELSET,ELSET=MaterialSolid
+Evolumes
+*ELSET,ELSET=MaterialShellThickness
+Efaces
+*ELSET,ELSET=M0B0RstdD0
+3,
+
+***********************************************************
+** constraints fixed node sets
+** ConstraintFixed
+*NSET,NSET=ConstraintFixedSolid
+1,
+2,
+5,
+6,
+*NSET,NSET=ConstraintFixedFaceEdge
+9,
+12,
+13,
+
+** Physical constants for SI(mm) unit system with Kelvins
+*PHYSICAL CONSTANTS, ABSOLUTE ZERO=0, STEFAN BOLTZMANN=5.670374419e-11
+
+***********************************************************
+** Materials
+** see information about units at file end
+** FreeCAD material name: Steel-Generic
+** Material
+*MATERIAL, NAME=Material
+*ELASTIC
+200000,0.3
+*EXPANSION, ZERO=0
+0
+
+***********************************************************
+** Sections
+*SOLID SECTION, ELSET=MaterialSolid, MATERIAL=Material
+*SHELL SECTION, ELSET=MaterialShellThickness, MATERIAL=Material, OFFSET=0
+1
+*BEAM SECTION, ELSET=M0B0RstdD0, MATERIAL=Material, SECTION=RECT
+2,4
+0, 1, -0
+
+***********************************************************
+** At least one step is needed to run an CalculiX analysis of FreeCAD
+*STEP, INC=2000
+*STATIC
+1.0,1.0,1e-05,1.0
+
+***********************************************************
+** Fixed Constraints
+** ConstraintFixed
+*BOUNDARY
+ConstraintFixedSolid,1
+ConstraintFixedSolid,2
+ConstraintFixedSolid,3
+
+*BOUNDARY
+ConstraintFixedFaceEdge,1
+ConstraintFixedFaceEdge,2
+ConstraintFixedFaceEdge,3
+ConstraintFixedFaceEdge,4
+ConstraintFixedFaceEdge,5
+ConstraintFixedFaceEdge,6
+
+
+***********************************************************
+** constraints force node loads
+** ConstraintForceSolid
+*CLOAD
+** node loads on shape: Box:Face2
+3,3,-2500
+4,3,-2500
+7,3,-2500
+8,3,-2500
+
+
+** ConstraintForceShell
+*CLOAD
+** node loads on shape: Plane:Edge3
+10,3,-500
+11,3,-500
+
+
+** ConstraintForceBeam
+*CLOAD
+** node load on shape: Line:Vertex2
+14,3,-1000
+
+
+
+***********************************************************
+** Outputs --> frd file
+*NODE FILE, OUTPUT=3d
+U
+*EL FILE
+S, E
+** outputs --> dat file
+** reaction forces for Constraint fixed
+*NODE PRINT, NSET=ConstraintFixed, TOTALS=ONLY
+RF
+
+*OUTPUT, FREQUENCY=1
+***********************************************************
+*END STEP
+
+***********************************************************
+** CalculiX Input file
+**   written by    --> FreeCAD 26.3.0
+**   written on    --> Sat Aug 29 21:16:57 2026
+**   file name     --> 
+**   analysis name --> Analysis
+**
+**
+***********************************************************
+**  About units:
+**  See ccx manual, ccx does not know about any unit.
+**  Golden rule: The user must make sure that the numbers they provide have consistent units.
+**  The user is the FreeCAD calculix writer module ;-)
+**
+**  The unit system which is used at Guido Dhondt's company: mm, N, s, K
+**  Since Length and Mass are connected by Force, if Length is mm the Mass is in t to get N
+**  The following units are used to write to inp file:
+**
+**  Length: mm (this includes the mesh geometry)
+**  Mass: t
+**  TimeSpan: s
+**  Temperature: K
+**
+**  This leads to:
+**  Force: N
+**  Pressure: N/mm^2 == MPa (Young's Modulus has unit Pressure)
+**  Density: t/mm^3
+**  Gravity: mm/s^2
+**  Thermal conductivity: t*mm/K/s^3 == as W/m/K == kW/mm/K
+**  Specific Heat: mm^2/s^2/K = J/kg/K == kJ/t/K
+**

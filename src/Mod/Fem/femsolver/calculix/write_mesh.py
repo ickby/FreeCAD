@@ -67,6 +67,26 @@ def write_mesh(ccxwriter):
     if is_reduced:
         face_variant += " reduced"
 
+    # The mesh knows which of its elements make up the model and which ones only
+    # form the inside skin of higher-dimensional ones. Handing that list over is
+    # what lets a mixed mesh write its solids, shells and beams side by side
+    # instead of only the elements of the highest dimension it happens to hold.
+    by_dim = meshtools.get_model_element_ids_by_dimension(ccxwriter.mesh_object, ccxwriter.femmesh)
+    model_ids = meshtools.get_model_element_ids(None, by_dim=by_dim)
+    if by_dim.get(3) and ccxwriter.solver_obj.ModelSpace != "3D":
+        raise RuntimeError(
+            "CalculiX ModelSpace must be 3D when the mesh contains volume elements: "
+            "plane stress, plane strain and axisymmetric expect a mesh in the xy plane."
+        )
+
+    write_kwargs = {
+        "volVariant": vol_variant,
+        "faceVariant": face_variant,
+        "edgeVariant": edge_variant,
+    }
+    if model_ids:
+        write_kwargs["elementIds"] = model_ids
+
     if ccxwriter.split_inpfile:
         write_name = "femesh"
         file_name_split = ccxwriter.mesh_name + "_" + write_name + ".inp"
@@ -76,9 +96,7 @@ def write_mesh(ccxwriter):
             ccxwriter.femmesh_file,
             element_param,
             group_param,
-            volVariant=vol_variant,
-            faceVariant=face_variant,
-            edgeVariant=edge_variant,
+            **write_kwargs,
         )
 
         inpfile = open(ccxwriter.file_name, "w", encoding="utf-8")
@@ -92,9 +110,7 @@ def write_mesh(ccxwriter):
             ccxwriter.femmesh_file,
             element_param,
             group_param,
-            volVariant=vol_variant,
-            faceVariant=face_variant,
-            edgeVariant=edge_variant,
+            **write_kwargs,
         )
 
         # reopen file with "append" to add all the rest

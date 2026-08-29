@@ -27,6 +27,7 @@
 #include <vector>
 
 #include <App/GroupExtension.h>
+#include <App/PropertyStandard.h>
 
 #include "FemMeshShapeObject.h"
 
@@ -55,6 +56,18 @@ public:
      */
     App::PropertyStringList CellSources;
 
+    /**
+     * Analysis dimension of each merged cell (elementId - 1), or -1 when the
+     * cell is not part of the model (internal skin). Transient / not persisted.
+     */
+    App::PropertyIntegerList CellDimension;
+
+    /**
+     * Effective analysis dimension per entity group name (Solid1, Face7, …).
+     * Transient / not persisted.
+     */
+    App::PropertyMap EntityDimension;
+
     const char* getViewProviderName() const override
     {
         return "FemGui::ViewProviderFemMeshGroup";
@@ -67,7 +80,8 @@ public:
 
     /**
      * Build or return the cached merged mesh. Children are merged sorted by
-     * Name. Fills the transient FemMesh property and CellSources.
+     * Name. Fills the transient FemMesh property, CellSources, CellDimension
+     * and EntityDimension.
      */
     const ::Fem::FemMesh& getMergedMesh();
 

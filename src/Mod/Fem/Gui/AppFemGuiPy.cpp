@@ -41,6 +41,7 @@
 #include "AnalysisViewStatePy.h"
 #include "ClipPlaneHandle.h"
 #include "ClipPlaneHandlePy.h"
+#include "FemPerfLog.h"
 
 
 namespace FemGui
@@ -87,6 +88,24 @@ public:
             "createClipPlane([AnalysisObject], [name]) -- Interactive clip plane handle for "
             "the given or active analysis. A new plane starts clipping at the model center, "
             "an existing name adopts that plane."
+        );
+        add_varargs_method(
+            "perfEnable",
+            &Module::perfEnable,
+            "perfEnable(bool) -- Switch the timing of the view pipeline stages on or off. "
+            "Off costs nothing, so leave it off outside a measurement."
+        );
+        add_varargs_method(
+            "perfReset",
+            &Module::perfReset,
+            "perfReset() -- Forget what has been timed so far."
+        );
+        add_varargs_method(
+            "perfReport",
+            &Module::perfReport,
+            "perfReport() -- What the view pipeline spent, as a list of "
+            "(name, count, total_seconds, self_seconds) in the order the stages were first "
+            "seen. total counts the stages nested in one, self does not."
         );
         add_varargs_method(
             "open",
@@ -238,6 +257,39 @@ private:
             );
         }
         return ClipPlaneHandlePy::create(std::move(handle));
+    }
+    Py::Object perfEnable(const Py::Tuple& args)
+    {
+        PyObject* on = Py_True;
+        if (!PyArg_ParseTuple(args.ptr(), "|O", &on)) {
+            throw Py::Exception();
+        }
+        PerfLog::instance().setEnabled(PyObject_IsTrue(on) == 1);
+        return Py::None();
+    }
+    Py::Object perfReset(const Py::Tuple& args)
+    {
+        if (!PyArg_ParseTuple(args.ptr(), "")) {
+            throw Py::Exception();
+        }
+        PerfLog::instance().clear();
+        return Py::None();
+    }
+    Py::Object perfReport(const Py::Tuple& args)
+    {
+        if (!PyArg_ParseTuple(args.ptr(), "")) {
+            throw Py::Exception();
+        }
+        Py::List result;
+        for (const auto& entry : PerfLog::instance().report()) {
+            Py::Tuple row(4);
+            row.setItem(0, Py::String(entry.name));
+            row.setItem(1, Py::Long(static_cast<long>(entry.count)));
+            row.setItem(2, Py::Float(entry.total));
+            row.setItem(3, Py::Float(entry.self));
+            result.append(row);
+        }
+        return result;
     }
     Py::Object open(const Py::Tuple& args)
     {

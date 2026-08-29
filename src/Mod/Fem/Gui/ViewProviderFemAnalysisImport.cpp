@@ -60,6 +60,7 @@
 #include <SMDS_MeshElement.hxx>
 
 #include "AnalysisViewState.h"
+#include "FemPerfLog.h"
 #include "TaskFemAnalysisImport.h"
 #include "ViewProviderFemConstraint.h"
 
@@ -411,6 +412,8 @@ void ViewProviderFemAnalysisImport::connectViewState()
 
 void ViewProviderFemAnalysisImport::onViewStateChanged()
 {
+    FEM_PERF_SCOPE("import.onViewStateChanged");
+
     syncStageVisibility();
     for (auto& node : m_renderNodes) {
         node->geometry.onViewStateChanged();
@@ -592,7 +595,6 @@ ViewProviderFemAnalysisImport::ImportRenderNode* ViewProviderFemAnalysisImport::
         return importObj->sourceGeometry();
     });
     node->mesh.setPathPrefix(localPrefix);
-    node->mesh.setSelectionPrefix(selectionPrefix);
     node->mesh.setLocalFrame(placement);
     node->mesh.setManageStageVisibility(false);
     node->mesh.connectViewState();
@@ -1182,10 +1184,9 @@ std::string ViewProviderFemAnalysisImport::getElement(const SoDetail* detail) co
 {
     std::function<std::string(const ImportRenderNode&)> walk;
     walk = [&](const ImportRenderNode& node) -> std::string {
+        // Only the geometry is asked. The mesh drawn over it names nothing, so
+        // that a pick lands on the same element whichever stage is showing.
         if (auto el = node.geometry.elementFromDetail(detail); !el.empty()) {
-            return el;
-        }
-        if (auto el = node.mesh.elementFromDetail(detail); !el.empty()) {
             return el;
         }
         for (const auto& child : node.nested) {
@@ -1257,9 +1258,6 @@ SoDetail* ViewProviderFemAnalysisImport::getDetail(const char* subelement) const
     std::function<SoDetail*(const ImportRenderNode&)> walk;
     walk = [&](const ImportRenderNode& node) -> SoDetail* {
         if (SoDetail* detail = node.geometry.detailFromElement(subelement)) {
-            return detail;
-        }
-        if (SoDetail* detail = node.mesh.detailFromElement(subelement)) {
             return detail;
         }
         for (const auto& child : node.nested) {

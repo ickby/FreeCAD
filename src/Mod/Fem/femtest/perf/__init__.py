@@ -1,7 +1,5 @@
-# SPDX-License-Identifier: LGPL-2.1-or-later
-
 # ***************************************************************************
-# *   Copyright (c) 2020 Bernd Hahnebach <bernd@bimstatik.org>              *
+# *   Copyright (c) 2026 Stefan Tröger <stefantroeger@gmx.net>              *
 # *                                                                         *
 # *   This file is part of the FreeCAD CAx development system.              *
 # *                                                                         *
@@ -23,20 +21,9 @@
 # *                                                                         *
 # ***************************************************************************
 
-# Gui Unit tests for the FEM module
-from femtest.gui.test_open import TestObjectOpen as FemGuiTest01
-from femtest.gui.test_geometry_partition import TestGeometryPartitionGui as FemGuiTest02
-from femtest.gui.test_geometry_marks import TestGeometryMarksGui as FemGuiTest03
-from femtest.gui.test_view_panel import TestViewPanelGui as FemGuiTest04
-from femtest.gui.test_reference_selection import TestReferenceSelectionGui as FemGuiTest05
-from femtest.gui.test_palette import TestPaletteGui as FemGuiTest06
-from femtest.gui.test_mesh_edges import TestMeshEdgesGui as FemGuiTest07
+"""Benchmarks for the FEM module.
 
-# dummy usage to get flake8 and lgtm quiet
-False if FemGuiTest01.__name__ else True
-False if FemGuiTest02.__name__ else True
-False if FemGuiTest03.__name__ else True
-False if FemGuiTest04.__name__ else True
-False if FemGuiTest05.__name__ else True
-False if FemGuiTest06.__name__ else True
-False if FemGuiTest07.__name__ else True
+Unlike the tests next door these are not run by CI. They exist so that a
+change meant to make something faster can be held against a number from
+before it.
+"""

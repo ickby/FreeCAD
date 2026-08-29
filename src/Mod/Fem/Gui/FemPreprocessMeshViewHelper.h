@@ -26,7 +26,6 @@
 #include <map>
 #include <set>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include <Base/Placement.h>
@@ -39,7 +38,6 @@
 #include <vtkSmartPointer.h>
 #include <vtkUnstructuredGrid.h>
 
-class SoDetail;
 class SoSeparator;
 
 namespace Fem
@@ -77,15 +75,6 @@ public:
 
     /** Analysis-relative path prefix (e.g. "Import2.") for hidden/clip lookups. */
     void setPathPrefix(const std::string& prefix);
-    /**
-     * Prefix for the subnames the 3D view reports and accepts.
-     *
-     * Relative to the object the view provider belongs to, which is what
-     * Selection and every reference built from a pick expect - unlike the
-     * analysis-relative path of setPathPrefix(), which names the same element
-     * from the analysis this instance was imported into.
-     */
-    void setSelectionPrefix(const std::string& prefix);
     /** Placement of this instance, used to bring clip planes into its frame. */
     void setLocalFrame(const Base::Placement& placement);
     /** When false the host view provider manages stage display masks itself. */
@@ -126,9 +115,6 @@ public:
 
     FemMeshRenderer& renderer();
 
-    std::string elementFromDetail(const SoDetail* detail) const;
-    SoDetail* detailFromElement(const char* subelement) const;
-
 private:
     void ensureViewStateConnection();
     void registerGrid();
@@ -138,12 +124,10 @@ private:
     std::map<std::string, ClippingPlane> localClipPlanes(
         const std::map<std::string, ClippingPlane>& clips
     ) const;
-    void rebuildSelectionMaps();
     AnalysisViewState* viewState() const;
 
     Gui::ViewProviderDocumentObject* m_viewProvider {nullptr};
     std::string m_pathPrefix;
-    std::string m_selectionPrefix;
     Base::Placement m_localFrame;
     bool m_manageStageVisibility {true};
     AnalysisFinder m_findAnalysis;
@@ -162,13 +146,6 @@ private:
     AnalysisViewState* m_boundViewState {nullptr};
     vtkUnstructuredGrid* m_registeredGrid {nullptr};
 
-    std::vector<std::string> m_faceEntities;
-    std::vector<std::string> m_lineEntities;
-    std::vector<std::string> m_pointEntities;
-    std::unordered_map<std::string, int> m_entityToFace;
-    std::unordered_map<std::string, int> m_entityToLine;
-    std::unordered_map<std::string, int> m_entityToPoint;
-
     bool m_viewStateCacheValid {false};
     DimensionMode m_cachedDimMode {DimensionMode::Highest};
     bool m_cachedWireframe {false};
@@ -176,6 +153,10 @@ private:
     std::set<std::string> m_cachedHidden;
     std::set<std::string> m_cachedHiddenCellTypes;
     std::map<std::string, ClippingPlane> m_cachedClips;
+    /// What the state above was last worked out to mean, cell by cell.
+    std::vector<unsigned char> m_cachedVisibility;
+    std::vector<unsigned char> m_cachedOverlay;
+    std::set<std::string> m_cachedUnderAchieved;
 };
 
 }  // namespace FemGui

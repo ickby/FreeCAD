@@ -26,6 +26,10 @@
 # include <cstring>
 # include <functional>
 # include <set>
+# include <vector>
+# include <Inventor/SoFullPath.h>
+# include <Inventor/SoPickedPoint.h>
+# include <Inventor/misc/SoChildList.h>
 # include <Inventor/nodes/SoSeparator.h>
 # include <Inventor/nodes/SoTransform.h>
 #endif
@@ -239,6 +243,20 @@ void setTransformFromPlacement(SoTransform* node, const Base::Placement& pla)
         static_cast<float>(pos.y),
         static_cast<float>(pos.z)
     );
+}
+
+/// Extend *path* by *node*, which has to be a child of what the path ends on.
+bool appendChild(SoFullPath* path, SoNode* node)
+{
+    if (!node || path->getLength() == 0) {
+        return false;
+    }
+    const SoChildList* children = path->getTail()->getChildren();
+    if (!children || children->find(static_cast<void*>(node)) < 0) {
+        return false;
+    }
+    path->append(node);
+    return true;
 }
 
 }  // namespace
@@ -1178,6 +1196,123 @@ void ViewProviderFemAnalysisImport::setElementHighlight(
 void ViewProviderFemAnalysisImport::clearElementHighlight(const std::string& role)
 {
     setElementHighlight(role, {}, Base::Color());
+}
+
+const ViewProviderFemAnalysisImport::ImportRenderNode* ViewProviderFemAnalysisImport::pickedNode(
+    const SoPath* path
+) const
+{
+    if (!path) {
+        return nullptr;
+    }
+    std::function<const ImportRenderNode*(const ImportRenderNode&)> walk;
+    walk = [&](const ImportRenderNode& node) -> const ImportRenderNode* {
+        // The separators are disjoint: the branch of a nested instance hangs
+        // beside the nodes of the instance it belongs to rather than under
+        // them, so at most one of them is ever on the path.
+        SoSeparator* separator = node.geometry.attachedSeparator();
+        if (separator && path->containsNode(separator)) {
+            return &node;
+        }
+        for (const auto& child : node.nested) {
+            if (const ImportRenderNode* found = walk(*child)) {
+                return found;
+            }
+        }
+        return nullptr;
+    };
+    for (const auto& node : m_renderNodes) {
+        if (const ImportRenderNode* found = walk(*node)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+const ViewProviderFemAnalysisImport::ImportRenderNode* ViewProviderFemAnalysisImport::elementOwner(
+    const char* subelement,
+    std::vector<SoNode*>& branch
+) const
+{
+    std::function<const ImportRenderNode*(const ImportRenderNode&)> walk;
+    walk = [&](const ImportRenderNode& node) -> const ImportRenderNode* {
+        branch.push_back(node.geometryBranch);
+        if (node.geometry.ownsElement(subelement)) {
+            if (SoSeparator* separator = node.geometry.attachedSeparator()) {
+                branch.push_back(separator);
+                return &node;
+            }
+        }
+        for (const auto& child : node.nested) {
+            if (const ImportRenderNode* owner = walk(*child)) {
+                return owner;
+            }
+        }
+        branch.pop_back();
+        return nullptr;
+    };
+    for (const auto& node : m_renderNodes) {
+        if (const ImportRenderNode* owner = walk(*node)) {
+            return owner;
+        }
+    }
+    branch.clear();
+    return nullptr;
+}
+
+bool ViewProviderFemAnalysisImport::getElementPicked(const SoPickedPoint* point, std::string& subname) const
+{
+    subname.clear();
+    if (!point) {
+        return false;
+    }
+    if (const ImportRenderNode* node = pickedNode(point->getPath())) {
+        subname = node->geometry.elementFromDetail(point->getDetail());
+    }
+    // Anything else the instance draws names nothing, the mesh of its stage
+    // above all: a detail from there, read against the tables of the geometry,
+    // would come out as an element that was never picked.
+    return true;
+}
+
+bool ViewProviderFemAnalysisImport::getDetailPath(
+    const char* subname,
+    SoFullPath* path,
+    bool append,
+    SoDetail*& det
+) const
+{
+    det = nullptr;
+    if (!path || pcRoot->findChild(pcModeSwitch) < 0) {
+        return false;
+    }
+    if (append) {
+        path->append(pcRoot);
+        path->append(pcModeSwitch);
+    }
+    if (Base::Tools::isNullOrEmpty(subname)) {
+        return true;
+    }
+
+    std::vector<SoNode*> branch;
+    const ImportRenderNode* owner = elementOwner(subname, branch);
+    if (!owner) {
+        return true;
+    }
+    det = owner->geometry.detailFromElement(subname);
+
+    const int unnarrowed = path->getLength();
+    if (appendChild(path, m_geometryRoot)) {
+        for (SoNode* node : branch) {
+            if (!appendChild(path, node)) {
+                // Half a path points at an instance that was never meant, so
+                // rather leave the caller where it was.
+                path->truncate(unnarrowed);
+                break;
+            }
+        }
+    }
+    return true;
 }
 
 std::string ViewProviderFemAnalysisImport::getElement(const SoDetail* detail) const

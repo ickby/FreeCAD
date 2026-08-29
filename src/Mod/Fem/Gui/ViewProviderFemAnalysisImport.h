@@ -94,8 +94,33 @@ public:
     void unsetEditViewer(Gui::View3DInventorViewer* viewer) override;
     bool doubleClicked() override;
 
+    /**
+     * Name an element from a detail alone.
+     *
+     * Without a path there is nothing to say which instance the indices of the
+     * detail belong to, so this answers for the first one that can read them.
+     * getElementPicked() is what a pick goes through.
+     */
     std::string getElement(const SoDetail*) const override;
     SoDetail* getDetail(const char*) const override;
+
+    /**
+     * Name the element a pick landed on, read off the instance it went through.
+     *
+     * A detail is nothing but indices into the arrays of the node that made it,
+     * and every instance of one source analysis has the same arrays. Only the
+     * path the pick came down says which instance those indices belong to.
+     */
+    bool getElementPicked(const SoPickedPoint* point, std::string& subname) const override;
+    /**
+     * Path down to the instance @a subname belongs to, and its detail.
+     *
+     * The caller applies its selection and highlight actions to everything
+     * below the end of this path. Left at the mode switch, that is every
+     * instance the view provider draws, each of which would light the part of
+     * the index the detail carries - a different face in every one of them.
+     */
+    bool getDetailPath(const char* subname, SoFullPath* path, bool append, SoDetail*& det) const override;
 
     /**
      * Re-read the selection and hand it to the render tree.
@@ -155,6 +180,16 @@ private:
         const std::string& selectionPrefix,
         std::vector<const Fem::FemAnalysisImport*>& chain
     );
+    /** The instance @a path runs through, or null if it misses their geometry. */
+    const ImportRenderNode* pickedNode(const SoPath* path) const;
+    /**
+     * The instance @a subelement belongs to.
+     *
+     * @a branch is filled with the nodes leading to it from the geometry root,
+     * the geometry branch of every instance on the way and the separator of
+     * the one that owns the element.
+     */
+    const ImportRenderNode* elementOwner(const char* subelement, std::vector<SoNode*>& branch) const;
     void rebuildInheritedSymbols();
     void clearInheritedSymbols();
     void addInheritedSymbols(

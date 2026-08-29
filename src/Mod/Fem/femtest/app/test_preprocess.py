@@ -2297,6 +2297,23 @@ class TestAnalysisImport(unittest.TestCase):
         return indices
 
     @staticmethod
+    def _face_sets_below(node):
+        """The geometry face sets an action applied to *node* would reach."""
+        from pivy import coin
+
+        search = coin.SoSearchAction()
+        search.setType(coin.SoIndexedFaceSet.getClassTypeId())
+        search.setInterest(coin.SoSearchAction.ALL)
+        search.setSearchingAll(True)
+        search.apply(node)
+        paths = search.getPaths()
+        return [
+            paths[i].getTail()
+            for i in range(paths.getLength())
+            if paths[i].getTail().getTypeId().getName() == "SoBrepFaceSet"
+        ]
+
+    @staticmethod
     def _drawn_ghost(view_object):
         """
         Faces of the ghost overlay an instance draws over its geometry.
@@ -2440,6 +2457,92 @@ class TestAnalysisImport(unittest.TestCase):
             for origin, direction in (above, below)
         }
         self.assertIn("Solid1", picks, f"the cut face names the solid it cuts, got {picks}")
+
+    def _nested_instances(self):
+        """
+        An instance whose source imports the same analysis twice.
+
+        The two nested instances draw one shape out of one set of tables, so
+        nothing but where they sit in the scene graph tells them apart.
+        """
+        leg, _ = self._two_solid_leg()
+        middle, _, _ = self._table_analysis(mesh_group=True, native=True)
+        first, _ = self._add_import(middle, leg, "Leg1", vector=FreeCAD.Vector(0, 100, 0))
+        second, _ = self._add_import(middle, leg, "Leg2", vector=FreeCAD.Vector(0, 200, 0))
+        self.document.recompute()
+
+        outer, _, _ = self._table_analysis(mesh_group=True, native=True)
+        outer_imp, _ = self._add_import(outer, middle, "Middle1", vector=FreeCAD.Vector(0, 0, 100))
+        self.document.recompute()
+        return outer_imp, first, second
+
+    def test_a_pick_names_the_nested_instance_it_landed_on(self):
+        """
+        A Coin detail is nothing but indices into the arrays of the node that
+        made it, and every instance of one source analysis has the same
+        arrays. Named without the path the pick came down, an element belongs
+        to whichever instance reads those indices first, and the status bar,
+        the selection and the highlight all end up on another leg.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        outer_imp, first, second = self._nested_instances()
+
+        for element in (f"{first.Name}.Solid1", f"{second.Name}.Solid1", "Solid1"):
+            box = outer_imp.getSubObject(element).BoundBox
+            picked = self._picked_element(
+                outer_imp.ViewObject,
+                (box.Center.x, box.Center.y, box.ZMax + 50),
+                (0, 0, -1),
+            )
+            self.assertTrue(picked, f"the ray has to meet {element}")
+            path = element.rpartition(".")[0]
+            self.assertEqual(
+                picked.rpartition(".")[0],
+                path,
+                f"picked on {element}, named {picked}",
+            )
+
+    def test_the_path_to_a_nested_element_stops_at_its_instance(self):
+        """
+        The caller applies its highlight to everything below the end of the
+        path it is handed. Left at the mode switch that is every instance the
+        view provider draws, each of which lights the part of the index the
+        detail carries - a different face in every one of them.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for view providers")
+
+        from pivy import coin
+
+        outer_imp, first, second = self._nested_instances()
+        self.assertEqual(
+            len(self._face_sets_below(outer_imp.ViewObject.RootNode)),
+            3,
+            "the instance itself and the two legs nested in it",
+        )
+
+        for element in (f"{first.Name}.Solid1", f"{second.Name}.Solid1", "Solid1"):
+            path = coin.SoPath()
+            self.assertIsNotNone(
+                outer_imp.ViewObject.getDetailPath(element, path, True),
+                f"{element} has a face to highlight",
+            )
+            self.assertEqual(
+                len(self._face_sets_below(path.getTail())),
+                1,
+                f"{element} reaches a single instance",
+            )
+
+            action = coin.SoGetBoundingBoxAction(coin.SbViewportRegion(400, 400))
+            action.apply(path)
+            self.assertAlmostEqual(
+                action.getBoundingBox().getCenter().getValue()[1],
+                outer_imp.getSubObject(element).BoundBox.Center.y,
+                delta=1e-3,
+                msg=f"{element} leads to the instance that draws it",
+            )
 
     def test_selecting_an_imported_solid_lights_up_its_faces(self):
         """

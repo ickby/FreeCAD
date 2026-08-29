@@ -392,6 +392,7 @@ void FemGeometryViewHelper::attachToSeparator(SoSeparator* root)
     ghost->addChild(m_overlaynormals);
     ghost->addChild(m_overlayfaces);
     m_attached = true;
+    m_attachedSeparator = root;
 }
 
 void FemGeometryViewHelper::ensureDisplayModes(SoSeparator* hiddenSeparator)
@@ -632,6 +633,11 @@ std::string FemGeometryViewHelper::localElementName(const std::string& sub) cons
     }
     // Anything with a path in it belongs to an instance further in.
     return sub.find('.') == std::string::npos ? sub : std::string {};
+}
+
+bool FemGeometryViewHelper::ownsElement(const char* subelement) const
+{
+    return subelement && *subelement && !localElementName(subelement).empty();
 }
 
 void FemGeometryViewHelper::setSelectionState(

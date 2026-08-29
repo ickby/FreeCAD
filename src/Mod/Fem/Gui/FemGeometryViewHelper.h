@@ -133,8 +133,23 @@ public:
         return m_separator;
     }
 
+    /**
+     * The separator the nodes of this instance hang under, null until attached.
+     *
+     * Every instance of one source analysis draws the same shape out of the
+     * same tables, so where it sits in the scene graph is the only thing that
+     * tells a pick or a highlight which of them it belongs to.
+     */
+    SoSeparator* attachedSeparator() const
+    {
+        return m_attachedSeparator;
+    }
+
     std::string elementFromDetail(const SoDetail* detail) const;
     SoDetail* detailFromElement(const char* subelement) const;
+
+    /** True when @a subelement is named as an element of this instance. */
+    bool ownsElement(const char* subelement) const;
 
     /**
      * Selected and preselected subnames, as the view provider this instance
@@ -247,6 +262,7 @@ private:
     std::map<vtkIdType, std::vector<std::string>> m_id_elements;
 
     SoSeparator* m_separator {nullptr};
+    SoSeparator* m_attachedSeparator {nullptr};
     SoSeparator* m_hidden {nullptr};
     SoMaterialBinding* m_facematerialbinding {nullptr};
     SoMaterial* m_facematerial {nullptr};

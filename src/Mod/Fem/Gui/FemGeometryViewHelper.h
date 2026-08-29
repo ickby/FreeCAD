@@ -168,6 +168,8 @@ public:
 
 private:
     void ensureViewStateConnection();
+    /** The VTK ids of everything that is not hidden, and who owns each of them. */
+    void collectVisibleIds(const std::set<std::string>& hidden, IVtk_ShapeIdList& passthrough_ids);
     void applyClipPlanes(
         const std::map<std::string, ClippingPlane>& clipper,
         DimensionMode dimMode,

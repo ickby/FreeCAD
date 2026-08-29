@@ -231,12 +231,17 @@ void ViewProviderFemMeshShapePreprocess::updateStageVisibility()
     }
 }
 
+// References are picked on the geometry, and the mesh drawn over it is there to
+// be looked at. Naming a subelement of it would let a pick that only meant to
+// show the mesh reach into the analysis, and the base implementation names the
+// elements of a scene graph this mode does not draw. So neither: the mesh
+// answers for itself as a whole and nothing below it.
 std::string ViewProviderFemMeshShapePreprocess::getElement(const SoDetail* detail) const
 {
     if (!preprocessActive()) {
         return ViewProviderFemMeshShapeBase::getElement(detail);
     }
-    return m_preprocessMesh.elementFromDetail(detail);
+    return {};
 }
 
 SoDetail* ViewProviderFemMeshShapePreprocess::getDetail(const char* subelement) const
@@ -244,7 +249,7 @@ SoDetail* ViewProviderFemMeshShapePreprocess::getDetail(const char* subelement) 
     if (!preprocessActive()) {
         return ViewProviderFemMeshShapeBase::getDetail(subelement);
     }
-    return m_preprocessMesh.detailFromElement(subelement);
+    return nullptr;
 }
 
 // Python feature ---------------------------------------------------------

@@ -350,6 +350,8 @@ SET(FemGui_SRCS_Module
     Command.cpp
     FemGuiTools.cpp
     FemGuiTools.h
+    FemPerfLog.cpp
+    FemPerfLog.h
     FemSettings.cpp
     FemSettings.h
     Resources/Fem.qrc

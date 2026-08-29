@@ -138,16 +138,15 @@ public:
     /**
      * Classification for the active stage colour mode.
      *
-     * Cached per mesh grid, because CellType categories and cell lookups are
-     * derived from the grid: several mesh view providers ask for their own grid
-     * and must not be handed a classification built for another mesh. Category
-     * colours stay stable across grids so the same material or cell type looks
-     * the same on every mesh.
+     * Cached per mesh grid and colour mode, because CellType categories and
+     * cell lookups are derived from the grid: several mesh view providers ask
+     * for their own grid and must not be handed a classification built for
+     * another mesh. Category colours stay stable across grids so the same
+     * material or cell type looks the same on every mesh.
      *
      * @param meshGrid Optional VTK mesh for CellType / cell lookups.
      */
     const Classification* classification(vtkUnstructuredGrid* meshGrid = nullptr);
-    void invalidateClassification();
 
     /**
      * Mesh view providers announce their grid here so that consumers without a
@@ -198,10 +197,13 @@ private:
     std::size_t importRevision() const;
     /// Mirror the persistable subset onto the analysis view provider.
     void persist() const;
+    /// Drop the cached classifications of one grid, in every colour mode.
+    void forgetClassificationsOf(vtkUnstructuredGrid* meshGrid);
 
     Fem::FemAnalysis* m_analysis {nullptr};
     int m_batchDepth {0};
     bool m_pendingNotify {false};
+    mutable bool m_pendingPersist {false};
 
     ActiveStage m_stage {ActiveStage::Geometry};
     DimensionMode m_dimensionMode {DimensionMode::Highest};
@@ -215,8 +217,11 @@ private:
     std::set<std::string> m_underAchieved;
 
     /// One classification per mesh grid; the null key serves grid-less callers.
-    mutable std::map<vtkUnstructuredGrid*, std::unique_ptr<Classification>> m_classifications;
-    mutable ColorMode m_classificationMode {ColorMode::Subelement};
+    // Keyed by colour mode as well as by grid, because the mode belongs to the
+    // stage and a switch of stage swings it back and forth. Dropping the other
+    // mode's work on every switch would mean rebuilding it on the way back.
+    mutable std::map<std::pair<ColorMode, vtkUnstructuredGrid*>, std::unique_ptr<Classification>>
+        m_classifications;
     /// Geometry revision the cached classifications were built from
     mutable std::size_t m_classificationRevision {0};
     /// Import fingerprint the cached classifications were built from

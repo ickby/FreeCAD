@@ -701,9 +701,17 @@ class GeometryModel(QAbstractItemModel):
             explorer = getattr(self, "_explorer", None)
             if explorer is not None:
                 explorer._suspend_vs_rebuild = True
+            # A node without an element of its own hides one descendant at a
+            # time, and every one of them would otherwise reach the renderers as
+            # a change of its own. What the user did was tick one box.
+            state = node.view_state
+            if state is not None:
+                state.beginUpdate()
             try:
                 node.set_visible(checked)
             finally:
+                if state is not None:
+                    state.endUpdate()
                 if explorer is not None:
                     explorer._suspend_vs_rebuild = False
             self._emit_check_column(index)

@@ -750,10 +750,16 @@ if(BUILD_FEM_VTK_PYTHON)
     )
 endif(BUILD_FEM_VTK_PYTHON)
 
+SET(FemGuiBenchmarks_SRCS
+    femtest/perf/__init__.py
+    femtest/perf/view_pipeline.py
+)
+
 SET(FemGuiTests_SRCS
     femtest/gui/__init__.py
     femtest/gui/test_geometry_marks.py
     femtest/gui/test_geometry_partition.py
+    femtest/gui/test_mesh_edges.py
     femtest/gui/test_open.py
     femtest/gui/test_palette.py
     femtest/gui/test_reference_selection.py
@@ -845,6 +851,7 @@ SET(FemGuiPreferencePages_SRCS
 
 SET(FemAllGuiScripts
     ${FemGuiBaseModules_SRCS}
+    ${FemGuiBenchmarks_SRCS}
     ${FemGuiObjects_SRCS}
     ${FemGuiTaskPanels_SRCS}
     ${FemGuiTests_SRCS}
@@ -864,6 +871,7 @@ if(BUILD_GUI)
     INSTALL(FILES ${FemGuiBaseModules_SRCS} DESTINATION Mod/Fem/)
     INSTALL(FILES ${FemGuiObjects_SRCS} DESTINATION Mod/Fem/femguiobjects/)
     INSTALL(FILES ${FemGuiTaskPanels_SRCS} DESTINATION Mod/Fem/femtaskpanels/)
+    INSTALL(FILES ${FemGuiBenchmarks_SRCS} DESTINATION Mod/Fem/femtest/perf/)
     INSTALL(FILES ${FemGuiTests_SRCS} DESTINATION Mod/Fem/femtest/gui/)
     INSTALL(FILES ${FemGuiUtils_SRCS} DESTINATION Mod/Fem/femguiutils/)
     INSTALL(FILES ${FemGuiViewProvider_SRCS} DESTINATION Mod/Fem/femviewprovider/)

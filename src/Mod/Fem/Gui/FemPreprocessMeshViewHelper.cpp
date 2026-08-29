@@ -23,9 +23,6 @@
 #include "PreCompiled.h"
 
 #ifndef _PreComp_
-# include <Inventor/details/SoFaceDetail.h>
-# include <Inventor/details/SoLineDetail.h>
-# include <Inventor/details/SoPointDetail.h>
 # include <Inventor/nodes/SoSeparator.h>
 # include <vtkAbstractArray.h>
 #endif
@@ -39,6 +36,7 @@
 #include <Mod/Fem/App/FemVTKTools.h>
 #include <Mod/Part/App/TopoShape.h>
 
+#include "FemPerfLog.h"
 #include "FemVisibilityMask.h"
 
 using namespace FemGui;
@@ -73,11 +71,6 @@ bool clipApplies(const ClippingPlane& plane, const std::string& pathPrefix)
 void FemPreprocessMeshViewHelper::setPathPrefix(const std::string& prefix)
 {
     m_pathPrefix = prefix;
-}
-
-void FemPreprocessMeshViewHelper::setSelectionPrefix(const std::string& prefix)
-{
-    m_selectionPrefix = prefix;
 }
 
 void FemPreprocessMeshViewHelper::setLocalFrame(const Base::Placement& placement)
@@ -187,7 +180,13 @@ FemMeshRenderer& FemPreprocessMeshViewHelper::renderer()
 
 void FemPreprocessMeshViewHelper::setElementSubsetMask(std::vector<unsigned char> mask)
 {
+    if (m_elementSubsetMask == mask) {
+        return;
+    }
     m_elementSubsetMask = std::move(mask);
+    // The subset is folded into the masks, so what was worked out under the
+    // previous one says nothing about what this one hides.
+    m_viewStateCacheValid = false;
 }
 
 void FemPreprocessMeshViewHelper::applyElementSubset(std::vector<unsigned char>& visibility) const
@@ -280,12 +279,17 @@ void FemPreprocessMeshViewHelper::buildGrid(
     if (!grid) {
         return;
     }
+    FEM_PERF_SCOPE("mesh.buildGrid");
 
-    // Keep all dimensions; FemVisibilityMask filters for display.
-    Fem::FemVTKTools::exportVTKMesh(&femMesh, grid, false, 1.0, &cellElementIds);
+    {
+        // Keep all dimensions; FemVisibilityMask filters for display.
+        FEM_PERF_SCOPE("mesh.buildGrid.exportMesh");
+        Fem::FemVTKTools::exportVTKMesh(&femMesh, grid, false, 1.0, &cellElementIds);
+    }
 
     // String entity names (Face7, Solid3, ...) when groups are present.
     try {
+        FEM_PERF_SCOPE("mesh.buildGrid.exportCellGroups");
         Fem::FemVTKTools::exportVTKCellGroup(
             const_cast<Fem::FemMesh*>(&femMesh),
             grid,
@@ -359,6 +363,8 @@ void FemPreprocessMeshViewHelper::updateFromSharedGrid(
 
 void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
 {
+    FEM_PERF_SCOPE("mesh.applyViewState");
+
     ensureViewStateConnection();
     auto* state = m_boundViewState ? m_boundViewState : viewState();
     auto* geometry = m_findGeometry ? m_findGeometry() : nullptr;
@@ -373,7 +379,6 @@ void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
         m_renderer.setWireframe(false);
         m_renderer.setClassification(nullptr);
         m_renderer.update();
-        rebuildSelectionMaps();
         m_viewStateCacheValid = false;
         return;
     }
@@ -385,9 +390,14 @@ void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
     const auto& hiddenTypes = state->hiddenCellTypes();
     const auto clips = localClipPlanes(state->clipPlanes());
 
-    const bool colorOnly = !meshChanged && m_viewStateCacheValid && m_cachedDimMode == dimMode
-        && m_cachedWireframe == wireframe && m_cachedHidden == hidden
-        && m_cachedHiddenCellTypes == hiddenTypes && m_cachedClips == clips
+    // Nothing that shapes the masks has moved. That is the usual case, because
+    // every helper of the analysis is told of every change, and all but the one
+    // or two the change is about see the same state they saw before. The clip
+    // plane and the wireframe are not among them: the renderer applies both on
+    // top of the masks, so moving a plane leaves what the model hides alone.
+    const bool sameMasks = !meshChanged && m_viewStateCacheValid && m_cachedDimMode == dimMode
+        && m_cachedHidden == hidden && m_cachedHiddenCellTypes == hiddenTypes;
+    const bool colorOnly = sameMasks && m_cachedWireframe == wireframe && m_cachedClips == clips
         && m_cachedColorMode != colorMode;
 
     m_cachedDimMode = dimMode;
@@ -399,23 +409,31 @@ void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
     m_viewStateCacheValid = true;
 
     if (colorOnly) {
-        m_renderer.setClassification(state->classification(m_vtkmesh));
+        {
+            FEM_PERF_SCOPE("mesh.classify");
+            m_renderer.setClassification(state->classification(m_vtkmesh));
+        }
         m_renderer.updateColors();
         return;
     }
 
-    std::set<std::string> underAchieved;
-    auto visibility = FemVisibilityMask::evaluate(
-        m_vtkmesh,
-        geometry,
-        dimMode,
-        hidden,
-        hiddenTypes,
-        &underAchieved
-    );
-    state->setUnderAchievedElements(std::move(underAchieved));
+    if (!sameMasks) {
+        FEM_PERF_SCOPE("mesh.visibilityMask");
+        std::set<std::string> underAchieved;
+        m_cachedVisibility = FemVisibilityMask::evaluate(
+            m_vtkmesh,
+            geometry,
+            dimMode,
+            hidden,
+            hiddenTypes,
+            &underAchieved
+        );
+        applyElementSubset(m_cachedVisibility);
+        m_cachedUnderAchieved = std::move(underAchieved);
+    }
+    state->setUnderAchievedElements(m_cachedUnderAchieved);
 
-    applyElementSubset(visibility);
+    const std::vector<unsigned char>& visibility = m_cachedVisibility;
     m_renderer.setVisibilityMask(visibility);
     m_renderer.setClipPlanes(clips);
     m_renderer.setWireframe(wireframe);
@@ -424,17 +442,22 @@ void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
     const bool overlayNeeded = state->overlay()
         && (wireframe || !clips.empty() || !hidden.empty() || !hiddenTypes.empty());
     if (overlayNeeded && m_vtkmesh) {
-        auto overlayMask = FemVisibilityMask::evaluate(m_vtkmesh, geometry, dimMode, {}, {});
-        applyElementSubset(overlayMask);
-        m_renderer.setOverlayMask(overlayMask);
+        if (!sameMasks || m_cachedOverlay.empty()) {
+            FEM_PERF_SCOPE("mesh.visibilityMask.overlay");
+            m_cachedOverlay = FemVisibilityMask::evaluate(m_vtkmesh, geometry, dimMode, {}, {});
+            applyElementSubset(m_cachedOverlay);
+        }
+        m_renderer.setOverlayMask(m_cachedOverlay);
     }
     else {
         m_renderer.setOverlayMask({});
     }
 
-    m_renderer.setClassification(state->classification(m_vtkmesh));
+    {
+        FEM_PERF_SCOPE("mesh.classify");
+        m_renderer.setClassification(state->classification(m_vtkmesh));
+    }
     m_renderer.update();
-    rebuildSelectionMaps();
 }
 
 void FemPreprocessMeshViewHelper::onViewStateChanged()
@@ -445,6 +468,8 @@ void FemPreprocessMeshViewHelper::onViewStateChanged()
     if (!m_built) {
         return;
     }
+    FEM_PERF_SCOPE("mesh.onViewStateChanged");
+
     syncStageVisibility();
     applyViewState(false);
 }
@@ -459,149 +484,4 @@ void FemPreprocessMeshViewHelper::syncStageVisibility()
         meshStage = (state->activeStage() == ActiveStage::Mesh);
     }
     m_viewProvider->setDisplayMaskMode(meshStage ? PreprocessMode : PreprocessHiddenMode);
-}
-
-void FemPreprocessMeshViewHelper::rebuildSelectionMaps()
-{
-    m_faceEntities.clear();
-    m_lineEntities.clear();
-    m_pointEntities.clear();
-    m_entityToFace.clear();
-    m_entityToLine.clear();
-    m_entityToPoint.clear();
-
-    if (!m_vtkmesh) {
-        return;
-    }
-
-    auto mapCell = [this](vtkIdType orig, std::vector<std::string>& entities,
-                          std::unordered_map<std::string, int>& lookup, int index) {
-        std::string entity;
-        if (orig >= 0) {
-            entity = FemVisibilityMask::entityOfCell(m_vtkmesh, orig);
-        }
-        entities.push_back(entity);
-        if (!entity.empty() && !lookup.count(entity)) {
-            lookup[entity] = index;
-        }
-    };
-
-    auto* visdata = m_renderer.currentPolyData();
-    if (!visdata) {
-        return;
-    }
-
-    const int nFaces = static_cast<int>(visdata->GetNumberOfPolys());
-    m_faceEntities.reserve(static_cast<size_t>(nFaces));
-    for (int i = 0; i < nFaces; ++i) {
-        mapCell(m_renderer.originalCellOfFace(i), m_faceEntities, m_entityToFace, i);
-    }
-
-    const int nLines = static_cast<int>(visdata->GetNumberOfLines());
-    m_lineEntities.reserve(static_cast<size_t>(nLines));
-    for (int i = 0; i < nLines; ++i) {
-        mapCell(m_renderer.originalCellOfLine(i), m_lineEntities, m_entityToLine, i);
-    }
-
-    const int nVerts = static_cast<int>(visdata->GetNumberOfVerts());
-    m_pointEntities.reserve(static_cast<size_t>(nVerts));
-    for (int i = 0; i < nVerts; ++i) {
-        mapCell(m_renderer.originalCellOfMarker(i), m_pointEntities, m_entityToPoint, i);
-    }
-}
-
-std::string FemPreprocessMeshViewHelper::elementFromDetail(const SoDetail* detail) const
-{
-    if (!detail) {
-        return {};
-    }
-    std::string entity;
-    if (detail->getTypeId() == SoFaceDetail::getClassTypeId()) {
-        const auto* faceDetail = static_cast<const SoFaceDetail*>(detail);
-        const int face = faceDetail->getFaceIndex();
-        if (face >= 0 && static_cast<size_t>(face) < m_faceEntities.size()) {
-            entity = m_faceEntities[static_cast<size_t>(face)];
-        }
-    }
-    else if (detail->getTypeId() == SoLineDetail::getClassTypeId()) {
-        const auto* lineDetail = static_cast<const SoLineDetail*>(detail);
-        const int line = lineDetail->getLineIndex();
-        if (line >= 0 && static_cast<size_t>(line) < m_lineEntities.size()) {
-            entity = m_lineEntities[static_cast<size_t>(line)];
-        }
-    }
-    else if (detail->getTypeId() == SoPointDetail::getClassTypeId()) {
-        const auto* pointDetail = static_cast<const SoPointDetail*>(detail);
-        const int vertex = pointDetail->getCoordinateIndex();
-        if (vertex >= 0 && static_cast<size_t>(vertex) < m_pointEntities.size()) {
-            entity = m_pointEntities[static_cast<size_t>(vertex)];
-        }
-    }
-    if (entity.empty()) {
-        return {};
-    }
-    if (!m_selectionPrefix.empty()) {
-        return m_selectionPrefix + entity;
-    }
-    return entity;
-}
-
-SoDetail* FemPreprocessMeshViewHelper::detailFromElement(const char* subelement) const
-{
-    if (!subelement || !*subelement) {
-        return nullptr;
-    }
-    std::string name(subelement);
-    if (!m_selectionPrefix.empty()) {
-        if (name.starts_with(m_selectionPrefix)) {
-            name = name.substr(m_selectionPrefix.size());
-        }
-        else {
-            return nullptr;
-        }
-    }
-    else if (name.find('.') != std::string::npos) {
-        // Addresses something further in; not an element of this instance.
-        return nullptr;
-    }
-    auto type = Part::TopoShape::getElementTypeAndIndex(name.c_str());
-    const std::string& element = type.first;
-
-    if (element == "Face" || element == "Solid" || element.empty()) {
-        if (auto it = m_entityToFace.find(name); it != m_entityToFace.end()) {
-            auto* detail = new SoFaceDetail();
-            detail->setFaceIndex(it->second);
-            return detail;
-        }
-    }
-    if (element == "Edge" || element.empty()) {
-        if (auto it = m_entityToLine.find(name); it != m_entityToLine.end()) {
-            auto* detail = new SoLineDetail();
-            detail->setLineIndex(it->second);
-            return detail;
-        }
-    }
-    if (element == "Vertex" || element.empty()) {
-        if (auto it = m_entityToPoint.find(name); it != m_entityToPoint.end()) {
-            auto* detail = new SoPointDetail();
-            detail->setCoordinateIndex(it->second);
-            return detail;
-        }
-    }
-    if (auto it = m_entityToFace.find(name); it != m_entityToFace.end()) {
-        auto* detail = new SoFaceDetail();
-        detail->setFaceIndex(it->second);
-        return detail;
-    }
-    if (auto it = m_entityToLine.find(name); it != m_entityToLine.end()) {
-        auto* detail = new SoLineDetail();
-        detail->setLineIndex(it->second);
-        return detail;
-    }
-    if (auto it = m_entityToPoint.find(name); it != m_entityToPoint.end()) {
-        auto* detail = new SoPointDetail();
-        detail->setCoordinateIndex(it->second);
-        return detail;
-    }
-    return nullptr;
 }

@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <set>
@@ -42,6 +43,7 @@
 #include <vtkExtractGeometry.h>
 #include <vtkExtractEdges.h>
 #include <vtkGeometryFilter.h>
+#include <vtkUnstructuredGridGeometryFilter.h>
 #include <vtkAppendPolyData.h>
 
 class SoCoordinate3;
@@ -182,14 +184,6 @@ public:
         return m_vtkmesh;
     }
 
-    /**
-     * Map a Coin face / line / marker index to the input-grid cell id.
-     * Uses baked origcell (or vtkOriginalCellIds); returns -1 if unknown.
-     */
-    vtkIdType originalCellOfFace(int faceIndex) const;
-    vtkIdType originalCellOfLine(int lineIndex) const;
-    vtkIdType originalCellOfMarker(int markerIndex) const;
-
     SoIndexedFaceSet* faces() const
     {
         return m_faces;
@@ -207,6 +201,22 @@ private:
     void buildSceneGraph();
     void pushPolyDataToCoin(vtkPolyData* visdata);
     void updateOverlay();
+
+    /**
+     * Fill m_realedges with the element edges of the cells the surface came
+     * from, each edge as one line however many points it curves through.
+     *
+     * Taking them from the cells rather than from the surface is what keeps
+     * them element edges: the surface filter linearises a quadratic face, and
+     * its edges are the triangulation of that face, not the elements. The
+     * edges that point into the interior are drawn too and are hidden behind
+     * the surface, which costs less than working out which ones those are.
+     */
+    void buildBoundaryEdges();
+
+    /// Drop the record of what the pipeline was last fed and last produced, so
+    /// that the next update rebuilds and re-pushes everything.
+    void forgetPipelineState();
 
     SoSeparator* m_separator {nullptr};
     SoShapeHints* m_shapehints {nullptr};
@@ -236,9 +246,12 @@ private:
     vtkSmartPointer<vtkPolyDataAlgorithm> m_vtkcurrentalgorithm;
     vtkSmartPointer<vtkThreshold> m_vtkfilter;
     vtkSmartPointer<vtkExtractGeometry> m_vtkclipper;
+    // Only in the pipeline of a mesh with curved elements; see setMesh().
+    vtkSmartPointer<vtkUnstructuredGridGeometryFilter> m_vtkfacefilter;
     vtkSmartPointer<vtkGeometryFilter> m_vtkpolyfilter;
-    vtkSmartPointer<vtkExtractEdges> m_vtksurfedges;
     vtkSmartPointer<vtkExtractEdges> m_vtkwireedges;
+    // Element edges of the faces on the surface; an input of m_vtksurface.
+    vtkSmartPointer<vtkPolyData> m_realedges;
     vtkSmartPointer<vtkAppendPolyData> m_vtksurface;
     // Overlay branch: threshold on its own mask, no clipping.
     vtkSmartPointer<vtkThreshold> m_vtkoverlayfilter;
@@ -246,12 +259,36 @@ private:
 
     std::map<std::string, ClippingPlane> m_clipper;
     DimensionMode m_dimensionMode {DimensionMode::Highest};
+    bool m_curvedmesh {false};
     bool m_wireframe {false};
     bool m_overlayEnabled {true};
     std::vector<unsigned char> m_overlayMask;
     const Classification* m_classification {nullptr};
     std::vector<Base::Color> m_palette;
     std::vector<unsigned char> m_visibilityMask;
+
+    // What the pipeline was last fed. An update is only allowed to disturb it
+    // where it differs, because a filter told it changed forgets everything it
+    // and everything behind it had computed.
+    std::vector<unsigned char> m_writtenvisibility;
+    std::vector<unsigned char> m_writtenoverlay;
+    std::map<std::string, ClippingPlane> m_writtenclipper;
+    bool m_inputswritten {false};
+
+    // What was last read out of it. The pointers are compared, never followed,
+    // and paired with a timestamp that VTK never reuses.
+    vtkPointSet* m_boundaryfrom {nullptr};
+    vtkMTimeType m_boundarymtime {0};
+    vtkPolyData* m_pusheddata {nullptr};
+    vtkMTimeType m_pushedmtime {0};
+    vtkPolyData* m_overlaypushed {nullptr};
+    vtkMTimeType m_overlaypushedmtime {0};
+
+    // Scratch of buildBoundaryEdges(), kept between updates for the capacity
+    // alone: the drawn number of each surface point, and the open-addressed
+    // table of the edges already drawn.
+    std::vector<vtkIdType> m_pointmap;
+    std::vector<std::uint64_t> m_edgeseen;
 };
 
 }  // namespace FemGui

@@ -27,6 +27,7 @@
 # include <vtkUnstructuredGrid.h>
 #endif
 
+#include "FemPerfLog.h"
 #include "FemVisibilityMask.h"
 
 #include <Base/Console.h>
@@ -305,9 +306,12 @@ std::vector<unsigned char> FemVisibilityMask::evaluate(
     // arrays and is used by several passes below.
     std::vector<std::string> entityOf(static_cast<size_t>(n));
     bool hasEntityInfo = false;
-    for (vtkIdType i = 0; i < n; ++i) {
-        entityOf[static_cast<size_t>(i)] = entityOfCell(grid, i);
-        hasEntityInfo = hasEntityInfo || !entityOf[static_cast<size_t>(i)].empty();
+    {
+        FEM_PERF_SCOPE("mesh.visibilityMask.entityOfCell");
+        for (vtkIdType i = 0; i < n; ++i) {
+            entityOf[static_cast<size_t>(i)] = entityOfCell(grid, i);
+            hasEntityInfo = hasEntityInfo || !entityOf[static_cast<size_t>(i)].empty();
+        }
     }
 
     // Mesh-derived highest (no entity info): keep only max dimension present
@@ -333,15 +337,18 @@ std::vector<unsigned char> FemVisibilityMask::evaluate(
     // as their fallback so that they are not silently hidden.
     std::map<std::string, int> achieved;
     int ungroupedMaxDim = -1;
-    for (vtkIdType i = 0; i < n; ++i) {
-        const int cdim = celldimArr->GetValue(i);
-        const std::string& entity = entityOf[static_cast<size_t>(i)];
-        if (entity.empty()) {
-            ungroupedMaxDim = std::max(ungroupedMaxDim, cdim);
-            continue;
-        }
-        for (const auto& owner : ownersOfEntity(geometry, entity)) {
-            achieved[owner] = std::max(achieved[owner], cdim);
+    {
+        FEM_PERF_SCOPE("mesh.visibilityMask.ownersOfEntity");
+        for (vtkIdType i = 0; i < n; ++i) {
+            const int cdim = celldimArr->GetValue(i);
+            const std::string& entity = entityOf[static_cast<size_t>(i)];
+            if (entity.empty()) {
+                ungroupedMaxDim = std::max(ungroupedMaxDim, cdim);
+                continue;
+            }
+            for (const auto& owner : ownersOfEntity(geometry, entity)) {
+                achieved[owner] = std::max(achieved[owner], cdim);
+            }
         }
     }
 

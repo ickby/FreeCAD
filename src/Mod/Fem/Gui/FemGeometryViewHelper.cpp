@@ -72,6 +72,7 @@
 
 #include "Classification.h"
 #include "FemMeshRenderer.h"
+#include "FemPerfLog.h"
 
 using namespace FemGui;
 
@@ -525,6 +526,7 @@ void FemGeometryViewHelper::onViewStateChanged()
     if (!m_attached && !m_displayModesAdded) {
         return;
     }
+    FEM_PERF_SCOPE("geometry.onViewStateChanged");
 
     auto* state = m_boundViewState;
     if (state && m_manageStageVisibility && m_viewProvider && m_displayModesAdded) {
@@ -702,6 +704,8 @@ void FemGeometryViewHelper::applySelectionHighlight()
 
 void FemGeometryViewHelper::resetSelectionVisuals()
 {
+    FEM_PERF_SCOPE("geometry.resetSelectionVisuals");
+
     // Coin keeps the picked part index on the node, so a rebuild that shifts the
     // parts around would leave the highlight on whatever inherited that index.
     Gui::SoSelectionElementAction selection(Gui::SoSelectionElementAction::None);
@@ -757,6 +761,7 @@ void FemGeometryViewHelper::updateVTK()
     if (m_topoShape.isNull() || !m_metadata) {
         return;
     }
+    FEM_PERF_SCOPE("geometry.updateVTK");
 
     auto* state = m_boundViewState;
     auto hidden = state ? localHiddenElements(state->hiddenElements()) : std::set<std::string> {};
@@ -768,6 +773,34 @@ void FemGeometryViewHelper::updateVTK()
     const DimensionMode dimMode = state ? state->dimensionMode() : DimensionMode::Highest;
 
     IVtk_ShapeIdList passthrough_ids;
+    collectVisibleIds(hidden, passthrough_ids);
+
+    {
+        FEM_PERF_SCOPE("geometry.updateVTK.subPolyDataFilter");
+        m_vtkshapefilter->SetData(passthrough_ids);
+        m_vtkshapefilter->Modified();
+        m_vtkshapefilter->Update();
+        m_visdata = m_vtkshapefilter->GetOutput();
+    }
+
+    applyClipPlanes(clipper, dimMode, passthrough_ids);
+
+    {
+        FEM_PERF_SCOPE("geometry.updateVTK.overlayExtract");
+        m_vtkoverlayextract->Update();
+        m_visoverlay = vtkPolyData::SafeDownCast(m_vtkoverlayextract->GetOutput());
+    }
+
+    update3D();
+}
+
+void FemGeometryViewHelper::collectVisibleIds(
+    const std::set<std::string>& hidden,
+    IVtk_ShapeIdList& passthrough_ids
+)
+{
+    FEM_PERF_SCOPE("geometry.updateVTK.collectVisibleIds");
+
     m_id_elements.clear();
 
     Fem::componentIdType component_id = 0;
@@ -817,18 +850,6 @@ void FemGeometryViewHelper::updateVTK()
             }
         }
     }
-
-    m_vtkshapefilter->SetData(passthrough_ids);
-    m_vtkshapefilter->Modified();
-    m_vtkshapefilter->Update();
-    m_visdata = m_vtkshapefilter->GetOutput();
-
-    applyClipPlanes(clipper, dimMode, passthrough_ids);
-
-    m_vtkoverlayextract->Update();
-    m_visoverlay = vtkPolyData::SafeDownCast(m_vtkoverlayextract->GetOutput());
-
-    update3D();
 }
 
 void FemGeometryViewHelper::applyClipPlanes(
@@ -840,6 +861,7 @@ void FemGeometryViewHelper::applyClipPlanes(
     if (clipper.empty() || !m_visdata) {
         return;
     }
+    FEM_PERF_SCOPE("geometry.updateVTK.clip");
 
     try {
         auto clip_planes = vtkSmartPointer<vtkPlaneCollection>::New();
@@ -857,13 +879,17 @@ void FemGeometryViewHelper::applyClipPlanes(
             m_vtkclipfilter->SetInputData(m_visdata);
             const int warn = vtkObject::GetGlobalWarningDisplay();
             vtkObject::SetGlobalWarningDisplay(0);
-            m_vtkclipgeometryfilter->Update();
+            {
+                FEM_PERF_SCOPE("geometry.updateVTK.clip.cutBody");
+                m_vtkclipgeometryfilter->Update();
+            }
             vtkObject::SetGlobalWarningDisplay(warn);
 
             vtkPolyData* clip_out = m_vtkclipgeometryfilter->GetOutput();
             if (!clip_out) {
                 return;
             }
+            FEM_PERF_SCOPE("geometry.updateVTK.clip.copyBody");
             vtkNew<vtkPolyData> clipped;
             clipped->DeepCopy(clip_out);
             m_visdata = clipped;
@@ -883,11 +909,17 @@ void FemGeometryViewHelper::applyClipPlanes(
                 continue;
             }
 
-            IVtkOCC_Shape::Handle vtk_shape = new IVtkOCC_Shape(solid);
-            m_vtkclipshapesource->SetShape(vtk_shape);
-            m_vtkclipsurfacefilter->SetClippingPlanes(clip_planes);
-            m_vtkclipnormals->Update();
-            vtkPolyData* solid_clip_plane = m_vtkclipnormals->GetOutput();
+            vtkPolyData* solid_clip_plane = nullptr;
+            {
+                // Every pass makes a shape source of its own, so this is where a
+                // clip pays for triangulating the solid all over again.
+                FEM_PERF_SCOPE("geometry.updateVTK.clip.capFaces");
+                IVtkOCC_Shape::Handle vtk_shape = new IVtkOCC_Shape(solid);
+                m_vtkclipshapesource->SetShape(vtk_shape);
+                m_vtkclipsurfacefilter->SetClippingPlanes(clip_planes);
+                m_vtkclipnormals->Update();
+                solid_clip_plane = m_vtkclipnormals->GetOutput();
+            }
             if (!solid_clip_plane || solid_clip_plane->GetNumberOfCells() == 0) {
                 continue;
             }
@@ -917,6 +949,7 @@ void FemGeometryViewHelper::applyClipPlanes(
                 );
             }
 
+            FEM_PERF_SCOPE("geometry.updateVTK.clip.appendCap");
             vtkNew<vtkAppendPolyData> appender;
             appender->AddInputData(m_visdata);
             appender->AddInputData(solid_clip_plane);
@@ -939,8 +972,16 @@ void FemGeometryViewHelper::updateColors()
     if (!m_metadata || m_part_shape_ids.empty()) {
         return;
     }
+    FEM_PERF_SCOPE("geometry.colors");
+
     auto* state = m_boundViewState;
-    const Classification* classification = state ? state->classification() : nullptr;
+    const Classification* classification = nullptr;
+    {
+        // Builds the classification unless the state still has one, so a first
+        // colouring after a stage or mode change pays for it here.
+        FEM_PERF_SCOPE("geometry.colors.classify");
+        classification = state ? state->classification() : nullptr;
+    }
     const auto cats = classification ? classification->categories() : std::vector<Category> {};
 
     // SoBrepFaceSet remaps materials by partIndex, one entry per BREP face.
@@ -963,6 +1004,8 @@ void FemGeometryViewHelper::colorFromClassification(
     ColorMode colorMode
 )
 {
+    FEM_PERF_SCOPE("geometry.colors.fromClassification");
+
     auto shape = m_metadata->Shape.getShape();
 
     std::set<std::string> keys;
@@ -976,6 +1019,7 @@ void FemGeometryViewHelper::colorFromClassification(
         const auto vtkid = m_part_shape_ids[i];
         std::string element;
         if (colorMode == ColorMode::Subelement) {
+            FEM_PERF_SCOPE("geometry.colors.fromClassification.subelementLookup");
             auto subshape = m_shape->GetSubShape(vtkid);
             if (!subshape.IsNull()) {
                 const int id = shape.findShape(subshape);
@@ -1018,6 +1062,8 @@ void FemGeometryViewHelper::colorFromClassification(
 
 void FemGeometryViewHelper::colorFromPalette()
 {
+    FEM_PERF_SCOPE("geometry.colors.fromPalette");
+
     // One colour per toplevel element, taken from the palette in the order the
     // classification would have used, so switching a colour mode off does not
     // change what the geometry looks like.
@@ -1068,6 +1114,7 @@ void FemGeometryViewHelper::updateGhostOverlay()
         m_overlayfaces->coordIndex.setNum(0);
         return;
     }
+    FEM_PERF_SCOPE("geometry.toCoin.ghostOverlay");
 
     auto* pntData = m_visoverlay->GetPointData();
     FemMeshRenderer::writePointData(
@@ -1096,6 +1143,8 @@ void FemGeometryViewHelper::updateGhostOverlay()
 
 void FemGeometryViewHelper::update3D()
 {
+    FEM_PERF_SCOPE("geometry.toCoin");
+
     // Before anything that gives up on the geometry: a clip plane that takes
     // the whole instance is exactly when the ghost is the only thing left to
     // say where it went.
@@ -1125,15 +1174,18 @@ void FemGeometryViewHelper::update3D()
     m_line_id_to_index.clear();
     m_point_id_to_index.clear();
 
-    auto* pntData = m_visdata->GetPointData();
-    FemMeshRenderer::writePointData(
-        m_coordinates,
-        m_normals,
-        m_normalBinding,
-        m_visdata->GetPoints(),
-        pntData->GetNormals(),
-        pntData->GetTCoords()
-    );
+    {
+        FEM_PERF_SCOPE("geometry.toCoin.points");
+        auto* pntData = m_visdata->GetPointData();
+        FemMeshRenderer::writePointData(
+            m_coordinates,
+            m_normals,
+            m_normalBinding,
+            m_visdata->GetPoints(),
+            pntData->GetNormals(),
+            pntData->GetTCoords()
+        );
+    }
 
     auto* cd = m_visdata->GetCellData();
     vtkIdTypeArray* shape_ids =
@@ -1165,16 +1217,19 @@ void FemGeometryViewHelper::update3D()
     vtkNew<vtkIdList> points;
 
     vtkNew<vtkIdList> sorted_indices;
-    sorted_indices->SetNumberOfIds(nMeta);
-    for (vtkIdType i = 0; i < nMeta; i++) {
-        sorted_indices->SetId(i, i);
+    {
+        FEM_PERF_SCOPE("geometry.toCoin.sortCells");
+        sorted_indices->SetNumberOfIds(nMeta);
+        for (vtkIdType i = 0; i < nMeta; i++) {
+            sorted_indices->SetId(i, i);
+        }
+        vtkNew<vtkIdTypeArray> sicc;
+        sicc->SetNumberOfTuples(nMeta);
+        for (vtkIdType i = 0; i < nMeta; ++i) {
+            sicc->SetValue(i, shape_ids->GetValue(i));
+        }
+        vtkSortDataArray::Sort(sicc, sorted_indices);
     }
-    vtkNew<vtkIdTypeArray> sicc;
-    sicc->SetNumberOfTuples(nMeta);
-    for (vtkIdType i = 0; i < nMeta; ++i) {
-        sicc->SetValue(i, shape_ids->GetValue(i));
-    }
-    vtkSortDataArray::Sort(sicc, sorted_indices);
 
     auto* state = m_boundViewState;
     const DimensionMode dimMode = state ? state->dimensionMode() : DimensionMode::Highest;

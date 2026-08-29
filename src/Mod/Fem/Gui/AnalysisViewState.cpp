@@ -30,6 +30,7 @@
 
 #include "AnalysisViewState.h"
 #include "Classification.h"
+#include "FemPerfLog.h"
 #include "ViewProviderAnalysis.h"
 
 #include <Base/Console.h>
@@ -121,8 +122,16 @@ void AnalysisViewState::endUpdate()
     if (m_batchDepth > 0) {
         --m_batchDepth;
     }
-    if (m_batchDepth == 0 && m_pendingNotify) {
+    if (m_batchDepth > 0) {
+        return;
+    }
+    if (m_pendingPersist) {
+        m_pendingPersist = false;
+        persist();
+    }
+    if (m_pendingNotify) {
         m_pendingNotify = false;
+        FEM_PERF_SCOPE("viewstate.notify");
         m_changed();
     }
 }
@@ -133,6 +142,7 @@ void AnalysisViewState::notifyChanged()
         m_pendingNotify = true;
         return;
     }
+    FEM_PERF_SCOPE("viewstate.notify");
     m_changed();
 }
 
@@ -147,7 +157,6 @@ void AnalysisViewState::setActiveStage(ActiveStage stage)
         return;
     }
     m_stage = stage;
-    invalidateClassification();
     notifyChanged();
 }
 
@@ -197,9 +206,6 @@ void AnalysisViewState::setColorMode(ActiveStage stage, ColorMode mode)
         return;
     }
     m_colorMode[stage] = mode;
-    if (stage == m_stage) {
-        invalidateClassification();
-    }
     notifyChanged();
 }
 
@@ -283,11 +289,6 @@ void AnalysisViewState::removeClipPlane(const std::string& name)
     }
 }
 
-void AnalysisViewState::invalidateClassification()
-{
-    m_classifications.clear();
-}
-
 void AnalysisViewState::setUnderAchievedElements(std::set<std::string> elements)
 {
     m_underAchieved = std::move(elements);
@@ -341,10 +342,6 @@ std::size_t AnalysisViewState::importRevision() const
 const Classification* AnalysisViewState::classification(vtkUnstructuredGrid* meshGrid)
 {
     const ColorMode mode = colorMode();
-    if (m_classificationMode != mode) {
-        m_classifications.clear();
-        m_classificationMode = mode;
-    }
 
     // Categories are keyed by the toplevel element names of the geometry, so a
     // geometry that gained or lost elements outdates all of them, and an element
@@ -369,7 +366,7 @@ const Classification* AnalysisViewState::classification(vtkUnstructuredGrid* mes
         m_classificationImportRevision = importRevision;
     }
 
-    auto& entry = m_classifications[meshGrid];
+    auto& entry = m_classifications[{mode, meshGrid}];
     if (!entry) {
         const auto source = m_meshGrids.find(meshGrid);
         entry = Classification::create(
@@ -388,14 +385,21 @@ void AnalysisViewState::registerMeshGrid(vtkUnstructuredGrid* meshGrid, const Gr
     if (meshGrid) {
         m_meshGrids[meshGrid] = source;
         // Force a fresh classification so entity→toplevel mapping uses current geometry.
-        m_classifications.erase(meshGrid);
+        forgetClassificationsOf(meshGrid);
     }
 }
 
 void AnalysisViewState::unregisterMeshGrid(vtkUnstructuredGrid* meshGrid)
 {
     m_meshGrids.erase(meshGrid);
-    m_classifications.erase(meshGrid);
+    forgetClassificationsOf(meshGrid);
+}
+
+void AnalysisViewState::forgetClassificationsOf(vtkUnstructuredGrid* meshGrid)
+{
+    for (auto it = m_classifications.begin(); it != m_classifications.end();) {
+        it = (it->first.second == meshGrid) ? m_classifications.erase(it) : std::next(it);
+    }
 }
 
 std::vector<Category> AnalysisViewState::categories() const
@@ -484,6 +488,12 @@ void AnalysisViewState::loadFromViewProvider(ViewProviderFemAnalysis* vp)
 
 void AnalysisViewState::persist() const
 {
+    // Each of these rewrites three property lists in full, so hiding a subtree
+    // one element at a time would write the whole hidden set once per element.
+    if (m_batchDepth > 0) {
+        m_pendingPersist = true;
+        return;
+    }
     if (!m_analysis || !Gui::Application::Instance) {
         return;
     }

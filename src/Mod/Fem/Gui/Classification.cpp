@@ -32,6 +32,7 @@
 
 #include "Classification.h"
 #include "FemMeshRenderer.h"
+#include "FemPerfLog.h"
 #include "FemVisibilityMask.h"
 
 #include <App/DocumentObject.h>
@@ -309,6 +310,8 @@ std::unique_ptr<Classification> Classification::create(
     const GridSource& gridSource
 )
 {
+    FEM_PERF_SCOPE("classification.build");
+
     switch (mode) {
         case ColorMode::Toplevel:
             return std::make_unique<ToplevelClassification>(

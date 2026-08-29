@@ -112,6 +112,7 @@ SET(FemExamples_SRCS
     femexamples/material_multiple_bendingbeam_fivefaces.py
     femexamples/material_multiple_tensionrod_twoboxes.py
     femexamples/material_nl_platewithhole.py
+    femexamples/mixed_solid_shell_beam.py
     femexamples/mystran_plate.py
     femexamples/rc_wall_2d.py
     femexamples/spark_gap.py
@@ -187,6 +188,7 @@ SET(FemInOut_SRCS
 
 SET(FemMesh_SRCS
     femmesh/__init__.py
+    femmesh/entityorder.py
     femmesh/femmesh2mesh.py
     femmesh/gmshtools.py
     femmesh/meshcomponents.py
@@ -402,6 +404,7 @@ SET(FemTestsApp_SRCS
     femtest/app/test_solver_mystran.py
     femtest/app/test_solver_z88.py
     femtest/app/test_gmsh.py
+    femtest/app/test_netgen.py
 )
 
 SET(FemTestsFiles_SRCS
@@ -451,6 +454,7 @@ SET(FemTestsCcx_SRCS
     femtest/data/calculix/material_multiple_bendingbeam_fivefaces.inp
     femtest/data/calculix/material_multiple_tensionrod_twoboxes.inp
     femtest/data/calculix/material_nonlinear.inp
+    femtest/data/calculix/mixed_solid_shell_beam.inp
     femtest/data/calculix/square_pipe_end_twisted_edgeforces.inp
     femtest/data/calculix/square_pipe_end_twisted_nodeforces.inp
     femtest/data/calculix/thermomech_bimetal.inp

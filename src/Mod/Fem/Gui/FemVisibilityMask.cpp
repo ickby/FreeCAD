@@ -32,6 +32,7 @@
 
 #include <Base/Console.h>
 #include <Mod/Fem/App/FemGeometry.h>
+#include <Mod/Fem/App/FemMeshDimension.h>
 
 using namespace FemGui;
 
@@ -367,22 +368,19 @@ std::vector<unsigned char> FemVisibilityMask::evaluate(
             return it != achieved.end() ? it->second : -1;
         }
         auto it = achieved.find(owner);
-        if (it != achieved.end() && it->second >= 0 && it->second < declared) {
-            // Only the caller asking for the report gets the log line, so that
-            // secondary evaluations (overlay mask) stay quiet.
-            if (underAchieved) {
-                underAchieved->insert(owner);
-                Base::Console().warning(
-                    "FemVisibilityMask: '%s' declared dim %d but mesh only achieved %d — "
-                    "widening display mask\n",
-                    owner.c_str(),
-                    declared,
-                    it->second
-                );
-            }
-            return it->second;
+        const int ach = it != achieved.end() ? it->second : -1;
+        const int effective = Fem::effectiveAnalysisDimension(declared, ach);
+        if (ach >= 0 && ach < declared && underAchieved) {
+            underAchieved->insert(owner);
+            Base::Console().warning(
+                "FemVisibilityMask: '%s' declared dim %d but mesh only achieved %d — "
+                "widening display mask\n",
+                owner.c_str(),
+                declared,
+                ach
+            );
         }
-        return declared;
+        return effective;
     };
 
     auto isOwnerHidden = [&](const std::string& owner) {

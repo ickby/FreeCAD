@@ -94,6 +94,8 @@ class MeshSetsGetter:
         self.femelement_edges_table = {}
         self.femelement_count_test = True
         self.mat_geo_sets = []
+        self._tables_by_dimension = {}
+        self._ids_by_dimension = None
 
         # subelements masks
         self.edge_masks = {
@@ -117,11 +119,47 @@ class MeshSetsGetter:
             if not self.femnodes_mesh:
                 self.femnodes_mesh = self.femmesh.Nodes
             if not self.femelement_table:
-                self.femelement_table = meshtools.get_femelement_table(self.femmesh)
+                self.femelement_table = meshtools.get_femelement_table(
+                    self.femmesh, self.mesh_object
+                )
             if not self.femnodes_ele_table:
                 self.femnodes_ele_table = meshtools.get_femnodes_ele_table(
                     self.femnodes_mesh, self.femelement_table
                 )
+
+    @property
+    def model_ids_by_dimension(self):
+        """{ dimension : [element id, ...] } of the model elements. Classifies once."""
+        if self._ids_by_dimension is None:
+            self._ids_by_dimension = meshtools.get_model_element_ids_by_dimension(
+                self.mesh_object, self.femmesh
+            )
+        return self._ids_by_dimension
+
+    @property
+    def model_dimensions(self):
+        """Analysis dimensions the mesh covers, as a set."""
+        return {dim for dim, ids in self.model_ids_by_dimension.items() if ids}
+
+    def model_element_ids(self, dim):
+        """Ids of the model elements of analysis dimension *dim*."""
+        return sorted(self.model_ids_by_dimension.get(dim, []))
+
+    def tables_for_dimension(self, dim):
+        """(element table, node membership table) of the model elements of *dim*.
+
+        A search which dispatches on the node count of an element needs a table
+        of one dimension to tell a quad4 from a tetra4.
+        """
+        if dim not in self._tables_by_dimension:
+            table = {i: self.femmesh.getElementNodes(i) for i in self.model_element_ids(dim)}
+            if not self.femnodes_mesh:
+                self.femnodes_mesh = self.femmesh.Nodes
+            self._tables_by_dimension[dim] = (
+                table,
+                meshtools.get_femnodes_ele_table(self.femnodes_mesh, table),
+            )
+        return self._tables_by_dimension[dim]
 
     @property
     def mask_tria3(self):
@@ -279,29 +317,7 @@ class MeshSetsGetter:
             # add nodes to constraint_conflict_nodes, needed by constraint plane rotation
             for node in femobj["Nodes"]:
                 self.constraint_conflict_nodes.append(node)
-        # if mixed mesh with solids the node set needs to be split
-        # because solid nodes do not have rotational degree of freedom
-        if self.femmesh.Volumes and (
-            len(self.member.geos_shellthickness) > 0 or len(self.member.geos_beamsection) > 0
-        ):
-            FreeCAD.Console.PrintMessage("We need to find the solid nodes.\n")
-            if not self.femelement_volumes_table:
-                self.femelement_volumes_table = meshtools.get_femelement_volumes_table(self.femmesh)
-            for femobj in self.member.cons_fixed:
-                # femobj --> dict, FreeCAD document object is femobj["Object"]
-                nds_solid = []
-                nds_faceedge = []
-                for n in femobj["Nodes"]:
-                    solid_node = False
-                    for ve in self.femelement_volumes_table:
-                        if n in self.femelement_volumes_table[ve]:
-                            solid_node = True
-                            nds_solid.append(n)
-                            break
-                    if not solid_node:
-                        nds_faceedge.append(n)
-                femobj["NodesSolid"] = set(nds_solid)
-                femobj["NodesFaceEdge"] = set(nds_faceedge)
+        self.split_solid_nodes(self.member.cons_fixed)
 
     def get_constraints_rigidbody_nodes(self):
         if not self.member.cons_rigidbody:
@@ -326,6 +342,38 @@ class MeshSetsGetter:
             # add nodes to constraint_conflict_nodes, needed by constraint plane rotation
             for node in femobj["Nodes"]:
                 self.constraint_conflict_nodes.append(node)
+        self.split_solid_nodes(self.member.cons_displacement)
+
+    def has_mixed_solid_shell_dofs(self):
+        """True when the deck has to prescribe rotations on some nodes only.
+
+        A node of a solid element carries three degrees of freedom, a node of a
+        shell or beam element six. Where both meet in one mesh, a constraint has
+        to address them in separate node sets.
+        """
+        return 3 in self.model_dimensions and bool(
+            self.member.geos_shellthickness or self.member.geos_beamsection
+        )
+
+    def split_solid_nodes(self, femobjs):
+        """Split the nodes of *femobjs* into solid and shell/beam nodes.
+
+        Writes "NodesSolid" and "NodesFaceEdge" and does nothing at all when the
+        mesh has no solid elements next to shells or beams, so the writers can
+        keep to a single node set in the ordinary case.
+        """
+        if not femobjs or not self.has_mixed_solid_shell_dofs():
+            return
+        FreeCAD.Console.PrintMessage("We need to find the solid nodes.\n")
+        volumes_table, _ = self.tables_for_dimension(3)
+        solid_nodes = set()
+        for nodes in volumes_table.values():
+            solid_nodes.update(nodes)
+        for femobj in femobjs:
+            # femobj --> dict, FreeCAD document object is femobj["Object"]
+            nodes = set(femobj["Nodes"])
+            femobj["NodesSolid"] = nodes.intersection(solid_nodes)
+            femobj["NodesFaceEdge"] = nodes.difference(solid_nodes)
 
     def get_constraints_planerotation_nodes(self):
         if not self.member.cons_planerotation:
@@ -408,26 +456,17 @@ class MeshSetsGetter:
                     "    load on vertices --> The femelement_table "
                     "and femnodes_mesh are not needed for node load calculation.\n"
                 )
-            elif (
-                femobj["RefShapeType"] == "Face"
-                and meshtools.is_solid_femmesh(self.femmesh)
-                and not meshtools.has_no_face_data(self.femmesh)
-            ):
-                FreeCAD.Console.PrintLog(
-                    "    solid_mesh with face data --> The femelement_table is not "
-                    "needed but the femnodes_mesh is needed for node load calculation.\n"
-                )
-                if not self.femnodes_mesh:
-                    self.femnodes_mesh = self.femmesh.Nodes
             else:
-                FreeCAD.Console.PrintLog(
-                    "    mesh without needed data --> The femelement_table "
-                    "and femnodes_mesh are not needed for node load calculation.\n"
-                )
+                # Whether the element table is needed depends on the single
+                # reference: a face carrying face elements is served by the mesh
+                # itself, a solid face without them has to be searched for in the
+                # table. Both can occur in one mesh, so the table is always kept.
                 if not self.femnodes_mesh:
                     self.femnodes_mesh = self.femmesh.Nodes
                 if not self.femelement_table:
-                    self.femelement_table = meshtools.get_femelement_table(self.femmesh)
+                    self.femelement_table = meshtools.get_femelement_table(
+                        self.femmesh, self.mesh_object
+                    )
         # get node loads
         FreeCAD.Console.PrintLog(
             "    Finite element mesh nodes will be retrieved by searching "
@@ -585,44 +624,43 @@ class MeshSetsGetter:
         # get element ids and write them into the femobj
         all_found = False
         if self.femmesh.GroupCount:
-            all_found = meshtools.get_femelement_sets_from_group_data(self.femmesh, femobjs)
+            all_found = meshtools.get_femelement_sets_from_group_data(
+                self.femmesh, femobjs, "Volume", len(self.model_element_ids(3))
+            )
             FreeCAD.Console.PrintMessage(all_found)
             FreeCAD.Console.PrintMessage("\n")
         if all_found is False:
-            if not self.femelement_table:
-                self.femelement_table = meshtools.get_femelement_table(self.femmesh)
-            # we're going to use the binary search for get_femelements_by_femnodes()
-            # thus we need the parameter values self.femnodes_ele_table
-            if not self.femnodes_mesh:
-                self.femnodes_mesh = self.femmesh.Nodes
-            if not self.femnodes_ele_table:
-                self.femnodes_ele_table = meshtools.get_femnodes_ele_table(
-                    self.femnodes_mesh, self.femelement_table
-                )
+            volumes_table, volume_nodes_ele = self.tables_for_dimension(3)
             control = meshtools.get_femelement_sets(
-                self.femmesh, self.femelement_table, femobjs, self.femnodes_ele_table
+                self.femmesh, volumes_table, femobjs, volume_nodes_ele
             )
             # we only need to set it, if it is still True
             if (self.femelement_count_test is True) and (control is False):
                 self.femelement_count_test = False
 
+    @property
+    def faces_table(self):
+        if not self.femelement_faces_table:
+            self.femelement_faces_table = self.tables_for_dimension(2)[0]
+        return self.femelement_faces_table
+
+    @property
+    def edges_table(self):
+        if not self.femelement_edges_table:
+            self.femelement_edges_table = self.tables_for_dimension(1)[0]
+        return self.femelement_edges_table
+
     def get_element_geometry2D_elements(self):
         # get element ids and write them into the objects
         FreeCAD.Console.PrintMessage("Shell thicknesses\n")
-        if not self.femelement_faces_table:
-            self.femelement_faces_table = meshtools.get_femelement_faces_table(self.femmesh)
         meshtools.get_femelement_sets(
-            self.femmesh, self.femelement_faces_table, self.member.geos_shellthickness
+            self.femmesh, self.faces_table, self.member.geos_shellthickness
         )
 
     def get_element_geometry1D_elements(self):
         # get element ids and write them into the objects
         FreeCAD.Console.PrintMessage("Beam sections\n")
-        if not self.femelement_edges_table:
-            self.femelement_edges_table = meshtools.get_femelement_edges_table(self.femmesh)
-        meshtools.get_femelement_sets(
-            self.femmesh, self.femelement_edges_table, self.member.geos_beamsection
-        )
+        meshtools.get_femelement_sets(self.femmesh, self.edges_table, self.member.geos_beamsection)
 
     def get_element_rotation1D_elements(self):
         # get for each geometry edge direction the element ids and rotation norma
@@ -633,49 +671,50 @@ class MeshSetsGetter:
                 "because the mesh does not know the Geometry it is made from\n"
             )
             return
-        if not self.femelement_edges_table:
-            self.femelement_edges_table = meshtools.get_femelement_edges_table(self.femmesh)
         meshtools.get_femelement_direction1D_set(
-            self.femmesh, self.femelement_edges_table, self.member.geos_beamrotation, self.theshape
+            self.femmesh, self.edges_table, self.member.geos_beamrotation, self.theshape
         )
 
     def get_element_fluid1D_elements(self):
         # get element ids and write them into the objects
         FreeCAD.Console.PrintMessage("Fluid sections\n")
-        if not self.femelement_edges_table:
-            self.femelement_edges_table = meshtools.get_femelement_edges_table(self.femmesh)
-        meshtools.get_femelement_sets(
-            self.femmesh, self.femelement_edges_table, self.member.geos_fluidsection
-        )
+        meshtools.get_femelement_sets(self.femmesh, self.edges_table, self.member.geos_fluidsection)
 
     def get_material_elements(self):
-        # it only works if either Volumes or Shellthicknesses or Beamsections
-        # are in the material objects, it means it does not work
-        # for mixed meshes and multiple materials, this is checked in check_prerequisites
-        # the femelement_table is only calculated for
-        # the highest dimension in get_femelement_table
+        """Element ids of every material object, over all dimensions of the mesh.
+
+        A material of a mixed mesh may stand for solid, shell and beam elements
+        at once. Each dimension has to be searched on its own table, so the
+        results are collected instead of one overwriting the next.
+        """
         FreeCAD.Console.PrintMessage("Materials\n")
-        if self.femmesh.Volumes:
-            # we only could do this for volumes
-            # if a mesh contains volumes we're going to use them in the analysis
-            # but a mesh could contain
-            # the element faces of the volumes as faces
-            # and the edges of the faces as edges
-            # there we have to check of some geometric objects
-            # get element ids and write them into the femobj
-            self.get_solid_element_sets(self.member.mats_linear)
-        if self.member.geos_shellthickness:
-            if not self.femelement_faces_table:
-                self.femelement_faces_table = meshtools.get_femelement_faces_table(self.femmesh)
-            meshtools.get_femelement_sets(
-                self.femmesh, self.femelement_faces_table, self.member.mats_linear
-            )
-        if self.member.geos_beamsection or self.member.geos_fluidsection:
-            if not self.femelement_edges_table:
-                self.femelement_edges_table = meshtools.get_femelement_edges_table(self.femmesh)
-            meshtools.get_femelement_sets(
-                self.femmesh, self.femelement_edges_table, self.member.mats_linear
-            )
+        materials = self.member.mats_linear
+        collected = [[] for _ in materials]
+        rounds = 0
+
+        def collect():
+            nonlocal rounds
+            rounds += 1
+            for index, femobj in enumerate(materials):
+                collected[index] += femobj.get("FEMElements", [])
+
+        if 3 in self.model_dimensions:
+            self.get_solid_element_sets(materials)
+            collect()
+        if self.member.geos_shellthickness and self.faces_table:
+            meshtools.get_femelement_sets(self.femmesh, self.faces_table, materials)
+            collect()
+        if (self.member.geos_beamsection or self.member.geos_fluidsection) and self.edges_table:
+            meshtools.get_femelement_sets(self.femmesh, self.edges_table, materials)
+            collect()
+
+        # A single round already wrote the result and each search orders its own
+        # elements, so only the mixed case needs to be put back together. A
+        # search which found nothing leaves the result of the round before in
+        # place, hence the set.
+        if rounds > 1:
+            for index, femobj in enumerate(materials):
+                femobj["FEMElements"] = sorted(set(collected[index]))
 
     def get_element_sets_material_and_femelement_geometry(self):
         if not self.member.mats_linear:
@@ -699,14 +738,11 @@ class MeshSetsGetter:
         if len(self.member.mats_linear) > 1:
             self.get_material_elements()
 
+        has_volumes = 3 in self.model_dimensions
+
         # create the mat_geo_sets
         if len(self.member.mats_linear) == 1:
-            if self.femmesh.Volumes:
-                # we only could do this for volumes, if a mesh contains volumes
-                # we're going to use them in the analysis
-                # but a mesh could contain the element faces of the volumes as faces
-                # and the edges of the faces as edges
-                # there we have to check for some geometric objects
+            if has_volumes:
                 self.get_mat_geo_sets_single_mat_solid()
             if len(self.member.geos_shellthickness) == 1:
                 self.get_mat_geo_sets_single_mat_single_shell()
@@ -721,14 +757,7 @@ class MeshSetsGetter:
             elif len(self.member.geos_fluidsection) > 1:
                 self.get_mat_geo_sets_single_mat_multiple_fluid()
         elif len(self.member.mats_linear) > 1:
-            if self.femmesh.Volumes:
-                # we only could do this for volumes, if a mseh contains volumes
-                # we're going to use them in the analysis
-                # but a mesh could contain the element faces of the volumes as faces
-                # and the edges of the faces as edges
-                # there we have to check for some geometric objects
-                # volume is a bit special
-                # because retrieving ids from group mesh data is implemented
+            if has_volumes:
                 self.get_mat_geo_sets_multiple_mat_solid()
             if len(self.member.geos_shellthickness) == 1:
                 self.get_mat_geo_sets_multiple_mat_single_shell()

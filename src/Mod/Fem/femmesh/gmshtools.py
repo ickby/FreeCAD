@@ -41,6 +41,7 @@ from FreeCAD import Units
 
 import Part
 import Fem
+from . import entityorder
 from . import meshcomponents
 from . import meshtools
 from . import transfinitetools as tft
@@ -57,6 +58,8 @@ class GmshError(Exception):
 class GmshTools(ObjectTools):
 
     name = "Gmsh"
+
+    element_name_exp = re.compile(r"(?:.*\.)?(?P<shape>Solid|Face|Edge|Vertex)(?P<index>\d+)$")
 
     def __init__(self, obj):
         super().__init__(obj)
@@ -78,6 +81,8 @@ class GmshTools(ObjectTools):
         self.global_shape = None
         self.export_shape = None
         self.local_to_global = {}
+        self.global_to_local = {}
+        self.entity_tags = None
         self.group_physicals = []
 
         # clmax, CharacteristicLengthMax: float, 0.0 = 1e+22
@@ -449,7 +454,7 @@ class GmshTools(ObjectTools):
                     {
                         "global": global_name,
                         "phy_shape": phy_shape,
-                        "local_idx": local_idx,
+                        "entity_id": self._gmsh_id_of_export(prefix, local_idx),
                         "tag": phy_tag,
                     }
                 )
@@ -490,6 +495,55 @@ class GmshTools(ObjectTools):
         self.global_shape = self.components.global_shape
         self.export_shape = self.components.export_shape
         self.local_to_global = self.components.local_to_global
+        self.global_to_local = {
+            global_name: local_name for local_name, global_name in self.local_to_global.items()
+        }
+        self.entity_tags = None
+
+    def _gmsh_id_of_export(self, prefix, index):
+        """Gmsh tag of an entity of the exported shape, given its FreeCAD index.
+
+        Gmsh numbers what it reads from the BREP by its own rules, see
+        entityorder. Every entity number written into the geo file has to go
+        through here, otherwise it names a different entity than intended.
+        """
+        if self.entity_tags is None:
+            if self.export_shape is None:
+                self._resolve_export_geometry()
+            self.entity_tags = entityorder.entity_tags(self.export_shape)
+        return self.entity_tags.get(prefix, {}).get(index, index)
+
+    def _gmsh_id(self, prefix, index):
+        """Gmsh tag of an entity of the geometry to mesh, given its FreeCAD index.
+
+        Meshing a sub-selection exports a shape of its own with a numbering of
+        its own, so the geometry index is translated to the exported shape
+        before it is turned into a Gmsh tag.
+        """
+        if self.export_shape is None:
+            self._resolve_export_geometry()
+
+        index = int(index)
+        local_name = self.global_to_local.get(f"{prefix}{index}")
+        if local_name is None:
+            Console.PrintLog(
+                f"  {prefix}{index} is not part of the geometry this mesh exports, "
+                "its entity number is written unmapped.\n"
+            )
+            return index
+
+        return self._gmsh_id_of_export(prefix, int(local_name[len(prefix) :]))
+
+    def _gmsh_ids(self, prefix, indices):
+        """Gmsh tags for FreeCAD indices of the geometry to mesh."""
+        return [self._gmsh_id(prefix, index) for index in indices]
+
+    def _gmsh_id_of_element(self, element):
+        """Gmsh tag for a FreeCAD element name such as "Face3", None if unnamed."""
+        m = self.element_name_exp.match(element)
+        if not m:
+            return None
+        return self._gmsh_id(m.group("shape"), int(m.group("index")))
 
     def postprocess_groups(self, fem_mesh=None):
         # The created groups are for shape elements only: vertex, face, edge and solid
@@ -662,14 +716,15 @@ class GmshTools(ObjectTools):
 
     def _element_list_to_shape_idx_dict(self, element_list):
         # takes element list and builds a dict from it mapping from
-        # shapes types to all indices
+        # shapes types to all Gmsh entity tags. The result goes into the geo
+        # file, so it holds Gmsh tags and not FreeCAD indices.
 
-        reg_exp = re.compile(r"(?:.*\.)?(?P<shape>Solid|Face|Edge|Vertex)(?P<index>\d+)$")
         result = {"Solid": [], "Face": [], "Edge": [], "Vertex": []}
         for element in element_list:
-            m = reg_exp.match(element)
+            m = self.element_name_exp.match(element)
             if m:
-                result[m.group("shape")].append(m.group("index"))
+                prefix = m.group("shape")
+                result[prefix].append(self._gmsh_id(prefix, int(m.group("index"))))
 
         return result
 
@@ -1515,14 +1570,14 @@ class GmshTools(ObjectTools):
         for definition, edges in definition_map.items():
             prefix = definition.tag_prefix()
             setting = definition.to_gmshtools_setting()
-            setting["tag"] = ",".join(prefix + str(i) for i in edges)
+            setting["tag"] = ",".join(prefix + str(i) for i in self._gmsh_ids("Edge", edges))
             self.transfinite_curve_settings.append(setting)
 
         # and remaining transfinite surface settings!
         definition_map = tft.map_to_definitions(surface_map, self.part_obj.Shape)
         for definition, surfaces in definition_map.items():
             setting = definition.to_gmshtools_setting()
-            setting["surfaces"] = ",".join(str(i) for i in surfaces)
+            setting["surfaces"] = ",".join(str(i) for i in self._gmsh_ids("Face", surfaces))
             self.transfinite_surface_settings.append(setting)
 
     def write_groups(self, geo):
@@ -1535,7 +1590,7 @@ class GmshTools(ObjectTools):
         for g in self.group_physicals:
             geo.write(
                 f'Physical {g["phy_shape"]}("{g["global"]}", {g["tag"]})'
-                f' = {{{g["local_idx"]}}};\n'
+                f' = {{{g["entity_id"]}}};\n'
             )
         geo.write("\n")
 
@@ -1551,10 +1606,10 @@ class GmshTools(ObjectTools):
                 for k in item:
                     v = item[k]
                     if k == "CurvesList":
-                        # the element name of FreeCAD which starts
-                        # with 1 (example: "Face1"), same as Gmsh
-                        # el_id = int(el[4:])  # FIXME:  strip `face` or `edge` prefix
-                        ele_nodes = ("".join((str(el[4:]) + ", ") for el in v)).rstrip(", ")
+                        # v holds FreeCAD element names (example: "Edge3"), the
+                        # geo file needs the Gmsh tags of those entities
+                        ids = [self._gmsh_id_of_element(el) for el in v]
+                        ele_nodes = ", ".join(str(i) for i in ids if i is not None)
                         line = prefix + "." + str(k) + " = {" + ele_nodes + " };\n"
                         geo.write(line)
                     else:

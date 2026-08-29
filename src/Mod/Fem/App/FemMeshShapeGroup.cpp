@@ -42,6 +42,7 @@
 
 #include "FemGeometry.h"
 #include "FemMesh.h"
+#include "FemMeshDimension.h"
 #include "FemMeshShapeGroup.h"
 #include "FemMeshShapeGroupPy.h"
 
@@ -106,6 +107,20 @@ FemMeshShapeGroup::FemMeshShapeGroup()
         "FEM Mesh",
         App::PropertyType(App::Prop_Transient | App::Prop_Output | App::Prop_Hidden),
         "Child object name for each merged cell (elementId - 1)"
+    );
+    ADD_PROPERTY_TYPE(
+        CellDimension,
+        (),
+        "FEM Mesh",
+        App::PropertyType(App::Prop_Transient | App::Prop_Output | App::Prop_Hidden),
+        "Analysis dimension of each merged cell (elementId - 1), or -1 if dropped"
+    );
+    ADD_PROPERTY_TYPE(
+        EntityDimension,
+        (),
+        "FEM Mesh",
+        App::PropertyType(App::Prop_Transient | App::Prop_Output | App::Prop_Hidden),
+        "Effective analysis dimension per entity group name"
     );
 }
 
@@ -487,8 +502,27 @@ void FemMeshShapeGroup::rebuildMergedMesh()
     {
         SilentPropertyWrite silentMesh(FemMesh);
         SilentPropertyWrite silentSources(CellSources);
+        SilentPropertyWrite silentDims(CellDimension);
+        SilentPropertyWrite silentEntities(EntityDimension);
         FemMesh.setValue(merged);
         CellSources.setValues(sources);
+
+        FemGeometry* geometry = nullptr;
+        if (auto* shapeObj = Shape.getValue()) {
+            geometry = Base::freecad_cast<FemGeometry*>(shapeObj);
+        }
+        const auto classification = classifyDimensions(merged, sources, geometry);
+        std::vector<long> dims;
+        dims.reserve(classification.cellDimension.size());
+        for (int d : classification.cellDimension) {
+            dims.push_back(d);
+        }
+        CellDimension.setValues(dims);
+        std::map<std::string, std::string> entityMap;
+        for (const auto& [name, dim] : classification.entityDimension) {
+            entityMap[name] = std::to_string(dim);
+        }
+        EntityDimension.setValues(entityMap);
     }
     ++m_mergeRevision;
     m_mergedValid = true;

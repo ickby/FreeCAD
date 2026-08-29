@@ -249,7 +249,8 @@ public:
         bool groupParam,
         ABAQUS_VolumeVariant volVariant = ABAQUS_VolumeVariant::Standard,
         ABAQUS_FaceVariant faceVariant = ABAQUS_FaceVariant::Shell,
-        ABAQUS_EdgeVariant edgeVariant = ABAQUS_EdgeVariant::Beam
+        ABAQUS_EdgeVariant edgeVariant = ABAQUS_EdgeVariant::Beam,
+        const std::set<int>* elementIds = nullptr
     ) const;
     void writeVTK(const std::string& FileName, bool highest = true) const;
     // write vtk file, and writes the groups into the provided cell array.
@@ -289,6 +290,10 @@ public:
      * group whose mapped name is empty is dropped.
      * When nodeIdMap is set, it receives source node ID -> appended node ID,
      * which is the only way back from a merged node to where it came from.
+     * When cellSourceIds is set, it receives the source element ID of every
+     * appended cell, in the order the cells were appended. It is the only way to
+     * carry per-element data of the source over to the merged mesh, because an
+     * element which SMESH refuses would otherwise shift everything behind it.
      */
     void appendMeshData(
         const FemMesh& mesh,
@@ -296,7 +301,8 @@ public:
         std::vector<std::string>* cellSources,
         const Base::Matrix4D* transformOverride,
         const std::function<std::string(const std::string&)>* groupRenamer,
-        std::map<int, int>* nodeIdMap = nullptr
+        std::map<int, int>* nodeIdMap = nullptr,
+        std::vector<int>* cellSourceIds = nullptr
     );
 
 private:

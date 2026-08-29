@@ -127,11 +127,12 @@ def _make_two_solid_tet_mesh():
     return mesh
 
 
-def _exported_element_ids(mesh, elem_param):
+def _exported_element_ids(mesh, elem_param, element_ids=None):
     """Element ids written to an ABAQUS input deck, keyed by element type."""
+    kwargs = {} if element_ids is None else {"elementIds": element_ids}
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "mesh.inp")
-        mesh.writeABAQUS(path, elem_param, False)
+        mesh.writeABAQUS(path, elem_param, False, **kwargs)
         with open(path, encoding="utf-8") as fh:
             lines = fh.readlines()
 
@@ -1456,6 +1457,187 @@ class TestExportHighest(unittest.TestCase):
         self.assertEqual(set(mesh.FacesOnly), {ids["shell"]})
         self.assertEqual(set(mesh.EdgesOnly), set())
         self.assertIn(edge, mesh.Edges)
+
+    def test_solid_meshed_as_2d_keeps_faces(self):
+        """A solid whose mesh only achieved surface elements still exports them."""
+        mesh = Fem.FemMesh()
+        for node_id, point in enumerate([(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)], start=1):
+            mesh.addNode(point[0], point[1], point[2], node_id)
+        # No volume: surface mesh of a solid (under-achieved).
+        faces = [
+            mesh.addFace([1, 2, 3]),
+            mesh.addFace([1, 2, 4]),
+            mesh.addFace([1, 3, 4]),
+            mesh.addFace([2, 3, 4]),
+        ]
+        for i, face in enumerate(faces, start=1):
+            fid = mesh.addGroup(f"Face{i}", "Face")
+            mesh.addGroupElements(fid, [face])
+
+        # Topology fallback (no geometry passed to writeABAQUS): all free faces kept.
+        exported = sorted(sum(_exported_element_ids(mesh, 1).values(), []))
+        self.assertEqual(exported, sorted(faces))
+        self.assertEqual(sorted(mesh.HighestElements), sorted(faces))
+
+    def test_beam_on_shell_boundary_exports_both(self):
+        """A free edge (beam) that is not the skin of a face is kept with the shell."""
+        mesh = Fem.FemMesh()
+        for node_id, point in enumerate(
+            [(0, 0, 0), (1, 0, 0), (0, 1, 0), (10, 0, 0), (11, 0, 0)], start=1
+        ):
+            mesh.addNode(point[0], point[1], point[2], node_id)
+        shell = mesh.addFace([1, 2, 3])
+        beam = mesh.addEdge([4, 5])
+        # Skin edge of the triangle — must be dropped.
+        skin_edge = mesh.addEdge([1, 2])
+        gid = mesh.addGroup("Face1", "Face")
+        mesh.addGroupElements(gid, [shell])
+        gid = mesh.addGroup("Edge1", "Edge")
+        mesh.addGroupElements(gid, [beam])
+        gid = mesh.addGroup("Edge2", "Edge")
+        mesh.addGroupElements(gid, [skin_edge])
+
+        exported = set(sum(_exported_element_ids(mesh, 1).values(), []))
+        self.assertEqual(exported, {shell, beam})
+        self.assertNotIn(skin_edge, exported)
+
+    def test_write_abaqus_element_ids_override(self):
+        """elementIds replaces the highest-element filter when elemParam is 1."""
+        mesh, ids = self._mixed_mesh()
+        exported = _exported_element_ids(mesh, 1, element_ids=[ids["shell"]])
+        self.assertEqual(exported, {"S3": [ids["shell"]]})
+        # The filter would have kept the volume, the explicit list must not.
+        self.assertIn(ids["volume"], mesh.HighestElements)
+
+    def test_write_abaqus_mixed_dimensions(self):
+        """Model volume, face and edge elements are written side by side."""
+        mesh = Fem.FemMesh()
+        points = [
+            (0, 0, 0),
+            (1, 0, 0),
+            (0, 1, 0),
+            (0, 0, 1),
+            (10, 0, 0),
+            (11, 0, 0),
+            (10, 1, 0),
+            (20, 0, 0),
+            (21, 0, 0),
+        ]
+        for node_id, point in enumerate(points, start=1):
+            mesh.addNode(point[0], point[1], point[2], node_id)
+        volume = mesh.addVolume([1, 2, 3, 4])
+        shell = mesh.addFace([5, 6, 7])
+        beam = mesh.addEdge([8, 9])
+
+        # All three are free standing, so the filter keeps them without any help.
+        self.assertEqual(sorted(mesh.HighestElements), sorted([volume, shell, beam]))
+        exported = _exported_element_ids(mesh, 1)
+        self.assertEqual(exported, {"C3D4": [volume], "S3": [shell], "B31": [beam]})
+
+    def test_mesh_group_fills_cell_dimension(self):
+        """FemMeshShapeGroup classifies merged cells into CellDimension."""
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        mesh, ids = self._mixed_mesh()
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+        # Accessing FemMesh triggers lazy merge + classification.
+        _ = group.FemMesh
+        dims = list(group.CellDimension)
+        self.assertGreaterEqual(len(dims), max(ids.values()))
+        self.assertEqual(dims[ids["volume"] - 1], 3)
+        self.assertEqual(dims[ids["shell"] - 1], 2)
+        self.assertEqual(dims[ids["skin"] - 1], -1)
+
+    def test_mesh_group_fills_entity_dimension(self):
+        """Entities report the dimension of the structure they belong to.
+
+        Face1 only holds the skin of the tet and still answers 3, so a reference
+        to it is resolved as the boundary of volume elements. Face12 holds the
+        free shell and answers 2, which makes it an element set of its own.
+        """
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        mesh, _ = self._mixed_mesh()
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+        _ = group.FemMesh
+        entities = {name: int(value) for name, value in group.EntityDimension.items()}
+        self.assertEqual(entities, {"Solid1": 3, "Face1": 3, "Face12": 2})
+
+    def test_dimension_override_turns_a_solid_into_a_shell(self):
+        """A solid declared 2D exports its skin and not its volume elements.
+
+        The mesher reached 3D but the geometry says the component is to be
+        analysed as a shell, and the lower of the two wins.
+        """
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        geom.Shape = _box()
+        self.document.recompute()
+        geom.DimensionOverride = {"Solid1": "2"}
+
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        group.Shape = geom
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        mesh, volume, faces = _make_tet_mesh()
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+        _ = group.FemMesh
+
+        dims = list(group.CellDimension)
+        self.assertEqual(dims[volume - 1], -1)
+        for face in faces:
+            self.assertEqual(dims[face - 1], 2)
+        entities = {name: int(value) for name, value in group.EntityDimension.items()}
+        self.assertEqual(entities["Solid1"], 2)
+
+    def test_model_element_ids_read_the_classification(self):
+        """meshtools reads the dimensions off the group instead of guessing."""
+        from femmesh import meshtools
+
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        mesh, ids = self._mixed_mesh()
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+        femmesh = group.FemMesh
+
+        self.assertEqual(meshtools.get_model_dimensions(group, femmesh), {2, 3})
+        self.assertEqual(meshtools.get_model_element_ids(group, femmesh, 3), [ids["volume"]])
+        self.assertEqual(meshtools.get_model_element_ids(group, femmesh, 2), [ids["shell"]])
+        self.assertEqual(
+            meshtools.get_model_element_ids(group, femmesh),
+            sorted([ids["volume"], ids["shell"]]),
+        )
+        # The skin of the tetrahedron is no model element of any dimension.
+        self.assertNotIn(ids["skin"], meshtools.get_model_element_ids(group, femmesh))
+
+    def test_model_element_ids_without_a_classification(self):
+        """A plain mesh has no CellDimension and is classified on the spot."""
+        from femmesh import meshtools
+
+        mesh, ids = self._mixed_mesh()
+        obj = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        obj.FemMesh = mesh
+
+        self.assertEqual(meshtools.get_model_dimensions(obj, mesh), {2, 3})
+        self.assertEqual(meshtools.get_model_element_ids(obj, mesh, 2), [ids["shell"]])
+
+    def test_table_of_dimension_sieves_a_mixed_table(self):
+        """A mixed table is split by element type, which node counts cannot do."""
+        from femmesh import meshtools
+
+        mesh, ids = self._mixed_mesh()
+        table = {eid: mesh.getElementNodes(eid) for eid in (ids["volume"], ids["shell"])}
+        # Both entries hold four and three nodes respectively, and only the mesh
+        # can say which of them is a volume.
+        self.assertEqual(list(meshtools.table_of_dimension(mesh, table, 3)), [ids["volume"]])
+        self.assertEqual(list(meshtools.table_of_dimension(mesh, table, 2)), [ids["shell"]])
+        self.assertEqual(meshtools.table_of_dimension(mesh, table, 1), {})
 
 
 class TestViewStatePersistence(unittest.TestCase):
@@ -3371,6 +3553,59 @@ class TestAnalysisImport(unittest.TestCase):
         self.assertEqual(len(imported), 1)
         self.assertEqual(len(native), 1)
         self.assertFalse(set(imported) & set(native))
+
+    def test_solve_assembly_carries_the_cell_dimensions(self):
+        """
+        The dimension of a cell is classified by the mesh group of the analysis
+        it came from and has to survive the merge. A cell whose dimension went
+        missing would either be dropped from the deck or exported as an internal
+        face of a solid.
+        """
+        from femmesh import meshtools
+        from femtools import solveassembly
+
+        leg, _, _ = self._leg_analysis()
+        table, geometry, _ = self._table_analysis(mesh_group=True, native=True)
+        self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(0, 0, 20))
+        self.document.recompute()
+
+        assembly = solveassembly.build(table)
+        mesh = assembly.FemMesh
+        # One entry per cell, or the entries behind a gap mean another cell.
+        self.assertEqual(len(assembly.CellDimension), len(assembly.CellSources))
+        self.assertEqual(
+            len(assembly.CellDimension), mesh.VolumeCount + mesh.FaceCount + mesh.EdgeCount
+        )
+
+        # Both tetrahedra are model elements, none of their eight skin
+        # triangles is, and the same has to come out of meshtools.
+        volumes = set(mesh.Volumes)
+        self.assertEqual(set(assembly.model_element_ids(3)), volumes)
+        self.assertEqual(assembly.model_element_ids(2), [])
+        self.assertEqual(
+            set(meshtools.get_model_element_ids(assembly, mesh)),
+            volumes,
+        )
+        self.assertEqual(meshtools.get_model_dimensions(assembly, mesh), {3})
+
+    def test_solve_assembly_carries_the_entity_dimensions(self):
+        """An entity of an instance answers under the name of its path."""
+        from femmesh import meshtools
+        from femtools import solveassembly
+
+        leg, _, _ = self._leg_analysis()
+        table, geometry, _ = self._table_analysis(mesh_group=True, native=True)
+        imp, _ = self._add_import(table, leg, "Leg1", vector=FreeCAD.Vector(0, 0, 20))
+        self.document.recompute()
+
+        assembly = solveassembly.build(table)
+        entities = meshtools.get_entity_dimension_map(assembly)
+        # The skin of a solid answers the dimension of the solid, so a face
+        # reference is resolved as a boundary rather than as an element set.
+        self.assertEqual(entities.get(meshtools.get_femmesh_group_name(imp, "Solid1")), 3)
+        self.assertEqual(entities.get(meshtools.get_femmesh_group_name(imp, "Face1")), 3)
+        self.assertEqual(entities.get("Solid1"), 3)
+        self.assertEqual(entities.get("Face1"), 3)
 
     def test_an_unknown_reference_leaves_the_group_data_empty(self):
         """A partial answer would leave an element set short without saying so."""

@@ -121,6 +121,8 @@ void appendImportTree(
     Fem::FemMesh& merged,
     std::vector<Part::TopoShape>& shapes,
     std::vector<std::string>& sources,
+    std::vector<int>& cellDimensions,
+    std::map<std::string, int>& entityDimensions,
     std::map<std::string, std::map<int, int>>& nodeSources,
     const Fem::FemAnalysis* analysis,
     const std::string& pathPrefix,
@@ -161,14 +163,42 @@ void appendImportTree(
                         }
                         return flatGroupName(path, groupName);
                     };
+
+                std::vector<int> appendedIds;
                 merged.appendMeshData(
                     srcMesh,
                     path,
                     &sources,
                     &trsf,
                     &renamer,
-                    &nodeSources[impPath]
+                    &nodeSources[impPath],
+                    &appendedIds
                 );
+
+                // The appended ids name the source element of every merged cell,
+                // in the order the cells were appended, which is the same order
+                // the sources were appended in. CellDimension of the source is
+                // indexed by its element id.
+                const auto& srcDims = srcGroup->CellDimension.getValues();
+                for (int eid : appendedIds) {
+                    int dim = -1;
+                    if (eid >= 1 && static_cast<std::size_t>(eid - 1) < srcDims.size()) {
+                        dim = static_cast<int>(srcDims[static_cast<std::size_t>(eid - 1)]);
+                    }
+                    cellDimensions.push_back(dim);
+                }
+                cellDimensions.resize(sources.size(), -1);
+
+                for (const auto& [name, value] : srcGroup->EntityDimension.getValues()) {
+                    if (suppressedNames.contains(name)) {
+                        continue;
+                    }
+                    try {
+                        entityDimensions[flatGroupName(path, name)] = std::stoi(value);
+                    }
+                    catch (const std::exception&) {
+                    }
+                }
             }
         }
 
@@ -178,6 +208,8 @@ void appendImportTree(
                 merged,
                 shapes,
                 sources,
+                cellDimensions,
+                entityDimensions,
                 nodeSources,
                 src,
                 impPath,
@@ -206,6 +238,20 @@ Fem::SolveAssemblyResult Fem::buildSolveAssembly(const FemAnalysis* analysis)
         // The group's own CellSources name the child mesh instead, which is a
         // different question and answered by the group.
         result.cellSources.assign(nativeGroup->CellSources.getSize(), std::string());
+        // getMergedMesh() above filled CellDimension along with the mesh, so the
+        // two are in step. Keep the length equal to cellSources so the import
+        // cells appended below land at the same index in both lists.
+        for (long d : nativeGroup->CellDimension.getValues()) {
+            result.cellDimensions.push_back(static_cast<int>(d));
+        }
+        result.cellDimensions.resize(result.cellSources.size(), -1);
+        for (const auto& [name, value] : nativeGroup->EntityDimension.getValues()) {
+            try {
+                result.entityDimensions[name] = std::stoi(value);
+            }
+            catch (const std::exception&) {
+            }
+        }
     }
 
     if (auto* geom = Tools::getAnalysisGeometry(analysis)) {
@@ -219,6 +265,8 @@ Fem::SolveAssemblyResult Fem::buildSolveAssembly(const FemAnalysis* analysis)
         result.mesh,
         shapes,
         result.cellSources,
+        result.cellDimensions,
+        result.entityDimensions,
         result.nodeSources,
         analysis,
         {},

@@ -449,7 +449,7 @@ private:
         }
         const SolveAssemblyResult result = Fem::buildSolveAssembly(analysis);
 
-        Py::Tuple tuple(4);
+        Py::Tuple tuple(6);
         tuple.setItem(0, Py::asObject(new FemMeshPy(new FemMesh(result.mesh))));
         tuple.setItem(1, Py::Object(Py::new_reference_to(shape2pyshape(result.shape)), true));
         Py::List sources;
@@ -466,6 +466,16 @@ private:
             nodeSources.setItem(Py::String(path), mapping);
         }
         tuple.setItem(3, nodeSources);
+        Py::List cellDimensions;
+        for (int d : result.cellDimensions) {
+            cellDimensions.append(Py::Long(d));
+        }
+        tuple.setItem(4, cellDimensions);
+        Py::Dict entityDimensions;
+        for (const auto& [name, dim] : result.entityDimensions) {
+            entityDimensions.setItem(Py::String(name), Py::Long(dim));
+        }
+        tuple.setItem(5, entityDimensions);
         return tuple;
     }
 };

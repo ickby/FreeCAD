@@ -35,6 +35,7 @@ import FreeCAD
 import Fem
 from freecad import utils
 from femtools.objecttools import ObjectTools
+from . import entityorder
 from . import meshcomponents
 
 
@@ -286,13 +287,23 @@ run_netgen(**{kwds})
         fem_mesh.addFaceList(*netgen_result["Faces"])
         fem_mesh.addVolumeList(*netgen_result["Volumes"])
 
-        # Netgen numbers the entities of the exported shape, which is only a part
-        # of the geometry when components are selected. Groups carry the names of
-        # the geometry, so the numbering has to be mapped back.
+        # A mesh element reports the number Netgen gave the entity it belongs to,
+        # which is not the FreeCAD index of that entity: Netgen numbers by
+        # descending dimension, see entityorder. On top of that it numbers the
+        # exported shape, which is only a part of the geometry when components are
+        # selected, while groups carry the names of the geometry. Both steps have
+        # to be undone for a group to name the entity it actually covers.
+        if self.components.export_shape is None:
+            self.components.resolve()
+        order = entityorder.entity_order(self.components.export_shape)
+
         for kind, group_type in (("Edges", "Edge"), ("Faces", "Face"), ("Solids", "Volume")):
             prefix = "Solid" if kind == "Solids" else group_type
+            indices = order[prefix]
             for g in groups[kind]:
-                name = self.components.global_name(f"{prefix}{g[0]}")
+                number = int(g[0])
+                local = indices[number - 1] if number <= len(indices) else number
+                name = self.components.global_name(f"{prefix}{local}")
                 grp_id = fem_mesh.addGroup(name, group_type)
                 fem_mesh.addGroupElements(grp_id, g[1])
 

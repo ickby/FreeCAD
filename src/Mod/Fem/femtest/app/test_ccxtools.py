@@ -318,6 +318,14 @@ class TestCcxTools(unittest.TestCase):
         self.input_file_writing_test(get_namefromdef("test_"))
 
     # ********************************************************************************************
+    def test_mixed_solid_shell_beam(self):
+        # a solid, a shell and a beam component in one deck
+        from femexamples.mixed_solid_shell_beam import setup
+
+        setup(self.document, "ccxtools")
+        self.input_file_writing_test(get_namefromdef("test_"))
+
+    # ********************************************************************************************
     def test_square_pipe_end_twisted_edgeforces(self):
         from femexamples.square_pipe_end_twisted_edgeforces import setup
 

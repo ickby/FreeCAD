@@ -46,6 +46,15 @@ struct FemExport SolveAssemblyResult
      */
     std::vector<std::string> cellSources;
     /**
+     * Analysis dimension of each cell (elementId - 1), or -1 if dropped.
+     */
+    std::vector<int> cellDimensions;
+    /**
+     * Effective analysis dimension per entity group name. Import paths are
+     * flattened with underscores so names match meshtools.get_femmesh_group_name.
+     */
+    std::map<std::string, int> entityDimensions;
+    /**
      * Import path -> (node ID in the source mesh -> node ID in the assembly).
      *
      * A solver reports results per assembly node, and nothing else records

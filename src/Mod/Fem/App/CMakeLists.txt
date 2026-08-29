@@ -135,6 +135,8 @@ SET(FemBase_SRCS
     FemSolveAssembly.h
     FemMesh.cpp
     FemMesh.h
+    FemMeshDimension.cpp
+    FemMeshDimension.h
     FemResultObject.cpp
     FemResultObject.h
     FemSolverObject.cpp

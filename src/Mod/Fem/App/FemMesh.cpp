@@ -74,6 +74,7 @@
 
 #include "FemMesh.h"
 #include "FemGeometry.h"
+#include "FemMeshDimension.h"
 #include <FemMeshPy.h>
 
 #ifdef FC_USE_VTK
@@ -157,7 +158,8 @@ void FemMesh::appendMeshData(
     std::vector<std::string>* cellSources,
     const Base::Matrix4D* transformOverride,
     const std::function<std::string(const std::string&)>* groupRenamer,
-    std::map<int, int>* nodeIdMap
+    std::map<int, int>* nodeIdMap,
+    std::vector<int>* cellSourceIds
 )
 {
     // Do not overwrite this->_Mtrx with mesh._Mtrx — each child's placement is
@@ -237,8 +239,13 @@ void FemMesh::appendMeshData(
                     break;
                 }
             }
-            if (cellSources && new_element) {
-                cellSources->push_back(sourceName);
+            if (new_element) {
+                if (cellSources) {
+                    cellSources->push_back(sourceName);
+                }
+                if (cellSourceIds) {
+                    cellSourceIds->push_back(elem->GetID());
+                }
             }
         }
     }
@@ -1054,194 +1061,9 @@ std::set<int> FemMesh::getFacesOnly() const
     return resultIDs;
 }
 
-namespace
-{
-
-int smeshElementDimension(const SMDS_MeshElement* elem)
-{
-    if (!elem) {
-        return -1;
-    }
-    switch (elem->GetType()) {
-        case SMDSAbs_Volume:
-            return 3;
-        case SMDSAbs_Face:
-            return 2;
-        case SMDSAbs_Edge:
-            return 1;
-        case SMDSAbs_0DElement:
-            return 0;
-        default:
-            return -1;
-    }
-}
-
-/** True if name matches SolidN / FaceN / EdgeN / VertexN (global entity group contract). */
-bool parseEntityGroupName(const char* name)
-{
-    if (!name) {
-        return false;
-    }
-    std::string_view n(name);
-    std::string_view prefix;
-    for (std::string_view candidate : {"Solid", "Face", "Edge", "Vertex"}) {
-        if (n.starts_with(candidate)) {
-            prefix = candidate;
-            break;
-        }
-    }
-    if (prefix.empty()) {
-        return false;
-    }
-    const auto rest = n.substr(prefix.size());
-    return !rest.empty()
-        && std::all_of(rest.begin(), rest.end(), [](unsigned char c) { return std::isdigit(c); });
-}
-
-}  // namespace
-
 std::set<int> FemMesh::getHighestElements(const FemGeometry* geometry) const
 {
-    const SMESHDS_Mesh* meshDS = myMesh->GetMeshDS();
-
-    // Element id -> entity group name from Solid*/Face*/Edge*/Vertex* groups.
-    std::map<int, std::string> elemEntity;
-    if (geometry) {
-        for (int gid : myMesh->GetGroupIds()) {
-            SMESH_Group* group = myMesh->GetGroup(gid);
-            if (!group || !group->GetGroupDS() || !group->GetName()) {
-                continue;
-            }
-            if (!parseEntityGroupName(group->GetName())) {
-                continue;
-            }
-            SMDS_ElemIteratorPtr eIt = group->GetGroupDS()->GetElements();
-            while (eIt->more()) {
-                const SMDS_MeshElement* elem = eIt->next();
-                if (elem && elem->GetType() != SMDSAbs_Node) {
-                    elemEntity[elem->GetID()] = group->GetName();
-                }
-            }
-        }
-    }
-
-    // Effective dimension bitmask per entity, computed once per entity rather
-    // than once per element. "Achieved" is tracked per *owner* (a solid owns
-    // its faces and edges), which is what makes the skin of a solid come out as
-    // not-highest while a free shell of the same dimension does.
-    std::map<std::string, int> achievedOfOwner;
-    if (geometry) {
-        for (const auto& [eid, entity] : elemEntity) {
-            const int dim = smeshElementDimension(meshDS->FindElement(eid));
-            if (dim < 0) {
-                continue;
-            }
-            auto owners = geometry->getEntityOwners(entity);
-            if (owners.empty()) {
-                owners.push_back(entity);
-            }
-            for (const auto& owner : owners) {
-                auto it = achievedOfOwner.find(owner);
-                if (it == achievedOfOwner.end() || dim > it->second) {
-                    achievedOfOwner[owner] = dim;
-                }
-            }
-        }
-    }
-
-    std::map<std::string, int> maskOfEntity;
-    auto entityMask = [&](const std::string& entity) {
-        auto cached = maskOfEntity.find(entity);
-        if (cached != maskOfEntity.end()) {
-            return cached->second;
-        }
-        int mask = 0;
-        auto owners = geometry->getEntityOwners(entity);
-        if (owners.empty()) {
-            owners.push_back(entity);
-        }
-        for (const auto& owner : owners) {
-            int dim = geometry->getAnalysisDimension(owner);
-            auto ait = achievedOfOwner.find(owner);
-            // The mesher may not have reached the declared dimension (a solid
-            // meshed with surface elements only). Fall back to what it achieved
-            // so the elements are still exported.
-            if (ait != achievedOfOwner.end() && ait->second >= 0 && (dim < 0 || ait->second < dim)) {
-                dim = ait->second;
-            }
-            if (dim >= 0 && dim <= 3) {
-                mask |= (1 << dim);
-            }
-        }
-        // Embedded shell / rebar: an override on the entity itself counts even
-        // when the entity is owned by a solid.
-        const auto& overrides = geometry->DimensionOverride.getValue();
-        auto oit = overrides.find(entity);
-        if (oit != overrides.end() && !oit->second.empty()) {
-            try {
-                const int dim = std::stoi(oit->second);
-                if (dim >= 0 && dim <= 3) {
-                    mask |= (1 << dim);
-                }
-            }
-            catch (const std::exception&) {
-                Base::Console().warning(
-                    "FemMesh: invalid DimensionOverride for '%s': '%s'\n",
-                    entity.c_str(),
-                    oit->second.c_str()
-                );
-            }
-        }
-        maskOfEntity[entity] = mask;
-        return mask;
-    };
-
-    // Topology rule, used for every element the geometry says nothing about.
-    // Volumes are always highest; a face, edge or 0D element is highest only
-    // when it is not the skin of something of higher dimension.
-    auto keepByTopology = [](const SMDS_MeshElement* elem) {
-        switch (elem->GetType()) {
-            case SMDSAbs_Volume:
-                return true;
-            case SMDSAbs_Face:
-                return !isSubElementOf(elem, SMDSAbs_Volume);
-            case SMDSAbs_Edge:
-                return !isSubElementOf(elem, SMDSAbs_Face) && !isSubElementOf(elem, SMDSAbs_Volume);
-            case SMDSAbs_0DElement:
-                return !isSubElementOf(elem, SMDSAbs_Edge) && !isSubElementOf(elem, SMDSAbs_Face)
-                    && !isSubElementOf(elem, SMDSAbs_Volume);
-            default:
-                return false;
-        }
-    };
-
-    std::set<int> result;
-    SMDS_ElemIteratorPtr elemIt = meshDS->elementsIterator();
-    while (elemIt->more()) {
-        const SMDS_MeshElement* elem = elemIt->next();
-        if (!elem || elem->GetType() == SMDSAbs_Node) {
-            continue;
-        }
-        const int dim = smeshElementDimension(elem);
-        if (dim < 0) {
-            continue;
-        }
-
-        auto entity = elemEntity.find(elem->GetID());
-        if (entity == elemEntity.end()) {
-            // No declared dimension available for this element: never drop it
-            // silently, decide from the mesh topology alone.
-            if (keepByTopology(elem)) {
-                result.insert(elem->GetID());
-            }
-            continue;
-        }
-
-        if (entityMask(entity->second) & (1 << dim)) {
-            result.insert(elem->GetID());
-        }
-    }
-    return result;
+    return classifyDimensions(*this, {}, geometry).modelElementIds();
 }
 
 namespace
@@ -2059,7 +1881,8 @@ void FemMesh::writeABAQUS(
     bool groupParam,
     ABAQUS_VolumeVariant volVariant,
     ABAQUS_FaceVariant faceVariant,
-    ABAQUS_EdgeVariant edgeVariant
+    ABAQUS_EdgeVariant edgeVariant,
+    const std::set<int>* elementIds
 ) const
 {
     /*
@@ -2305,7 +2128,12 @@ void FemMesh::writeABAQUS(
     SMDS_VolumeIteratorPtr aVolIter = myMesh->GetMeshDS()->volumesIterator();
     std::set<int> highestIds;
     if (elemParam == 1) {
-        highestIds = getHighestElements();
+        if (elementIds) {
+            highestIds = *elementIds;
+        }
+        else {
+            highestIds = getHighestElements();
+        }
     }
     while (aVolIter->more()) {
         const SMDS_MeshVolume* aVol = aVolIter->next();

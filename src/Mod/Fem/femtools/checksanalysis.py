@@ -45,34 +45,33 @@ def check_member_for_solver_calculix(analysis, solver, mesh, member):
     # mesh
     if not mesh:
         message += "A single mesh object must be defined in the analysis.\n"
+    # Dimensions of the elements the solver will see. A mixed mesh covers several
+    # of them at once, so each section below asks for the one it needs instead of
+    # for the single dimension the whole mesh is made of.
+    model_dims = set()
     if mesh:
-        if (
-            mesh.FemMesh.VolumeCount == 0
-            and mesh.FemMesh.FaceCount > 0
-            and not member.geos_shellthickness
-        ):
+        from femmesh import meshtools
+
+        model_dims = meshtools.get_model_dimensions(mesh, mesh.FemMesh)
+        if 2 in model_dims and 3 not in model_dims and not member.geos_shellthickness:
             message += (
-                "FEM mesh has no volume elements, "
+                "FEM mesh has face elements without volume elements, "
                 "either define shell thicknesses or "
                 "provide a FEM mesh with volume elements.\n"
             )
         if (
-            mesh.FemMesh.VolumeCount == 0
-            and mesh.FemMesh.FaceCount == 0
-            and mesh.FemMesh.EdgeCount > 0
+            1 in model_dims
+            and 3 not in model_dims
+            and 2 not in model_dims
             and not member.geos_beamsection
             and not member.geos_fluidsection
         ):
             message += (
-                "FEM mesh has no volume and no shell elements, "
+                "FEM mesh has edge elements without higher-dimensional elements, "
                 "either define a beam/fluid section or provide "
-                "a FEM mesh with volume elements.\n"
+                "a FEM mesh with volume or shell elements.\n"
             )
-        if (
-            mesh.FemMesh.VolumeCount == 0
-            and mesh.FemMesh.FaceCount == 0
-            and mesh.FemMesh.EdgeCount == 0
-        ):
+        if not model_dims:
             message += (
                 "FEM mesh has neither volume nor shell or edge elements. "
                 "Provide a FEM mesh with elements.\n"
@@ -90,21 +89,6 @@ def check_member_for_solver_calculix(analysis, solver, mesh, member):
                     "(Only one empty references list is allowed!).\n"
                 )
             has_no_references = True
-    mat_ref_shty = ""
-    for m in member.mats_linear:
-        ref_shty = femutils.get_refshape_type(m["Object"])
-        if ref_shty == "Compound":
-            ref_shty = "Solid"
-        if not mat_ref_shty:
-            mat_ref_shty = ref_shty
-        if mat_ref_shty and ref_shty and ref_shty != mat_ref_shty:
-            # mat_ref_shty could be empty in one material
-            # only the not empty ones should have the same shape type
-            message += (
-                "Some material objects do not have the same reference shape type "
-                "(all material objects must have the same reference shape type, "
-                "at the moment).\n"
-            )
     for m in member.mats_linear:
         mat_map = m["Object"].Material
         mat_obj = m["Object"]
@@ -270,12 +254,6 @@ def check_member_for_solver_calculix(analysis, solver, mesh, member):
     # geometries
     # beam section
     if member.geos_beamsection:
-        if member.geos_shellthickness:
-            # this needs to be checked only once either here or in shell_thicknesses
-            message += (
-                "Beam sections and shell thicknesses in one analysis "
-                "are not supported at the moment.\n"
-            )
         if member.geos_fluidsection:
             # this needs to be checked only once either here or in shell_thicknesses
             message += (
@@ -292,9 +270,7 @@ def check_member_for_solver_calculix(analysis, solver, mesh, member):
                     )
                 has_no_references = True
         if mesh:
-            if mesh.FemMesh.FaceCount > 0 or mesh.FemMesh.VolumeCount > 0:
-                message += "Beam sections defined but FEM mesh has volume or shell elements.\n"
-            if mesh.FemMesh.EdgeCount == 0:
+            if 1 not in model_dims:
                 message += "Beam sections defined but FEM mesh has no edge elements.\n"
             if not (hasattr(mesh, "Shape") or hasattr(mesh, "Part")):
                 message += (
@@ -318,9 +294,7 @@ def check_member_for_solver_calculix(analysis, solver, mesh, member):
                     )
                 has_no_references = True
         if mesh:
-            if mesh.FemMesh.VolumeCount > 0:
-                message += "Shell thicknesses defined but FEM mesh has volume elements.\n"
-            if mesh.FemMesh.FaceCount == 0:
+            if 2 not in model_dims:
                 message += "Shell thicknesses defined but FEM mesh has no shell elements.\n"
     # fluid section
     if member.geos_fluidsection:
@@ -338,9 +312,7 @@ def check_member_for_solver_calculix(analysis, solver, mesh, member):
                     )
                 has_no_references = True
         if mesh:
-            if mesh.FemMesh.FaceCount > 0 or mesh.FemMesh.VolumeCount > 0:
-                message += "Fluid sections defined but FEM mesh has volume or shell elements.\n"
-            if mesh.FemMesh.EdgeCount == 0:
+            if 1 not in model_dims:
                 message += "Fluid sections defined but FEM mesh has no edge elements.\n"
 
     return message

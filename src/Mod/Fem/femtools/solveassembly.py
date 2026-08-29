@@ -49,13 +49,17 @@ class AssemblyGeometry:
 class SolveAssembly:
     """Ephemeral mesh object returned by build()."""
 
-    def __init__(self, name, fem_mesh, shape, cell_sources, node_sources):
+    def __init__(
+        self, name, fem_mesh, shape, cell_sources, node_sources, cell_dimensions, entity_dimensions
+    ):
         self.Name = name
         self.Label = name
         self.FemMesh = fem_mesh
         self.Shape = AssemblyGeometry(f"{name}_Geometry", shape)
         self.CellSources = cell_sources
         self.NodeSources = node_sources
+        self.CellDimension = cell_dimensions
+        self.EntityDimension = entity_dimensions
         self.Suppressed = False
         self._nodes_by_assembly_id = None
 
@@ -65,6 +69,24 @@ class SolveAssembly:
         if 0 <= index < len(self.CellSources):
             return self.CellSources[index]
         return ""
+
+    def dimension_of_cell(self, element_id):
+        """Analysis dimension of *element_id*, or -1 when the cell is not part of the model."""
+        index = element_id - 1
+        if 0 <= index < len(self.CellDimension):
+            return self.CellDimension[index]
+        return -1
+
+    def model_element_ids(self, dim=None):
+        """IDs of model elements, optionally filtered to analysis dimension *dim*."""
+        ids = []
+        for index, cell_dim in enumerate(self.CellDimension):
+            if cell_dim < 0:
+                continue
+            if dim is not None and cell_dim != dim:
+                continue
+            ids.append(index + 1)
+        return ids
 
     def source_node_of(self, node_id):
         """(import path, node ID in the source mesh) for an assembly node."""
@@ -79,11 +101,15 @@ class SolveAssembly:
 
 def build(analysis):
     """Return a duck-typed mesh object for solver input generation."""
-    mesh, shape, sources, node_sources = Fem.buildSolveAssembly(analysis)
+    mesh, shape, sources, node_sources, cell_dimensions, entity_dimensions = Fem.buildSolveAssembly(
+        analysis
+    )
     return SolveAssembly(
         f"{analysis.Name}_Assembly",
         mesh,
         shape,
         list(sources),
         {path: dict(nodes) for path, nodes in node_sources.items()},
+        list(cell_dimensions),
+        dict(entity_dimensions),
     )

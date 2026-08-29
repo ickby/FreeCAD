@@ -1276,21 +1276,23 @@ PyObject* FemMeshPy::writeABAQUS(PyObject* args, PyObject* kwd) const
     const char* volVariant = "standard";
     const char* faceVariant = "shell";
     const char* edgeVariant = "beam";
+    PyObject* elementIdsObj = Py_None;
 
-    const std::array<const char*, 7> kwlist {
+    const std::array<const char*, 8> kwlist {
         "fileName",
         "elemParam",
         "groupParam",
         "volVariant",
         "faceVariant",
         "edgeVariant",
+        "elementIds",
         nullptr
     };
 
     if (!Base::Wrapped_ParseTupleAndKeywords(
             args,
             kwd,
-            "etiO!|sss",
+            "etiO!|sssO",
             kwlist,
             "utf-8",
             &Name,
@@ -1299,7 +1301,8 @@ PyObject* FemMeshPy::writeABAQUS(PyObject* args, PyObject* kwd) const
             &groupParam,
             &volVariant,
             &faceVariant,
-            &edgeVariant
+            &edgeVariant,
+            &elementIdsObj
         )) {
         return nullptr;
     }
@@ -1317,6 +1320,21 @@ PyObject* FemMeshPy::writeABAQUS(PyObject* args, PyObject* kwd) const
         return nullptr;
     }
 
+    std::set<int> elementIds;
+    const std::set<int>* elementIdsPtr = nullptr;
+    if (elementIdsObj && elementIdsObj != Py_None) {
+        try {
+            Py::Sequence seq(elementIdsObj);
+            for (Py::Sequence::iterator it = seq.begin(); it != seq.end(); ++it) {
+                elementIds.insert(static_cast<long>(Py::Long(*it)));
+            }
+            elementIdsPtr = &elementIds;
+        }
+        catch (const Py::Exception&) {
+            return nullptr;
+        }
+    }
+
     try {
         getFemMeshPtr()->writeABAQUS(
             EncodedName.c_str(),
@@ -1324,7 +1342,8 @@ PyObject* FemMeshPy::writeABAQUS(PyObject* args, PyObject* kwd) const
             grpParam,
             itVol->second,
             itFace->second,
-            itEdge->second
+            itEdge->second,
+            elementIdsPtr
         );
     }
     catch (const std::exception& e) {
@@ -2008,6 +2027,18 @@ Py::Tuple FemMeshPy::getFaces() const
 Py::Tuple FemMeshPy::getFacesOnly() const
 {
     std::set<int> resultSet = getFemMeshPtr()->getFacesOnly();
+    Py::Tuple tuple(resultSet.size());
+    int index = 0;
+    for (int it : resultSet) {
+        tuple.setItem(index++, Py::Long(it));
+    }
+
+    return tuple;
+}
+
+Py::Tuple FemMeshPy::getHighestElements() const
+{
+    std::set<int> resultSet = getFemMeshPtr()->getHighestElements();
     Py::Tuple tuple(resultSet.size());
     int index = 0;
     for (int it : resultSet) {

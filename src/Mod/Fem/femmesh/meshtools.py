@@ -128,9 +128,108 @@ def get_femnodes_by_refshape(femmesh, ref):
 
 
 # ************************************************************************************************
-def get_femelement_table(femmesh):
-    """get_femelement_table(femmesh): { elementid : [ nodeid, nodeid, ... , nodeid ] }"""
+def get_cell_dimension_list(mesh_obj):
+    """Return CellDimension for *mesh_obj*, or None when unavailable."""
+    if mesh_obj is None:
+        return None
+    dims = getattr(mesh_obj, "CellDimension", None)
+    if dims is None:
+        return None
+    # PropertyIntegerList exposes a list/tuple of ints
+    return list(dims)
+
+
+def get_entity_dimension_map(mesh_obj):
+    """Return EntityDimension map for *mesh_obj*, or {} when unavailable."""
+    if mesh_obj is None:
+        return {}
+    entities = getattr(mesh_obj, "EntityDimension", None)
+    if not entities:
+        return {}
+    result = {}
+    for key, value in dict(entities).items():
+        try:
+            result[key] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def get_model_element_ids_by_dimension(mesh_obj, femmesh=None):
+    """{ dimension : [element id, ...] } for the model elements of *mesh_obj*.
+
+    Answering every dimension in one walk is what keeps a caller which needs
+    more than one of them from classifying the mesh over and over. Hold on to
+    the result, it is not cached here.
+    """
+    by_dim = {}
+    dims = get_cell_dimension_list(mesh_obj)
+    if dims is not None:
+        for index, cell_dim in enumerate(dims):
+            if cell_dim >= 0:
+                by_dim.setdefault(cell_dim, []).append(index + 1)
+        return by_dim
+
+    # No classification available: fall back to the topology filter of the mesh
+    # itself and read the dimension off the element type.
+    if femmesh is None and mesh_obj is not None:
+        femmesh = getattr(mesh_obj, "FemMesh", None)
+    if femmesh is None:
+        return by_dim
+    volumes = set(femmesh.Volumes) if femmesh.VolumeCount else set()
+    faces = set(femmesh.Faces) if femmesh.FaceCount else set()
+    edges = set(femmesh.Edges) if femmesh.EdgeCount else set()
+    for eid in femmesh.HighestElements:
+        if eid in volumes:
+            cell_dim = 3
+        elif eid in faces:
+            cell_dim = 2
+        elif eid in edges:
+            cell_dim = 1
+        else:
+            continue
+        by_dim.setdefault(cell_dim, []).append(eid)
+    return by_dim
+
+
+def get_model_element_ids(mesh_obj, femmesh=None, dim=None, by_dim=None):
+    """IDs of model elements on *mesh_obj*, optionally filtered by dimension *dim*.
+
+    Model elements are the ones the solver sees. Elements which only form the
+    inside skin of higher-dimensional ones are left out.
+    """
+    if by_dim is None:
+        by_dim = get_model_element_ids_by_dimension(mesh_obj, femmesh)
+    if dim is not None:
+        return sorted(by_dim.get(dim, []))
+    ids = []
+    for dim_ids in by_dim.values():
+        ids += dim_ids
+    return sorted(ids)
+
+
+def get_model_dimensions(mesh_obj, femmesh=None, by_dim=None):
+    """Analysis dimensions the model elements of *mesh_obj* cover, as a set."""
+    if by_dim is None:
+        by_dim = get_model_element_ids_by_dimension(mesh_obj, femmesh)
+    return {dim for dim, ids in by_dim.items() if ids}
+
+
+# ************************************************************************************************
+def get_femelement_table(femmesh, mesh_obj=None):
+    """get_femelement_table(femmesh): { elementid : [ nodeid, nodeid, ... , nodeid ] }
+
+    With *mesh_obj* given the table holds the model elements of every dimension,
+    which is what a mixed mesh needs. Without it the legacy rule applies and only
+    the elements of the single highest dimension present are returned.
+    """
     femelement_table = {}
+    if mesh_obj is not None:
+        for i in get_model_element_ids(mesh_obj, femmesh):
+            femelement_table[i] = femmesh.getElementNodes(i)
+        if femelement_table:
+            return femelement_table
+
     if is_solid_femmesh(femmesh):
         for i in femmesh.Volumes:
             femelement_table[i] = femmesh.getElementNodes(i)
@@ -143,6 +242,28 @@ def get_femelement_table(femmesh):
     else:
         FreeCAD.Console.PrintError("Neither solid nor face nor edge femmesh!\n")
     return femelement_table
+
+
+# ************************************************************************************************
+def table_of_dimension(femmesh, femelement_table, dim):
+    """The entries of *femelement_table* whose elements have dimension *dim*.
+
+    A table of a mixed mesh holds elements of several dimensions, and a search
+    which tells element types apart by their node count cannot work on it: a
+    tetra4 and a quad4 both have four nodes. Sieving by the element type of the
+    mesh is unambiguous where the node count is not.
+    """
+    if dim == 3:
+        ids = set(femmesh.Volumes) if femmesh.VolumeCount else set()
+    elif dim == 2:
+        ids = set(femmesh.Faces) if femmesh.FaceCount else set()
+    elif dim == 1:
+        ids = set(femmesh.Edges) if femmesh.EdgeCount else set()
+    else:
+        return {}
+    if all(eid in ids for eid in femelement_table):
+        return femelement_table
+    return {eid: nodes for eid, nodes in femelement_table.items() if eid in ids}
 
 
 # ************************************************************************************************
@@ -226,6 +347,11 @@ def get_bit_pattern_dict(femelement_table, femnodes_ele_table, node_set):
     or has this element a face we are searching for?
     The number in the ele_dict is organized as a bit array.
     The corresponding bit is set, if the node of the node_set is contained in the element.
+
+    The searches below dispatch on the node count of an element, which only
+    identifies an element type within one dimension: a tetra4 and a quad4 both
+    have four nodes. Pass a table of one dimension to get a definite answer;
+    element types the search does not know are skipped.
     """
     bit_pattern_dict = get_copy_of_empty_femelement_table(femelement_table)
     # # initializing the bit_pattern_dict
@@ -257,7 +383,7 @@ def get_element_volumes_elements_from_binary_search(bit_pattern_dict):
     }
     volumes = []
     for ele in bit_pattern_dict:
-        mask_dict = vol_dict[bit_pattern_dict[ele][0]]
+        mask_dict = vol_dict.get(bit_pattern_dict[ele][0], {})
         for key in mask_dict:
             if (key & bit_pattern_dict[ele][1]) == key:
                 volumes.append(ele)
@@ -278,7 +404,7 @@ def get_element_faces_elements_from_binary_search(bit_pattern_dict):
     }
     faces = []
     for ele in bit_pattern_dict:
-        mask_dict = vol_dict[bit_pattern_dict[ele][0]]
+        mask_dict = vol_dict.get(bit_pattern_dict[ele][0], {})
         for key in mask_dict:
             if (key & bit_pattern_dict[ele][1]) == key:
                 faces.append(ele)
@@ -295,7 +421,7 @@ def get_element_edges_elements_from_binary_search(bit_pattern_dict):
     }
     edges = []
     for ele in bit_pattern_dict:
-        mask_dict = vol_dict[bit_pattern_dict[ele][0]]
+        mask_dict = vol_dict.get(bit_pattern_dict[ele][0], {})
         for key in mask_dict:
             if (key & bit_pattern_dict[ele][1]) == key:
                 edges.append(ele)
@@ -314,7 +440,7 @@ def get_element_edges_from_binary_search(
     }
     edges = []
     for ele in bit_pattern_dict:
-        mask_dict = vol_dict[bit_pattern_dict[ele][0]]
+        mask_dict = vol_dict.get(bit_pattern_dict[ele][0], {})
         for key in mask_dict:
             if (key & bit_pattern_dict[ele][1]) == key:
                 edges.append([ele, mask_dict[key]])
@@ -347,7 +473,7 @@ def get_element_faces_from_binary_search(
     }
     faces = []
     for ele in bit_pattern_dict:
-        mask_dict = vol_dict[bit_pattern_dict[ele][0]]
+        mask_dict = vol_dict.get(bit_pattern_dict[ele][0], {})
         for key in mask_dict:
             if (key & bit_pattern_dict[ele][1]) == key:
                 faces.append([ele, mask_dict[key]])
@@ -359,16 +485,18 @@ def get_femelements_by_femnodes_bin(femelement_table, femnodes_ele_table, node_l
     """for every femelement of femelement_table
     if all nodes of the femelement are in node_list,
     the femelement is added to the list which is returned
-    blind fast binary search, but works for volumes only
+    blind fast binary search
     """
     FreeCAD.Console.PrintMessage("binary search: get_femelements_by_femnodes_bin\n")
-    vol_masks = {4: 15, 6: 63, 8: 255, 10: 1023, 15: 32767, 20: 1048575}
     # Now we are looking for nodes inside of the Volumes = filling the bit_pattern_dict
     bit_pattern_dict = get_bit_pattern_dict(femelement_table, femnodes_ele_table, node_list)
     # search
     ele_list = []  # The ele_list contains the result of the search.
     for ele in bit_pattern_dict:
-        if bit_pattern_dict[ele][1] == vol_masks[bit_pattern_dict[ele][0]]:
+        node_count, pattern = bit_pattern_dict[ele]
+        # All node bits set means every node of the element is in node_list,
+        # which holds for any element type and so also for a mixed table.
+        if pattern == (1 << node_count) - 1:
             ele_list.append(ele)
     return ele_list
 
@@ -461,6 +589,12 @@ def get_femelement_sets(femmesh, femelement_table, fem_objects, femnodes_ele_tab
     # fem_objects = FreeCAD FEM document objects
     # get femelements for reference shapes of each obj.References
     count_femelements = 0
+    if not femelement_table:
+        FreeCAD.Console.PrintError(
+            "Error in get_femelement_sets -- > the mesh has no elements of the "
+            "dimension the objects are defined on!\n"
+        )
+        return False
     referenced_femelements = np.zeros((max(femelement_table.keys()) + 1,), dtype=int)
     has_remaining_femelements = None
     for fem_object_i, fem_object in enumerate(fem_objects):
@@ -573,6 +707,11 @@ def get_femelement_directions_theshape(femmesh, femelement_table, theshape):
         edge_femnodes = femmesh.getNodesByEdge(e)  # femnodes for the current edge
         # femelements for this edge
         the_edge["ids"] = get_femelements_by_femnodes_std(femelement_table, edge_femnodes)
+        if not the_edge["ids"]:
+            # No beam element was meshed on this edge. The edges of the solid and
+            # shell components of a mixed shape all end up here, and a rotation
+            # set without elements is rejected by the solver.
+            continue
         for rot in rotations_ids:
             # tolerance will be managed by FreeCAD
             # see https://forum.freecad.org/viewtopic.php?f=22&t=14179
@@ -785,7 +924,9 @@ def get_femnodes_by_refs_group_data(femmesh, references):
 
 
 # ************************************************************************************************
-def get_femelement_sets_from_group_data(femmesh, fem_objects):
+def get_femelement_sets_from_group_data(
+    femmesh, fem_objects, group_data_type="Volume", expected_count=None
+):
     # get femelements from femmesh groupdata for reference shapes of each obj.References
     count_femelements = 0
     sum_group_elements = []
@@ -798,16 +939,18 @@ def get_femelement_sets_from_group_data(femmesh, fem_objects):
         # unique short identifier
         fem_object["ShortName"] = get_elset_short_name(obj, fem_object_i)
         # see comments over there !
-        group_elements = get_femmesh_groupdata_sets_by_name(femmesh, fem_object, "Volume")
+        group_elements = get_femmesh_groupdata_sets_by_name(femmesh, fem_object, group_data_type)
         if not group_elements:
             group_elements = get_femmesh_groupdata_sets_by_refs(
-                femmesh, getattr(obj, "References", None) or (), "Volume"
+                femmesh, getattr(obj, "References", None) or (), group_data_type
             )
         sum_group_elements += group_elements
         count_femelements += len(group_elements)
         fem_object["FEMElements"] = group_elements
     # check if all worked out well
-    if not femelements_count_ok(femmesh.VolumeCount, count_femelements):
+    if expected_count is None:
+        expected_count = femmesh.VolumeCount if group_data_type == "Volume" else None
+    if expected_count is not None and not femelements_count_ok(expected_count, count_femelements):
         FreeCAD.Console.PrintError(
             "Error in get_femelement_sets_from_group_data -- > femelements_count_ok() failed!\n"
         )
@@ -1016,58 +1159,30 @@ def get_force_obj_edge_nodeload_table(femmesh, femelement_table, femnodes_mesh, 
 # ************************************************************************************************
 def get_ref_edgenodes_table(femmesh, femelement_table, refedge):
     edge_table = {}  # { meshedgeID : ( nodeID, ... , nodeID ) }
-    refedge_nodes = femmesh.getNodesByEdge(refedge)
-    if is_solid_femmesh(femmesh):
-        refedge_fem_volumeelements = []
-        # if at least two nodes of a femvolumeelement are in
-        # refedge_nodes the volume is added to refedge_fem_volumeelements
-        for elem in femelement_table:
-            nodecount = 0
-            for node in femelement_table[elem]:
-                if node in refedge_nodes:
-                    nodecount += 1
-            if nodecount > 1:
-                refedge_fem_volumeelements.append(elem)
-        # for every refedge_fem_volumeelement look which of its nodes
-        # is in refedge_nodes --> add all these nodes to edge_table
-        for elem in refedge_fem_volumeelements:
-            fe_refedge_nodes = []
-            for node in femelement_table[elem]:
-                if node in refedge_nodes:
-                    fe_refedge_nodes.append(node)
-                # { volumeID : ( edgenodeID, ... , edgenodeID  )} # only the refedge nodes
-                edge_table[elem] = fe_refedge_nodes
-        # FIXME: duplicate_mesh_elements: as soon as contact and springs are supported
-        # the user should decide on which edge the load is applied
-        edge_table = delete_duplicate_mesh_elements(edge_table)
-    elif is_face_femmesh(femmesh):
-        refedge_fem_faceelements = []
-        # if at least two nodes of a femfaceelement are in
-        # refedge_nodes the volume is added to refedge_fem_volumeelements
-        for elem in femelement_table:
-            nodecount = 0
-            for node in femelement_table[elem]:
-                if node in refedge_nodes:
-                    nodecount += 1
-            if nodecount > 1:
-                refedge_fem_faceelements.append(elem)
-        # for every refedge_fem_faceelement look which of its nodes is in
-        # refedge_nodes --> add all these nodes to edge_table
-        for elem in refedge_fem_faceelements:
-            fe_refedge_nodes = []
-            for node in femelement_table[elem]:
-                if node in refedge_nodes:
-                    fe_refedge_nodes.append(node)
-                # { faceID : ( edgenodeID, ... , edgenodeID  )} # only the refedge nodes
-                edge_table[elem] = fe_refedge_nodes
-        # FIXME: duplicate_mesh_elements: as soon as contact and springs are supported
-        # the user should decide on which edge the load is applied
-        edge_table = delete_duplicate_mesh_elements(edge_table)
-    elif is_edge_femmesh(femmesh):
-        refedge_fem_edgeelements = get_femelements_by_femnodes_std(femelement_table, refedge_nodes)
-        for elem in refedge_fem_edgeelements:
+    refedge_nodes = set(femmesh.getNodesByEdge(refedge))
+
+    # The dimension of the mesh as a whole says nothing about the component this
+    # edge belongs to, so the elements sitting on the edge are asked instead. The
+    # lowest dimension found owns the edge: where a beam was meshed the load goes
+    # on the beam, not on a solid the beam happens to touch.
+    for dim in (1, 2, 3):
+        table = table_of_dimension(femmesh, femelement_table, dim)
+        # an element needs at least two nodes on the edge to have a piece of it
+        on_edge = {
+            elem: [node for node in nodes if node in refedge_nodes]
+            for elem, nodes in table.items()
+            if len(refedge_nodes.intersection(nodes)) > 1
+        }
+        if not on_edge:
+            continue
+        if dim == 1:
             # { edgeID : ( nodeID, ... , nodeID  )} # all nodes off this femedgeelement
-            edge_table[elem] = femelement_table[elem]
+            return {elem: table[elem] for elem in on_edge}
+        # { elementID : ( edgenodeID, ... , edgenodeID  )} # only the refedge nodes
+        # FIXME: duplicate_mesh_elements: as soon as contact and springs are supported
+        # the user should decide on which edge the load is applied
+        return delete_duplicate_mesh_elements(on_edge)
+
     return edge_table
 
 
@@ -1217,12 +1332,19 @@ def get_force_obj_face_nodeload_table(femmesh, femelement_table, femnodes_mesh, 
 def get_ref_facenodes_table(femmesh, femelement_table, ref_face):
     face_table = {}  # { meshfaceID : ( nodeID, ... , nodeID ) }
     if is_solid_femmesh(femmesh):
-        if has_no_face_data(femmesh):
+        # Whether face elements sit on this very reference is the question, not
+        # whether the mesh holds any at all: in a mixed mesh the face elements
+        # belong to the shell components and a solid reference has none of them.
+        ref_faces = femmesh.getFacesByFace(ref_face) if femmesh.FaceCount else ()
+        if not ref_faces:
             FreeCAD.Console.PrintMessage(
-                "  No face data in finite volume element mesh. "
+                "  No face data on the reference of a finite volume element mesh. "
                 "FreeCAD uses getccxVolumesByFace() "
                 "to retrieve the volume elements of the ref_face.\n"
             )
+            # The searches below tell element types apart by their node count,
+            # which is only unique among volumes.
+            volume_table = table_of_dimension(femmesh, femelement_table, 3)
             # there is no face data
             # if we retrieve the nodes ourself we will have a problem:
             # they are not sorted, we just have the nodes.
@@ -1242,7 +1364,7 @@ def get_ref_facenodes_table(femmesh, femelement_table, ref_face):
                 for ve in ref_face_volume_elements:
                     veID = ve[0]
                     ve_ref_face_nodes = []
-                    for nodeID in femelement_table[veID]:
+                    for nodeID in volume_table[veID]:
                         if nodeID in ref_face_nodes:
                             ve_ref_face_nodes.append(nodeID)
                     # { volumeID : ( facenodeID, ... , facenodeID ) } only the ref_face nodes
@@ -1255,26 +1377,26 @@ def get_ref_facenodes_table(femmesh, femelement_table, ref_face):
                 )
                 # list of integer [mv]
                 ref_face_volume_elements = get_femvolumeelements_by_femfacenodes(
-                    femelement_table, ref_face_nodes
+                    volume_table, ref_face_nodes
                 )
                 for veID in ref_face_volume_elements:
                     ve_ref_face_nodes = []
-                    for nodeID in femelement_table[veID]:
+                    for nodeID in volume_table[veID]:
                         if nodeID in ref_face_nodes:
                             ve_ref_face_nodes.append(nodeID)
                     # { volumeID : ( facenodeID, ... , facenodeID ) } only the ref_face nodes
                     face_table[veID] = ve_ref_face_nodes
                 # we need to resort the nodes to make them build an element face
-                face_table = build_mesh_faces_of_volume_elements(face_table, femelement_table)
-        else:  # the femmesh has face_data
-            faces = femmesh.getFacesByFace(ref_face)  # (mv, mf)
-            for mf in faces:
+                face_table = build_mesh_faces_of_volume_elements(face_table, volume_table)
+        else:  # the mesh has face elements on the reference
+            for mf in ref_faces:
                 face_table[mf] = femmesh.getElementNodes(mf)
     elif is_face_femmesh(femmesh):
         ref_face_nodes = femmesh.getNodesByFace(ref_face)
-        ref_face_elements = get_femelements_by_femnodes_std(femelement_table, ref_face_nodes)
+        faces_table = table_of_dimension(femmesh, femelement_table, 2)
+        ref_face_elements = get_femelements_by_femnodes_std(faces_table, ref_face_nodes)
         for mf in ref_face_elements:
-            face_table[mf] = femelement_table[mf]
+            face_table[mf] = faces_table[mf]
     # FreeCAD.Console.PrintMessage("{}\n".format(face_table))
     return face_table
 
@@ -1608,57 +1730,56 @@ def pair_obj_reference(obj_ref):
     return pairs
 
 
+REFERENCE_DIMENSION = {"Solid": 3, "Face": 2, "Edge": 1, "Vertex": 0}
+
+
+def get_entity_dimension(sets_getter, ref_pair):
+    """Analysis dimension of the mesh structure the reference *ref_pair* sits on.
+
+    A reference of the same dimension names model elements itself, a reference of
+    a lower dimension names the boundary of higher-dimensional ones. In a mixed
+    mesh this differs per component, so the classification of the mesh is asked
+    first and only falls back to the single dimension of the whole mesh.
+    """
+    ref_obj, sub_ref = ref_pair
+    entity_dims = get_entity_dimension_map(getattr(sets_getter, "mesh_object", None))
+    entity_dim = entity_dims.get(get_femmesh_group_name(ref_obj, sub_ref))
+    if entity_dim is not None:
+        return entity_dim
+
+    if is_solid_femmesh(sets_getter.femmesh):
+        return 3
+    if is_face_femmesh(sets_getter.femmesh):
+        return 2
+    if is_edge_femmesh(sets_getter.femmesh):
+        return 1
+    return 0
+
+
 def get_elements(sets_getter, ref_pair, face_masks, edge_masks):
     ref_obj, sub_ref = ref_pair
     geom_type = ref_obj.getSubObject(sub_ref).ShapeType
-    elem = []
-    is_sub_element = False
-    model_dim = 0
-    if is_solid_femmesh(sets_getter.femmesh):
-        model_dim = 3
-    elif is_face_femmesh(sets_getter.femmesh):
-        model_dim = 2
-    elif is_edge_femmesh(sets_getter.femmesh):
-        model_dim = 1
+    sub = (ref_obj, (sub_ref,))
 
-    match model_dim:
-        case 3:
-            match geom_type:
-                case "Solid":
-                    elem = get_elements_by_references(sets_getter, ref_pair)
-                    is_sub_element = False
-                case "Face" | "Edge" | "Vertex":
-                    elem = get_subelements_by_references(
-                        sets_getter, ref_pair, face_masks, edge_masks
-                    )
-                    is_sub_element = True
-        case 2:
-            match geom_type:
-                case "Face":
-                    elem = get_elements_by_references(sets_getter, ref_pair)
-                    is_sub_element = False
-                case "Edge" | "Vertex":
-                    elem = get_subelements_by_references(
-                        sets_getter, ref_pair, face_masks, edge_masks
-                    )
-                    is_sub_element = True
-        case 1:
-            match geom_type:
-                case "Edge":
-                    is_sub_element = False
-                    elem = get_elements_by_references(sets_getter, ref_pair)
-                case "Vertex":
-                    elem = get_subelements_by_references(
-                        sets_getter, ref_pair, face_masks, edge_masks
-                    )
-                    is_sub_element = True
-        case 0:
-            match geom_type:
-                case "Vertex":
-                    elem = get_elements_by_references(sets_getter, ref_pair)
-                    is_sub_element = False
+    ref_dim = REFERENCE_DIMENSION.get(geom_type)
+    if ref_dim is None:
+        FreeCAD.Console.PrintError(
+            f"Reference {ref_obj.Name}.{sub_ref} is a {geom_type}, "
+            "which no mesh element stands for.\n"
+        )
+        return (sub, [], False)
 
-    return (*elem, is_sub_element)
+    entity_dim = get_entity_dimension(sets_getter, ref_pair)
+    if ref_dim < entity_dim:
+        elem = get_subelements_by_references(
+            sets_getter, ref_pair, face_masks, edge_masks, entity_dim
+        )
+        return (*elem, True)
+
+    # A reference above the dimension its mesh reached, a solid meshed as a
+    # shell for instance, has to be searched for at the dimension of the mesh.
+    elem = get_elements_by_references(sets_getter, ref_pair, min(ref_dim, entity_dim))
+    return (*elem, False)
 
 
 def get_nodes_of_reference(femmesh, sub):
@@ -1678,29 +1799,35 @@ def get_nodes_of_reference(femmesh, sub):
     return sorted(set(get_femnodes_by_references(femmesh, [sub])))
 
 
-def get_model_group_type(femmesh):
-    """Type of the mesh groups that hold the elements the mesh is made of."""
-    if is_solid_femmesh(femmesh):
-        return "Volume"
-    if is_face_femmesh(femmesh):
-        return "Face"
-    if is_edge_femmesh(femmesh):
-        return "Edge"
-    return None
+def get_group_type_of_dimension(dim):
+    """Type of the mesh group which holds elements of analysis dimension *dim*.
+
+    Vertices are left out: a reference to one stands for a node, and nodes are
+    not elements a set can be written for.
+    """
+    return {3: "Volume", 2: "Face", 1: "Edge"}.get(dim)
 
 
-def get_elements_by_references(sets_getter, femobj_ref):
+def get_elements_by_references(sets_getter, femobj_ref, target_dim=None):
+    """Model elements of dimension *target_dim* which the reference is made of.
+
+    *target_dim* defaults to the dimension of the reference itself and only
+    differs for a component whose mesh stayed below its geometric dimension.
+    """
     elem = []
     feat, sub_ref = femobj_ref
     sub = (feat, (sub_ref,))
     femmesh = sets_getter.femmesh
 
-    # A group of the dimension the mesh is made of already is the element set
-    # the search would arrive at, so there is nothing left to search for. A
-    # group of a lower dimension holds surface or edge elements instead and
-    # only serves to name the nodes below.
-    group_type = get_femmesh_group_type(sub_ref)
-    if group_type is not None and group_type == get_model_group_type(femmesh):
+    if target_dim is None:
+        target_dim = REFERENCE_DIMENSION.get(feat.getSubObject(sub_ref).ShapeType)
+
+    # A group of the dimension we are after already is the element set the
+    # search would arrive at, so there is nothing left to search for. A group of
+    # a lower dimension holds surface or edge elements instead and only serves
+    # to name the nodes below.
+    group_type = get_group_type_of_dimension(target_dim)
+    if group_type is not None and group_type == get_femmesh_group_type(sub_ref):
         group_elements = get_femmesh_groupdata_sets_by_refs(femmesh, [sub], group_type)
         if group_elements:
             FreeCAD.Console.PrintLog(
@@ -1711,28 +1838,39 @@ def get_elements_by_references(sets_getter, femobj_ref):
 
     charged_volume_node_set = get_nodes_of_reference(sets_getter.femmesh, sub)
 
+    # One dimension at a time, so that the node count identifies the element
+    # type: in a mixed mesh a quad4 would otherwise pass for a tetra4.
+    element_table, femnodes_ele_table = sets_getter.tables_for_dimension(target_dim)
     bit_pattern_dict = get_bit_pattern_dict(
-        sets_getter.femelement_table, sets_getter.femnodes_ele_table, charged_volume_node_set
+        element_table, femnodes_ele_table, charged_volume_node_set
     )
-    sh = feat.getSubObject(sub_ref)
-    if sh.ShapeType == "Solid":
+    if target_dim == 3:
         elem = get_element_volumes_elements_from_binary_search(bit_pattern_dict)
-    elif sh.ShapeType == "Face":
+    elif target_dim == 2:
         elem = get_element_faces_elements_from_binary_search(bit_pattern_dict)
-    elif sh.ShapeType == "Edge":
+    elif target_dim == 1:
         elem = get_element_edges_elements_from_binary_search(bit_pattern_dict)
 
     return (sub, elem)
 
 
-def get_subelements_by_references(sets_getter, femobj_ref, face_masks, edge_masks):
+def get_subelements_by_references(sets_getter, femobj_ref, face_masks, edge_masks, owner_dim=None):
+    """Faces or edges of the model elements *femobj_ref* is the boundary of.
+
+    *owner_dim* is the dimension of those elements: element faces come from
+    volumes, element edges from faces. It defaults to the dimension of the mesh
+    structure the reference sits on.
+    """
     sub_elem = []
     feat, sub_ref = femobj_ref
     sub = (feat, (sub_ref,))
     charged_face_node_set = get_nodes_of_reference(sets_getter.femmesh, sub)
 
+    if owner_dim is None:
+        owner_dim = get_entity_dimension(sets_getter, femobj_ref)
+    element_table, femnodes_ele_table = sets_getter.tables_for_dimension(owner_dim)
     bit_pattern_dict = get_bit_pattern_dict(
-        sets_getter.femelement_table, sets_getter.femnodes_ele_table, charged_face_node_set
+        element_table, femnodes_ele_table, charged_face_node_set
     )
     sh = feat.getSubObject(sub_ref)
     if sh.ShapeType == "Face":

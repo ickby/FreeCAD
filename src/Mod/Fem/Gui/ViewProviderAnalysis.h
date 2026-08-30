@@ -24,14 +24,22 @@
 
 #pragma once
 
+#include <map>
+#include <memory>
+#include <string>
+
 #include <Gui/ViewProviderDocumentObjectGroup.h>
 #include <Gui/ViewProviderFeaturePython.h>
 #include <App/PropertyStandard.h>
 #include <Mod/Fem/FemGlobal.h>
 #include <QCoreApplication>
 
+#include "AnalysisViewState.h"
+
 namespace FemGui
 {
+
+class ClipPlaneHandle;
 
 class ViewProviderFemAnalysis;
 class ViewProviderFemHighlighter
@@ -117,6 +125,17 @@ public:
      */
     SoSeparator* getClipPlaneRoot();
 
+    /**
+     * The 3D handle of clip plane @a name, or null if there is no such plane.
+     *
+     * Handles belong to the analysis, not to whoever put the plane there, so
+     * a caller that wants to drive one looks it up rather than holding it.
+     */
+    ClipPlaneHandle* getClipPlaneHandle(const std::string& name) const;
+
+    /** Re-fit every handle to the model, after it changed size or appeared. */
+    void refreshClipPlaneHandles();
+
     /** @name Drag and drop */
     //@{
     /// Returns true if the view provider generally supports dragging objects
@@ -138,8 +157,25 @@ protected:
     void unsetEdit(int ModNum) override;
 
 private:
+    /**
+     * Give every clip plane of the view state a handle, and no other.
+     *
+     * The planes are the truth and the handles follow them, which is what
+     * lets a toolbar command add a plane without knowing that draggers or
+     * view panels exist.
+     */
+    void syncClipPlaneHandles();
+    void connectViewState();
+
     ViewProviderFemHighlighter extension;
     Gui::CoinPtr<SoSeparator> clipPlaneRoot;
+
+    std::map<std::string, std::unique_ptr<ClipPlaneHandle>> clipPlaneHandles;
+    /// The planes as of the last sync, to tell a real change from a passing one
+    std::map<std::string, ClippingPlane> syncedClipPlanes;
+    AnalysisViewState::Connection viewStateConn;
+    /// Guards against a sync that is set off by the syncing itself
+    bool syncingClipPlanes {false};
 };
 
 using ViewProviderFemAnalysisPython = Gui::ViewProviderFeaturePythonT<ViewProviderFemAnalysis>;

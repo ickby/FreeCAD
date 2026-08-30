@@ -27,6 +27,7 @@
 
 #include <App/DocumentObjectPy.h>
 #include <Base/Tools.h>
+#include <Base/VectorPy.h>
 #include <Gui/BitmapFactory.h>
 #include <Gui/Document.h>
 #include <Gui/EditorView.h>
@@ -83,11 +84,18 @@ public:
             "given or active analysis."
         );
         add_varargs_method(
-            "createClipPlane",
-            &Module::createClipPlane,
-            "createClipPlane([AnalysisObject], [name]) -- Interactive clip plane handle for "
-            "the given or active analysis. A new plane starts clipping at the model center, "
-            "an existing name adopts that plane."
+            "addClipPlane",
+            &Module::addClipPlane,
+            "addClipPlane([AnalysisObject], [origin], [normal], [scope]) -- Add a clip plane "
+            "to the given or active analysis and return it. Without a place it cuts the top "
+            "off the model, with one it cuts through there, e.g. along a picked face."
+        );
+        add_varargs_method(
+            "getClipPlane",
+            &Module::getClipPlane,
+            "getClipPlane(AnalysisObject, name) -- The clip plane of that name, or None. "
+            "The 3D handle belongs to the analysis, so this is how to reach one rather "
+            "than holding on to it."
         );
         add_varargs_method(
             "perfEnable",
@@ -231,32 +239,65 @@ private:
         }
         return AnalysisViewStatePy::create(state);
     }
-    Py::Object createClipPlane(const Py::Tuple& args)
+    Py::Object addClipPlane(const Py::Tuple& args)
     {
         PyObject* object = nullptr;
-        char* name = nullptr;
+        PyObject* origin = nullptr;
+        PyObject* normal = nullptr;
+        const char* scope = "";
         if (!PyArg_ParseTuple(
                 args.ptr(),
-                "|O!s",
+                "|O!O!O!s",
                 &(App::DocumentObjectPy::Type),
                 &object,
-                &name
+                &(Base::VectorPy::Type),
+                &origin,
+                &(Base::VectorPy::Type),
+                &normal,
+                &scope
             )) {
             throw Py::Exception();
+        }
+        if (static_cast<bool>(origin) != static_cast<bool>(normal)) {
+            throw Py::Exception(
+                Base::PyExc_FC_GeneralError,
+                "A clip plane is placed by an origin and a normal together, or by neither"
+            );
         }
 
         Fem::FemAnalysis* analysis = resolveAnalysis(object);
         if (!analysis) {
             return Py::None();
         }
-        auto handle = ClipPlaneHandle::create(analysis, name ? std::string(name) : std::string());
-        if (!handle) {
-            throw Py::Exception(
-                Base::PyExc_FC_GeneralError,
-                "Analysis has no view provider to attach a clip plane to"
-            );
+        // The plane goes into the view state, and the analysis view provider
+        // gives it its 3D handle from there.
+        const std::string name = origin
+            ? ClipPlaneHandle::addPlane(
+                  analysis,
+                  *static_cast<Base::VectorPy*>(origin)->getVectorPtr(),
+                  *static_cast<Base::VectorPy*>(normal)->getVectorPtr(),
+                  scope
+              )
+            : ClipPlaneHandle::addPlane(analysis);
+        if (name.empty()) {
+            return Py::None();
         }
-        return ClipPlaneHandlePy::create(std::move(handle));
+        return ClipPlaneHandlePy::create(analysis, name);
+    }
+    Py::Object getClipPlane(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        const char* name = nullptr;
+        if (!PyArg_ParseTuple(args.ptr(), "O!s", &(App::DocumentObjectPy::Type), &object, &name)) {
+            throw Py::Exception();
+        }
+
+        Fem::FemAnalysis* analysis = resolveAnalysis(object);
+        auto* state = analysis ? AnalysisViewState::find(analysis) : nullptr;
+        if (!state || state->clipPlanes().count(name) == 0) {
+            return Py::None();
+        }
+        return ClipPlaneHandlePy::create(analysis, name);
     }
     Py::Object perfEnable(const Py::Tuple& args)
     {

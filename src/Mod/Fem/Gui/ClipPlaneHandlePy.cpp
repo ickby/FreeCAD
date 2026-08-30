@@ -25,8 +25,13 @@
 #include <sstream>
 
 #include <Base/VectorPy.h>
+#include <Gui/Application.h>
+#include <Gui/Document.h>
+#include <Mod/Fem/App/FemAnalysis.h>
 
+#include "AnalysisViewState.h"
 #include "ClipPlaneHandlePy.h"
+#include "ViewProviderAnalysis.h"
 
 using namespace FemGui;
 
@@ -85,7 +90,7 @@ void ClipPlaneHandlePy::init_type()
     add_varargs_method(
         "remove",
         &ClipPlaneHandlePy::remove,
-        "remove() -- drop the plane and its 3D widget"
+        "remove() -- delete the plane, which retires its 3D widget with it"
     );
 
     // Without this the methods registered above are not reachable from Python.
@@ -93,34 +98,60 @@ void ClipPlaneHandlePy::init_type()
     behaviors().readyType();
 }
 
-Py::Object ClipPlaneHandlePy::create(std::unique_ptr<ClipPlaneHandle> handle)
+Py::Object ClipPlaneHandlePy::create(Fem::FemAnalysis* analysis, std::string name)
 {
-    return Py::asObject(new ClipPlaneHandlePy(std::move(handle)));
+    return Py::asObject(new ClipPlaneHandlePy(analysis, std::move(name)));
 }
 
-ClipPlaneHandlePy::ClipPlaneHandlePy(std::unique_ptr<ClipPlaneHandle> handle)
-    : m_handle(std::move(handle))
+ClipPlaneHandlePy::ClipPlaneHandlePy(Fem::FemAnalysis* analysis, std::string name)
+    : m_analysis(analysis)
+    , m_name(std::move(name))
 {}
 
 ClipPlaneHandlePy::~ClipPlaneHandlePy() = default;
 
+Fem::FemAnalysis* ClipPlaneHandlePy::analysis() const
+{
+    return m_analysis.get<Fem::FemAnalysis>();
+}
+
+AnalysisViewState* ClipPlaneHandlePy::viewState() const
+{
+    return AnalysisViewState::find(analysis());
+}
+
+ClipPlaneHandle* ClipPlaneHandlePy::handle() const
+{
+    auto* obj = analysis();
+    if (!obj || !Gui::Application::Instance) {
+        return nullptr;
+    }
+    auto* guiDoc = Gui::Application::Instance->getDocument(obj->getDocument());
+    if (!guiDoc) {
+        return nullptr;
+    }
+    auto* vp = freecad_cast<ViewProviderFemAnalysis*>(guiDoc->getViewProvider(obj));
+    return vp ? vp->getClipPlaneHandle(m_name) : nullptr;
+}
+
 Py::Object ClipPlaneHandlePy::repr()
 {
     std::ostringstream s;
-    s << "<ClipPlaneHandle " << (m_handle ? m_handle->name() : std::string("removed")) << ">";
+    s << "<ClipPlaneHandle " << (handle() ? m_name : m_name + ", removed") << ">";
     return Py::String(s.str());
 }
 
 Py::Object ClipPlaneHandlePy::getName(const Py::Tuple& args)
 {
     (void)args;
-    return Py::String(m_handle ? m_handle->name() : std::string());
+    return Py::String(m_name);
 }
 
 Py::Object ClipPlaneHandlePy::isActive(const Py::Tuple& args)
 {
     (void)args;
-    return Py::Boolean(m_handle && m_handle->isActive());
+    auto* self = handle();
+    return Py::Boolean(self && self->isActive());
 }
 
 Py::Object ClipPlaneHandlePy::setActive(const Py::Tuple& args)
@@ -129,8 +160,8 @@ Py::Object ClipPlaneHandlePy::setActive(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "O", &value)) {
         throw Py::Exception();
     }
-    if (m_handle) {
-        m_handle->setActive(PyObject_IsTrue(value) != 0);
+    if (auto* self = handle()) {
+        self->setActive(PyObject_IsTrue(value) != 0);
     }
     return Py::None();
 }
@@ -138,7 +169,8 @@ Py::Object ClipPlaneHandlePy::setActive(const Py::Tuple& args)
 Py::Object ClipPlaneHandlePy::isWidgetVisible(const Py::Tuple& args)
 {
     (void)args;
-    return Py::Boolean(m_handle && m_handle->isWidgetVisible());
+    auto* self = handle();
+    return Py::Boolean(self && self->isWidgetVisible());
 }
 
 Py::Object ClipPlaneHandlePy::setWidgetVisible(const Py::Tuple& args)
@@ -147,8 +179,8 @@ Py::Object ClipPlaneHandlePy::setWidgetVisible(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "O", &value)) {
         throw Py::Exception();
     }
-    if (m_handle) {
-        m_handle->setWidgetVisible(PyObject_IsTrue(value) != 0);
+    if (auto* self = handle()) {
+        self->setWidgetVisible(PyObject_IsTrue(value) != 0);
     }
     return Py::None();
 }
@@ -156,7 +188,8 @@ Py::Object ClipPlaneHandlePy::setWidgetVisible(const Py::Tuple& args)
 Py::Object ClipPlaneHandlePy::getScope(const Py::Tuple& args)
 {
     (void)args;
-    return Py::String(m_handle ? m_handle->scope() : std::string());
+    auto* self = handle();
+    return Py::String(self ? self->scope() : std::string());
 }
 
 Py::Object ClipPlaneHandlePy::setScope(const Py::Tuple& args)
@@ -165,8 +198,8 @@ Py::Object ClipPlaneHandlePy::setScope(const Py::Tuple& args)
     if (!PyArg_ParseTuple(args.ptr(), "s", &scope)) {
         throw Py::Exception();
     }
-    if (m_handle) {
-        m_handle->setScope(scope ? scope : "");
+    if (auto* self = handle()) {
+        self->setScope(scope ? scope : "");
     }
     return Py::None();
 }
@@ -174,14 +207,16 @@ Py::Object ClipPlaneHandlePy::setScope(const Py::Tuple& args)
 Py::Object ClipPlaneHandlePy::getOrigin(const Py::Tuple& args)
 {
     (void)args;
-    Base::Vector3d origin = m_handle ? m_handle->origin() : Base::Vector3d();
+    auto* self = handle();
+    Base::Vector3d origin = self ? self->origin() : Base::Vector3d();
     return Py::asObject(new Base::VectorPy(origin));
 }
 
 Py::Object ClipPlaneHandlePy::getNormal(const Py::Tuple& args)
 {
     (void)args;
-    Base::Vector3d normal = m_handle ? m_handle->normal() : Base::Vector3d(0, 0, 1);
+    auto* self = handle();
+    Base::Vector3d normal = self ? self->normal() : Base::Vector3d(0, 0, 1);
     return Py::asObject(new Base::VectorPy(normal));
 }
 
@@ -199,8 +234,8 @@ Py::Object ClipPlaneHandlePy::setPlane(const Py::Tuple& args)
         )) {
         throw Py::Exception();
     }
-    if (m_handle) {
-        m_handle->setPlane(
+    if (auto* self = handle()) {
+        self->setPlane(
             *static_cast<Base::VectorPy*>(origin)->getVectorPtr(),
             *static_cast<Base::VectorPy*>(normal)->getVectorPtr()
         );
@@ -211,7 +246,8 @@ Py::Object ClipPlaneHandlePy::setPlane(const Py::Tuple& args)
 Py::Object ClipPlaneHandlePy::getOffsetStep(const Py::Tuple& args)
 {
     (void)args;
-    return Py::Float(m_handle ? m_handle->appliedOffsetStep() : ClipPlaneHandle::offsetStep());
+    auto* self = handle();
+    return Py::Float(self ? self->appliedOffsetStep() : ClipPlaneHandle::offsetStep());
 }
 
 Py::Object ClipPlaneHandlePy::setOffsetStep(const Py::Tuple& args)
@@ -244,8 +280,8 @@ Py::Object ClipPlaneHandlePy::setAngleStep(const Py::Tuple& args)
 Py::Object ClipPlaneHandlePy::refresh(const Py::Tuple& args)
 {
     (void)args;
-    if (m_handle) {
-        m_handle->refresh();
+    if (auto* self = handle()) {
+        self->refresh();
     }
     return Py::None();
 }
@@ -253,6 +289,11 @@ Py::Object ClipPlaneHandlePy::refresh(const Py::Tuple& args)
 Py::Object ClipPlaneHandlePy::remove(const Py::Tuple& args)
 {
     (void)args;
-    m_handle.reset();
+    // The plane goes, and the analysis view provider retires the handle for
+    // it. Going through the handle would mean asking it to arrange its own
+    // deletion, which is a harder thing to get right than it looks.
+    if (auto* state = viewState()) {
+        state->removeClipPlane(m_name);
+    }
     return Py::None();
 }

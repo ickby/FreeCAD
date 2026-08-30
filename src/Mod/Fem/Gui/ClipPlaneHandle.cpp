@@ -138,6 +138,45 @@ void addObjectBoundingBox(
     }
 }
 
+/// The 3D view an analysis is shown in, preferring the active one.
+Gui::View3DInventorViewer* viewerFor(Fem::FemAnalysis* analysis)
+{
+    if (!analysis || !Gui::Application::Instance) {
+        return nullptr;
+    }
+    auto* guiDoc = Gui::Application::Instance->getDocument(analysis->getDocument());
+    if (!guiDoc) {
+        return nullptr;
+    }
+    if (auto* active = dynamic_cast<Gui::View3DInventor*>(guiDoc->getActiveView())) {
+        return active->getViewer();
+    }
+    for (auto* mdi : guiDoc->getMDIViewsOfType(Gui::View3DInventor::getClassTypeId())) {
+        if (auto* view = dynamic_cast<Gui::View3DInventor*>(mdi)) {
+            return view->getViewer();
+        }
+    }
+    return nullptr;
+}
+
+/// Extent of everything the analysis holds, the clip handles excluded.
+Base::BoundBox3d modelBoxOf(Fem::FemAnalysis* analysis)
+{
+    Base::BoundBox3d box;
+    if (!analysis || !Gui::Application::Instance) {
+        return box;
+    }
+    // getBoundingBox() needs a viewport to evaluate screen sized nodes
+    const Gui::View3DInventorViewer* view = viewerFor(analysis);
+    if (!view) {
+        return box;
+    }
+    for (auto* member : analysis->Group.getValues()) {
+        addObjectBoundingBox(member, view, box, 0);
+    }
+    return box;
+}
+
 }  // namespace
 
 std::vector<ClipPlaneHandle*> ClipPlaneHandle::s_handles;
@@ -147,7 +186,7 @@ std::unique_ptr<ClipPlaneHandle> ClipPlaneHandle::create(
     const std::string& name
 )
 {
-    if (!analysis || !Gui::Application::Instance) {
+    if (!analysis || name.empty() || !Gui::Application::Instance) {
         return nullptr;
     }
     auto* guiDoc = Gui::Application::Instance->getDocument(analysis->getDocument());
@@ -165,12 +204,41 @@ std::unique_ptr<ClipPlaneHandle> ClipPlaneHandle::create(
     // The handle only ever looks up an existing state from here on
     AnalysisViewState::forAnalysis(analysis);
 
-    std::unique_ptr<ClipPlaneHandle> handle(
-        new ClipPlaneHandle(analysis, name.empty() ? uniqueName(analysis) : name, parent)
-    );
+    std::unique_ptr<ClipPlaneHandle> handle(new ClipPlaneHandle(analysis, name, parent));
     handle->buildSceneGraph();
-    handle->initializePlane();
+    handle->adoptPlane();
     return handle;
+}
+
+std::string ClipPlaneHandle::addPlane(Fem::FemAnalysis* analysis)
+{
+    const Base::BoundBox3d box = modelBoxOf(analysis);
+    const Base::Vector3d center = box.IsValid() ? box.GetCenter() : Base::Vector3d(0, 0, 0);
+    // Normal pointing down, so the upper half of the model is the one cut away
+    return addPlane(analysis, center, Base::Vector3d(0, 0, -1));
+}
+
+std::string ClipPlaneHandle::addPlane(
+    Fem::FemAnalysis* analysis,
+    const Base::Vector3d& origin,
+    const Base::Vector3d& normal,
+    const std::string& scope
+)
+{
+    auto* state = AnalysisViewState::forAnalysis(analysis);
+    if (!state) {
+        return {};
+    }
+    ClippingPlane plane;
+    plane.Origin = origin;
+    plane.Direction = normal.Length() < minNormalLength ? Base::Vector3d(0, 0, -1) : normal;
+    plane.Scope = scope;
+    // A plane is added to be used, so it cuts right away
+    plane.Active = true;
+
+    const std::string name = uniqueName(analysis);
+    state->setClipPlane(name, plane);
+    return name;
 }
 
 std::string ClipPlaneHandle::uniqueName(Fem::FemAnalysis* analysis)
@@ -240,7 +308,7 @@ ClipPlaneHandle::ClipPlaneHandle(Fem::FemAnalysis* analysis, std::string name, S
 
 ClipPlaneHandle::~ClipPlaneHandle()
 {
-    remove();
+    detach();
     s_handles.erase(std::remove(s_handles.begin(), s_handles.end(), this), s_handles.end());
 }
 
@@ -331,48 +399,35 @@ void ClipPlaneHandle::hideArrowLabel()
     }
 }
 
-void ClipPlaneHandle::initializePlane()
+void ClipPlaneHandle::adoptPlane()
 {
-    bool adopted = false;
+    // Show where the plane already is. Nothing is written back: the plane was
+    // put in the view state before this handle was asked for, and writing
+    // during construction would notify the very code that is constructing us.
     if (auto* state = viewState()) {
         const auto& planes = state->clipPlanes();
         auto it = planes.find(m_name);
         if (it != planes.end()) {
-            // A plane of that name is already applied, e.g. restored from a
-            // saved document: take it over instead of moving it.
-            m_active = true;
-            adopted = true;
+            m_active = it->second.Active;
             m_scope = it->second.Scope;
-            setPlane(it->second.Origin, it->second.Direction);
+            m_dragger->translation.setValue(toSb(it->second.Origin));
+            Base::Vector3d dir = it->second.Direction;
+            if (dir.Length() > minNormalLength) {
+                dir.Normalize();
+                m_dragger->rotation.setValue(draggerRotation(dir));
+            }
+            m_dragger->clearIncrementCounts();
         }
-    }
-
-    if (!adopted) {
-        Base::BoundBox3d box = modelBoundingBox();
-        Base::Vector3d center = box.IsValid() ? box.GetCenter() : Base::Vector3d(0, 0, 0);
-        // Arrow pointing up, so the upper half of the model is cut away
-        setPlane(center, Base::Vector3d(0, 0, -1));
-        // A plane is added to be used, so it clips right away
-        setActive(true);
     }
 
     updateIndicatorSize();
     setUpViewportScale();
 }
 
-void ClipPlaneHandle::remove()
+void ClipPlaneHandle::detach()
 {
     if (m_removed) {
         return;
-    }
-
-    // Drop the plane before going inert, otherwise the view state keeps
-    // clipping against a handle that no longer exists.
-    if (m_active) {
-        if (auto* state = viewState()) {
-            state->removeClipPlane(m_name);
-        }
-        m_active = false;
     }
     m_removed = true;
 
@@ -413,39 +468,18 @@ AnalysisViewState* ClipPlaneHandle::viewState() const
 
 Gui::View3DInventorViewer* ClipPlaneHandle::viewer() const
 {
-    auto* obj = analysis();
-    if (!obj || !Gui::Application::Instance) {
-        return nullptr;
-    }
-    auto* guiDoc = Gui::Application::Instance->getDocument(obj->getDocument());
-    if (!guiDoc) {
-        return nullptr;
-    }
-    if (auto* active = dynamic_cast<Gui::View3DInventor*>(guiDoc->getActiveView())) {
-        return active->getViewer();
-    }
-    for (auto* mdi : guiDoc->getMDIViewsOfType(Gui::View3DInventor::getClassTypeId())) {
-        if (auto* view = dynamic_cast<Gui::View3DInventor*>(mdi)) {
-            return view->getViewer();
-        }
-    }
-    return nullptr;
+    return viewerFor(analysis());
 }
 
 void ClipPlaneHandle::setActive(bool on)
 {
-    if (m_removed) {
+    if (m_removed || m_active == on) {
         return;
     }
     m_active = on;
-    if (auto* state = viewState()) {
-        if (on) {
-            applyToViewState();
-        }
-        else {
-            state->removeClipPlane(m_name);
-        }
-    }
+    // Switched off the plane stays listed, only marked as cutting nothing, so
+    // the row and this handle survive to switch it back on where it was left.
+    applyToViewState();
 }
 
 void ClipPlaneHandle::setScope(const std::string& scope)
@@ -454,9 +488,7 @@ void ClipPlaneHandle::setScope(const std::string& scope)
         return;
     }
     m_scope = scope;
-    if (m_active) {
-        applyToViewState();
-    }
+    applyToViewState();
 }
 
 void ClipPlaneHandle::setWidgetVisible(bool on)
@@ -505,24 +537,24 @@ void ClipPlaneHandle::setPlane(const Base::Vector3d& origin, const Base::Vector3
     m_dragger->rotation.setValue(draggerRotation(dir));
     m_dragger->clearIncrementCounts();
 
-    if (m_active) {
-        applyToViewState();
-    }
+    applyToViewState();
 }
 
 void ClipPlaneHandle::refresh()
 {
-    if (m_removed) {
+    // Our own writes come straight back to us through the view state, and
+    // re-reading them would only cost a model bounding box per drag.
+    if (m_removed || m_applying) {
         return;
     }
 
-    // The view state is the truth for an applied plane: it survives a reload,
-    // and other code may have moved or dropped the plane behind our back.
+    // The view state is the truth for a plane: it survives a reload, and other
+    // code may have moved or switched the plane off behind our back.
     if (auto* state = viewState()) {
         const auto& planes = state->clipPlanes();
         auto it = planes.find(m_name);
-        m_active = it != planes.end();
-        if (m_active) {
+        if (it != planes.end()) {
+            m_active = it->second.Active;
             m_scope = it->second.Scope;
             m_dragger->translation.setValue(toSb(it->second.Origin));
             Base::Vector3d dir = it->second.Direction;
@@ -547,25 +579,15 @@ void ClipPlaneHandle::applyToViewState()
     plane.Origin = origin();
     plane.Direction = normal();
     plane.Scope = m_scope;
+    plane.Active = m_active;
+
+    Base::StateLocker lock(m_applying, true);
     state->setClipPlane(m_name, plane);
 }
 
 Base::BoundBox3d ClipPlaneHandle::modelBoundingBox() const
 {
-    Base::BoundBox3d box;
-    auto* obj = analysis();
-    if (!obj || !Gui::Application::Instance) {
-        return box;
-    }
-    // getBoundingBox() needs a viewport to evaluate screen sized nodes
-    const Gui::View3DInventorViewer* view = viewer();
-    if (!view) {
-        return box;
-    }
-    for (auto* member : obj->Group.getValues()) {
-        addObjectBoundingBox(member, view, box, 0);
-    }
-    return box;
+    return modelBoxOf(analysis());
 }
 
 void ClipPlaneHandle::updateIndicatorSize()
@@ -655,7 +677,5 @@ void ClipPlaneHandle::dragFinishCB(void* data, SoDragger*)
         return;
     }
     self->m_dragger->clearIncrementCounts();
-    if (self->m_active) {
-        self->applyToViewState();
-    }
+    self->applyToViewState();
 }

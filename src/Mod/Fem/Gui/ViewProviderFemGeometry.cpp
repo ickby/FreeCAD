@@ -1493,7 +1493,7 @@ void ViewProviderFemGeometry::updateVTK()
     // view panel describes that shape, and switching parts off is how the user
     // reaches what is buried inside.
     const auto& filtered = state ? state->hiddenElements() : empty_hidden;
-    const auto& clipper = state ? state->clipPlanes() : empty_clips;
+    const auto clipper = state ? state->activeClipPlanes() : empty_clips;
     const DimensionMode dimMode = state ? state->dimensionMode() : DimensionMode::Highest;
 
     IVtk_ShapeIdList passthrough_ids;
@@ -2067,7 +2067,7 @@ void ViewProviderFemGeometry::update3D()
 void ViewProviderFemGeometry::updateGeometryOverlay()
 {
     auto* state = m_boundViewState;
-    const auto& clipper = state ? state->clipPlanes() : std::map<std::string, ClippingPlane> {};
+    const auto clipper = state ? state->activeClipPlanes() : std::map<std::string, ClippingPlane> {};
     const std::set<std::string> empty_hidden;
     const auto& hidden = state ? state->hiddenElements() : empty_hidden;
     const bool wireframe = state ? state->wireframe() : (DisplayMode.getValue() == 1);

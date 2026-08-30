@@ -56,6 +56,9 @@ std::string stripTrailingDot(std::string path)
 
 bool clipApplies(const ClippingPlane& plane, const std::string& pathPrefix)
 {
+    if (!plane.Active) {
+        return false;
+    }
     if (plane.Scope.empty()) {
         return true;
     }

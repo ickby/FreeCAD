@@ -462,6 +462,7 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         self._update_method_page()
         self._update_summary()
         self._update_marks()
+        self._update_tool_preview()
 
     def _element_links(self):
         return _references_to_links(self.target_picker.references)
@@ -561,6 +562,7 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         self.obj.Document.recompute()
         self._update_summary()
         self._update_marks()
+        self._update_tool_preview()
 
     def _marked_elements(self):
         """Element names to mark per role, for the method currently chosen."""
@@ -588,6 +590,10 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
             elements = [sub for obj, sub in references if obj == self.base_obj and sub]
             view_geometry_base.set_input_marks(self.obj, role, elements, MARK_COLORS[role])
 
+    def _update_tool_preview(self):
+        preview = geometry_partition.build_tool_preview(self.obj)
+        view_geometry_base.set_tool_preview(self.obj, preview)
+
     def _update_summary(self):
         if not self.base_obj:
             self.summary.setText("")
@@ -611,6 +617,7 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
             picker.finish_selection()
         if self.base_obj:
             view_geometry_base.clear_input_marks(self.obj, MARK_TARGETS, MARK_POINTS, MARK_TOOL)
+            view_geometry_base.clear_tool_preview(self.obj)
 
     def accept(self):
         self.apply_properties()

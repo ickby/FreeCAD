@@ -44,6 +44,9 @@
 
 #include <Inventor/fields/SoSFColor.h>
 
+#include <Base/Color.h>
+#include <Mod/Part/App/TopoShape.h>
+
 #include "AnalysisViewState.h"
 #include "FemViewTypes.h"
 
@@ -65,6 +68,7 @@ namespace PartGui
 class SoBrepPointSet;
 class SoBrepEdgeSet;
 class SoBrepFaceSet;
+class SoPreviewShape;
 }
 
 namespace FemGui
@@ -166,6 +170,22 @@ public:
     const Base::Color* elementHighlightColor(const std::string& element) const;
     /** Colour used to mark elements when the caller names none. */
     static Base::Color defaultElementHighlightColor();
+
+    /**
+     * Show a temporary cutting-tool shape over this geometry.
+     *
+     * Used while a partition (or similar) panel is open. The overlay is
+     * unpickable and semi-transparent so it does not stand between the user
+     * and the geometry being edited. An empty shape clears the preview.
+     */
+    void setToolPreview(
+        const Part::TopoShape& shape,
+        const Base::Color& color,
+        float transparency
+    );
+    void clearToolPreview();
+    /** Colour used when the caller names none for the tool preview. */
+    static Base::Color defaultToolPreviewColor();
 
     PyObject* getPyObject() override;
 
@@ -326,6 +346,9 @@ protected:
     SoDrawStyle* m_highlightoverlaystyle {nullptr};
     SoIndexedLineSet* m_highlightoverlaylines {nullptr};
     SoIndexedPointSet* m_highlightoverlaypoints {nullptr};
+
+    // Cutting-tool preview while a chain-step panel is open (e.g. partition).
+    PartGui::SoPreviewShape* m_toolPreview {nullptr};
 
     SoSFColor m_colorhighlight;
     SoSFColor m_colorselection;

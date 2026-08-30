@@ -46,33 +46,29 @@ TaskFemConstraintSpring::TaskFemConstraintSpring(
     ViewProviderFemConstraintSpring* ConstraintView,
     QWidget* parent
 )
-    : TaskFemConstraintOnBoundary(ConstraintView, parent, "FEM_ConstraintSpring")
+    : TaskFemConstraint(ConstraintView, parent, "FEM_ConstraintSpring")
     , ui(new Ui_TaskFemConstraintSpring)
 {
     proxy = new QWidget(this);
     ui->setupUi(proxy);
     QMetaObject::connectSlotsByName(this);
 
-    // create a context menu for the listview of the references
-    createActions(ui->lw_references);
-    connect(deleteAction, &QAction::triggered, this, &TaskFemConstraintSpring::onReferenceDeleted);
-
-    connect(
-        ui->lw_references,
-        &QListWidget::currentItemChanged,
-        this,
-        &TaskFemConstraintSpring::setSelection
-    );
-    connect(ui->lw_references, &QListWidget::itemClicked, this, &TaskFemConstraintSpring::setSelection);
 
     this->groupLayout()->addWidget(proxy);
+    {
+        ReferenceSlotSpec spec;
+        spec.property = "References";
+        spec.title = tr("References").toStdString();
+        spec.types = {"Face"};
+        spec.homogeneous = false;
+        spec.armed = true;
+        addReferenceSelection({spec}, proxy);
+    }
 
     /* Note: */
     // Get the feature data
     Fem::ConstraintSpring* pcConstraint = ConstraintView->getObject<Fem::ConstraintSpring>();
 
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
 
     // Fill data into dialog elements
     ui->qsb_norm->setUnit(pcConstraint->NormalStiffness.getUnit());
@@ -92,172 +88,13 @@ TaskFemConstraintSpring::TaskFemConstraintSpring(
     ui->cb_elmer_stiffness->addItems(stiffnessesList);
     ui->cb_elmer_stiffness->setCurrentIndex(pcConstraint->ElmerStiffness.getValue());
 
-    ui->lw_references->clear();
-    for (std::size_t i = 0; i < Objects.size(); i++) {
-        ui->lw_references->addItem(makeRefText(Objects[i], SubElements[i]));
-    }
-    if (!Objects.empty()) {
-        ui->lw_references->setCurrentRow(0, QItemSelectionModel::ClearAndSelect);
-    }
-
-    ui->lbl_info->setText(
-        tr("Select geometry of type: ") + QString::fromUtf8("<b>%1</b>").arg(tr("Face"))
-    );
-
-    // Selection buttons
-    buttonGroup->addButton(ui->btnAdd, (int)SelectionChangeModes::refAdd);
-    buttonGroup->addButton(ui->btnRemove, (int)SelectionChangeModes::refRemove);
 
     ui->qsb_norm->bind(pcConstraint->NormalStiffness);
     ui->qsb_tan->bind(pcConstraint->TangentialStiffness);
-
-    updateUI();
 }
 
 TaskFemConstraintSpring::~TaskFemConstraintSpring() = default;
 
-void TaskFemConstraintSpring::updateUI()
-{
-    if (ui->lw_references->model()->rowCount() == 0) {
-        // Go into reference selection mode if no reference has been selected yet
-        onButtonReference(true);
-        return;
-    }
-}
-
-void TaskFemConstraintSpring::addToSelection()
-{
-    std::vector<Gui::SelectionObject> selection
-        = Gui::Selection().getSelectionEx();  // gets vector of selected objects of active document
-    if (selection.empty()) {
-        QMessageBox::warning(this, tr("Selection Error"), tr("Nothing selected!"));
-        return;
-    }
-    Fem::ConstraintSpring* pcConstraint = ConstraintView->getObject<Fem::ConstraintSpring>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-
-    for (auto& it : selection) {  // for every selected object
-        if (!checkReference(it.getObject())) {
-            return;
-        }
-
-        App::DocumentObject* obj = it.getObject();
-        if (obj->getDocument() != pcConstraint->getDocument()) {
-            QMessageBox::warning(
-                this,
-                tr("Selection Error"),
-                tr("External object selection is not supported")
-            );
-            return;
-        }
-
-        const std::vector<std::string>& subNames = it.getSubNames();
-        for (const auto& subName : subNames) {  // for every selected sub element
-
-            App::DocumentObject* refObj = obj;
-            std::string refSub = subName;
-            normalizeReference(refObj, refSub);
-            bool addMe = true;
-            if (subName.substr(0, 4) != "Face") {
-                QMessageBox::warning(this, tr("Selection Error"), tr("Only faces can be picked"));
-                return;
-            }
-            for (auto itr = std::ranges::find(SubElements, refSub); itr != SubElements.end(); itr
-                 = std::find(++itr,
-                             SubElements.end(),
-                             refSub)) {  // for every sub element in selection that
-                                          // matches one in old list
-                if (refObj
-                    == Objects[std::distance(
-                        SubElements.begin(),
-                        itr
-                    )]) {  // if selected sub element's object equals the one in old list
-                           // then it was added before so don't add
-                    addMe = false;
-                }
-            }
-            if (addMe) {
-                QSignalBlocker block(ui->lw_references);
-                Objects.push_back(refObj);
-                SubElements.push_back(refSub);
-                ui->lw_references->addItem(makeRefText(refObj, refSub));
-            }
-        }
-    }
-    // Update UI
-    pcConstraint->References.setValues(Objects, SubElements);
-    updateUI();
-}
-
-void TaskFemConstraintSpring::removeFromSelection()
-{
-    std::vector<Gui::SelectionObject> selection
-        = Gui::Selection().getSelectionEx();  // gets vector of selected objects of active document
-    if (selection.empty()) {
-        QMessageBox::warning(this, tr("Selection Error"), tr("Nothing selected!"));
-        return;
-    }
-    Fem::ConstraintSpring* pcConstraint = ConstraintView->getObject<Fem::ConstraintSpring>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-    std::vector<size_t> itemsToDel;
-    for (const auto& it : selection) {  // for every selected object
-        if (!checkReference(it.getObject())) {
-            return;
-        }
-        const std::vector<std::string>& subNames = it.getSubNames();
-        const App::DocumentObject* obj = it.getObject();
-
-        for (const auto& subName : subNames) {  // for every selected sub element
-            for (auto itr = std::ranges::find(SubElements, subName); itr != SubElements.end(); itr
-                 = std::find(++itr,
-                             SubElements.end(),
-                             subName)) {  // for every sub element in selection that
-                                          // matches one in old list
-                if (obj
-                    == Objects[std::distance(
-                        SubElements.begin(),
-                        itr
-                    )]) {  // if selected sub element's object equals the one in old list
-                           // then it was added before so mark for deletion
-                    itemsToDel.push_back(std::distance(SubElements.begin(), itr));
-                }
-            }
-        }
-    }
-    std::sort(itemsToDel.begin(), itemsToDel.end());
-    while (!itemsToDel.empty()) {
-        Objects.erase(Objects.begin() + itemsToDel.back());
-        SubElements.erase(SubElements.begin() + itemsToDel.back());
-        itemsToDel.pop_back();
-    }
-    // Update UI
-    {
-        QSignalBlocker block(ui->lw_references);
-        ui->lw_references->clear();
-        for (unsigned int j = 0; j < Objects.size(); j++) {
-            ui->lw_references->addItem(makeRefText(Objects[j], SubElements[j]));
-        }
-    }
-    pcConstraint->References.setValues(Objects, SubElements);
-    updateUI();
-}
-
-void TaskFemConstraintSpring::onReferenceDeleted()
-{
-    TaskFemConstraintSpring::removeFromSelection();
-}
-
-const std::string TaskFemConstraintSpring::getReferences() const
-{
-    int rows = ui->lw_references->model()->rowCount();
-    std::vector<std::string> items;
-    for (int r = 0; r < rows; r++) {
-        items.push_back(ui->lw_references->item(r)->text().toStdString());
-    }
-    return TaskFemConstraint::getReferences(items);
-}
 
 std::string TaskFemConstraintSpring::getNormalStiffness() const
 {
@@ -277,15 +114,6 @@ std::string TaskFemConstraintSpring::getElmerStiffness() const
 void TaskFemConstraintSpring::changeEvent(QEvent*)
 {}
 
-void TaskFemConstraintSpring::clearButtons(const SelectionChangeModes notThis)
-{
-    if (notThis != SelectionChangeModes::refAdd) {
-        ui->btnAdd->setChecked(false);
-    }
-    if (notThis != SelectionChangeModes::refRemove) {
-        ui->btnRemove->setChecked(false);
-    }
-}
 
 //**************************************************************************
 // TaskDialog

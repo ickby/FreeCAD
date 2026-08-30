@@ -127,7 +127,14 @@ bool SelectionGatePython::allow(App::Document* doc, App::DocumentObject* obj, co
             args.setItem(1, pyObj);
             args.setItem(2, pySub);
             Py::Boolean ok(method.apply(args));
-            return (bool)ok;
+            this->notAllowedReason.clear();
+            if (this->gate.hasAttr(std::string("notAllowedReason"))) {
+                Py::Object reason(this->gate.getAttr(std::string("notAllowedReason")));
+                if (!reason.isNone()) {
+                    this->notAllowedReason = static_cast<std::string>(Py::String(reason.str()));
+                }
+            }
+            return static_cast<bool>(ok);
         }
     }
     catch (Py::Exception&) {
@@ -136,6 +143,36 @@ bool SelectionGatePython::allow(App::Document* doc, App::DocumentObject* obj, co
     }
 
     return true;
+}
+
+std::unordered_set<std::string> SelectionGatePython::getGatedTypes(
+    const std::vector<const char*>& allTypesForGeometry
+) const
+{
+    Base::PyGILStateLocker lock;
+    try {
+        if (this->gate.hasAttr(std::string("getGatedTypes"))) {
+            Py::Callable method(this->gate.getAttr(std::string("getGatedTypes")));
+            Py::List types;
+            for (const char* type : allTypesForGeometry) {
+                types.append(Py::String(type));
+            }
+            Py::Tuple args(1);
+            args.setItem(0, types);
+            Py::Object result(method.apply(args));
+            std::unordered_set<std::string> allowed;
+            Py::Sequence sequence(result);
+            for (Py::Sequence::size_type i = 0; i < sequence.size(); ++i) {
+                allowed.insert(Py::Object(sequence[i]).as_string());
+            }
+            return allowed;
+        }
+    }
+    catch (Py::Exception&) {
+        Base::PyException e;
+        e.reportException();
+    }
+    return {};
 }
 
 // ----------------------------------------------------------------------------

@@ -30,18 +30,8 @@
 #include <Mod/Fem/FemGlobal.h>
 
 #include "ViewProviderFemConstraint.h"
+#include "ReferenceSelectionWidget.h"
 
-
-class QAction;
-class QListWidget;
-class QListWidgetItem;
-
-namespace Fem
-{
-
-class FemGeometry;
-
-}
 
 namespace FemGui
 {
@@ -56,65 +46,23 @@ public:
         QWidget* parent = nullptr,
         const char* pixmapname = ""
     );
-    ~TaskFemConstraint() override = default;
+    ~TaskFemConstraint() override;
 
-    virtual const std::string getReferences() const
-    {
-        return std::string();
-    }
-    const std::string getReferences(const std::vector<std::string>& items) const;
     const std::string getScale() const;
-
-protected Q_SLOTS:
-    void onReferenceDeleted(const int row);
-    void onButtonReference(const bool pressed = true);
-    void onReferenceClearList();
-    void setSelection(QListWidgetItem* item);
-
-    bool event(QEvent* event) override;
 
 protected:
     void changeEvent(QEvent* e) override
     {
         TaskBox::changeEvent(e);
     }
-    const QString makeRefText(const std::string& objName, const std::string& subName) const;
-    const QString makeRefText(const App::DocumentObject* obj, const std::string& subName) const;
-    /**
-     * The geometry the references of this constraint have to point at, or
-     * nullptr when its analysis builds none and any shape will do.
-     */
-    Fem::FemGeometry* referenceGeometry() const;
-    /**
-     * Whether obj can carry a reference of this constraint, telling the user
-     * why it cannot when it may not be referenced.
-     */
-    bool checkReference(const App::DocumentObject* obj);
-    /**
-     * Convert a pick on the analysis geometry to (AnalysisImport, source sub)
-     * when the element belongs to an import.
-     */
-    void normalizeReference(App::DocumentObject*& obj, std::string& subName) const;
-    void keyPressEvent(QKeyEvent* ke) override;
-    void createActions(QListWidget* parentList);
-    void createClearListAction(QListWidget* parentList);
-    void createDeleteAction(QListWidget* parentList);
     void onSelectionChanged(const Gui::SelectionChanges&) override
     {}
+    void addReferenceSelection(const std::vector<ReferenceSlotSpec>& specs, QWidget* host = nullptr);
 
 protected:
     QWidget* proxy;
-    QListWidget* actionList;
-    QAction* clearListAction;
-    QAction* deleteAction;
     Gui::WeakPtrT<ViewProviderFemConstraint> ConstraintView;
-    enum
-    {
-        seldir,
-        selref,
-        selloc,
-        selnone
-    } selectionMode;
+    ReferenceSelectionWidget* m_references = nullptr;
 };
 
 /// simulation dialog for the TaskView
@@ -125,11 +73,6 @@ class TaskDlgFemConstraint: public Gui::TaskView::TaskDialog
 public:
     /// is called the TaskView when the dialog is opened
     void open() override;
-    /*
-    /// is called by the framework if an button is clicked which has no accept or reject role
-    virtual void clicked(int) {}
-    /// is called by the framework if the dialog is accepted (Ok)
-    */
     bool accept() override;
     /// is called by the framework if the dialog is rejected (Cancel)
     bool reject() override;

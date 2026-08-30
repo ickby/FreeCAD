@@ -35,7 +35,7 @@ from PySide import QtGui
 import FreeCAD
 import FreeCADGui
 
-from femguiutils import selection_widgets
+from femguiutils import selection_slots
 from . import base_femtaskpanel
 
 
@@ -70,31 +70,42 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
             self.reversed_slave_changed,
         )
         self.init_parameter_widget()
-        # split references, last is master
-        references = [(feat, (sub,)) for feat, sub_list in obj.References for sub in sub_list]
-        # geometry selection widget
-        self.sel_master = selection_widgets.GeometryElementsSelection(
-            references[-1:], ["Edge", "Face"], False, False
+        # Tie's master and slave slots have no obvious primary; the command
+        # does not stash a prefill.
+        self.selection_widget = selection_slots.from_slot_specs(
+            obj,
+            [
+                {
+                    "id": "slave",
+                    "property": "References",
+                    "role": "slave",
+                    "title": FreeCAD.Qt.translate("FEM", "Slave"),
+                    "types": ["Edge", "Face"],
+                    "armed": True,
+                },
+                {
+                    "id": "master",
+                    "property": "References",
+                    "role": "master",
+                    "title": FreeCAD.Qt.translate("FEM", "Master"),
+                    "types": ["Edge", "Face"],
+                    "max_count": 1,
+                },
+            ],
         )
-        self.sel_master.setWindowTitle(self.sel_master.tr("Master Geometry Reference Selector"))
-        self.sel_master.setMaximumHeight(200)
-        self.sel_slave = selection_widgets.GeometryElementsSelection(
-            references[:-1], ["Edge", "Face"], False, False
-        )
-        self.sel_slave.setWindowTitle(self.sel_slave.tr("Slave Geometry Reference Selector"))
-        self.sel_slave.setMaximumHeight(200)
 
         # form made from param and selection widget
-        self.form = [self.sel_master, self.sel_slave, self.parameter_widget]
+        self.form = [self.selection_widget, self.parameter_widget]
 
     def accept(self):
-        # check values
-        items = len(self.sel_master.references) + len(self.sel_slave.references)
+        master = self.selection_widget.slot("master").picks
+        slave = self.selection_widget.slot("slave").picks
+        items = len(master) + len(slave)
         FreeCAD.Console.PrintMessage(
-            f"Task panel: found master references: {items}\n{self.sel_master.references}\n"
+            f"Task panel: found master references: {len(master)}\n{master}\n"
         )
         FreeCAD.Console.PrintMessage(
-            f"Task panel: found slave references: {items}\n{self.sel_slave.references}\n"
+            f"Task panel: found slave references: {len(slave)}\n{slave}\n"
         )
 
         if items != 2:
@@ -114,16 +125,13 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
                 pass
         self.obj.Tolerance = self.tolerance
         self.obj.Adjust = self.adjust
-        self.obj.References = self.sel_slave.references + self.sel_master.references
         self.obj.ReversedMaster = self.reversed_master
         self.obj.ReversedSlave = self.reversed_slave
-        self.sel_master.finish_selection()
-        self.sel_slave.finish_selection()
+        self.selection_widget.finish_selection()
         return super().accept()
 
     def reject(self):
-        self.sel_master.finish_selection()
-        self.sel_slave.finish_selection()
+        self.selection_widget.finish_selection()
         return super().reject()
 
     def init_parameter_widget(self):

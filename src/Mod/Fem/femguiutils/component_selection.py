@@ -33,8 +33,9 @@ from PySide import QtCore
 from PySide import QtGui
 
 import FreeCAD
-import FreeCADGui
 
+from femguiutils.selection_rules import ReferenceRule
+from femguiutils.selection_slots import ReferenceSelection
 from femmesh import meshcomponents
 
 
@@ -43,25 +44,22 @@ class ComponentSelection(QtGui.QGroupBox):
     Picker for the geometry components a mesh object meshes.
 
     Components are the unit the analysis view panel names things by, so they
-    are the unit here too, with their toplevel elements as read-only detail.
-    A component another mesh object meshes is shown but locked; it has to be
-    taken over from the context menu, which is what keeps the mesh group free
-    of overlapping claims.
+    are the unit here too. 3D picks go through the shared reference slot with
+    1-based ComponentN names; "All components" keeps following the geometry.
     """
 
     selectionChanged = QtCore.Signal()
-
-    # Components can hold a lot of solids, so the row only names a few of them
-    max_shown_elements = 3
 
     def __init__(self, obj, parent=None):
         super().__init__(parent)
         self.obj = obj
         self.geometry = meshcomponents.geometry_of(obj)
+        self._updating = False
 
         self.setTitle(FreeCAD.Qt.translate("FEM", "Components to mesh"))
         self._setup_ui()
         self.rebuild()
+        self.selection.consume_handoff()
 
     def _setup_ui(self):
         self.all_check = QtGui.QCheckBox(FreeCAD.Qt.translate("FEM", "All components"))
@@ -74,25 +72,26 @@ class ComponentSelection(QtGui.QGroupBox):
             )
         )
 
-        self.list = QtGui.QListWidget()
-        self.list.setSelectionMode(QtGui.QAbstractItemView.ExtendedSelection)
-        self.list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.selection = ReferenceSelection(self.obj, geometry=self.geometry)
+        self.slot = self.selection.add_slot(
+            "Components",
+            FreeCAD.Qt.translate("FEM", "Components"),
+            ReferenceRule(component=True),
+            marks=False,
+        )
+        self.selection.arm("Components")
+        self.slot.picksChanged.connect(self._slot_changed)
 
         self.summary = QtGui.QLabel()
         self.summary.setWordWrap(True)
 
         layout = QtGui.QVBoxLayout()
         layout.addWidget(self.all_check)
-        layout.addWidget(self.list)
+        layout.addWidget(self.selection)
         layout.addWidget(self.summary)
         self.setLayout(layout)
 
         self.all_check.toggled.connect(self._all_toggled)
-        self.list.itemChanged.connect(self._item_changed)
-        self.list.itemSelectionChanged.connect(self._select_in_view)
-        self.list.customContextMenuRequested.connect(self._context_menu)
-
-    # data -------------------------------------------------------------------
 
     def has_components(self):
         """True if the mesh object meshes at least one component."""
@@ -115,71 +114,24 @@ class ComponentSelection(QtGui.QGroupBox):
         count = meshcomponents.component_count(self.geometry)
         foreign = any(owner != self.obj for owner in self.owners.values())
 
-        # Rebuilding sets check states, which must not be taken for user input
-        self.list.blockSignals(True)
+        self._updating = True
         self.all_check.blockSignals(True)
-
-        self.list.clear()
-        for index in range(1, count + 1):
-            self.list.addItem(self._build_item(index))
-
         self.all_check.setChecked(meshcomponents.meshes_all(self.obj))
-        # "All" keeps following the geometry, which only works while nobody
-        # else meshes a part of it
         self.all_check.setEnabled(not foreign)
-
-        self.list.blockSignals(False)
         self.all_check.blockSignals(False)
+
+        picks = [
+            (self.geometry, meshcomponents.component_name(index)) for index in sorted(self.mine)
+        ]
+        self.slot.picks = picks
+        self.slot._rebuild()
+        self.selection.setEnabled(not self.all_check.isChecked())
+        self._updating = False
 
         self._update_summary(count)
 
-    def _build_item(self, index):
-        owner = self.owners.get(index)
-        foreign = owner is not None and owner != self.obj
-
-        item = QtGui.QListWidgetItem(self._item_text(index, owner))
-        item.setData(QtCore.Qt.UserRole, index)
-        item.setToolTip(self._item_tooltip(index, owner))
-        item.setCheckState(QtCore.Qt.Checked if index in self.mine else QtCore.Qt.Unchecked)
-        if foreign:
-            # Locked rather than hidden: the context menu can take it over
-            item.setFlags(item.flags() & ~QtCore.Qt.ItemIsUserCheckable)
-            item.setForeground(QtGui.QPalette().color(QtGui.QPalette.Disabled, QtGui.QPalette.Text))
-        return item
-
-    def _item_text(self, index, owner):
-        name = meshcomponents.component_name(index)
-        if owner is not None and owner != self.obj:
-            return FreeCAD.Qt.translate("FEM", "{} — meshed by {}").format(name, owner.Label)
-
-        elements = self._element_names(index)
-        if not elements:
-            return name
-
-        shown = elements[: self.max_shown_elements]
-        text = ", ".join(shown)
-        if len(elements) > len(shown):
-            text += FreeCAD.Qt.translate("FEM", ", +{} more").format(len(elements) - len(shown))
-        return f"{name} ({text})"
-
-    def _item_tooltip(self, index, owner):
-        elements = self._element_names(index)
-        lines = [
-            FreeCAD.Qt.translate("FEM", "{} elements: {}").format(
-                len(elements), ", ".join(elements)
-            )
-        ]
-        if owner is not None and owner != self.obj:
-            lines.append(
-                FreeCAD.Qt.translate("FEM", "Meshed by {}, right click to take it over").format(
-                    owner.Label
-                )
-            )
-        return "\n".join(lines)
-
-    def _element_names(self, index):
-        # Component indices are 1-based, FemGeometry is 0-based
-        return list(self.geometry.getToplevelElements(index - 1))
+    def finish_selection(self):
+        self.selection.finish_selection()
 
     def _update_summary(self, count):
         if not self.mine:
@@ -195,58 +147,28 @@ class ComponentSelection(QtGui.QGroupBox):
                 text = FreeCAD.Qt.translate("FEM", "All components of the geometry are meshed.")
         self.summary.setText(text)
 
-    # user input -------------------------------------------------------------
-
     def _all_toggled(self, checked):
+        if self._updating:
+            return
         if checked:
             meshcomponents.assign_all(self.obj, self.geometry)
         else:
-            # Leaving "all" keeps the components, just spelled out, so that
-            # single ones can be unchecked from here on
             meshcomponents.assign_components(self.obj, self.geometry, self.mine)
         self._committed()
 
-    def _item_changed(self, item):
-        index = item.data(QtCore.Qt.UserRole)
-        selection = set(self.mine)
-        if item.checkState() == QtCore.Qt.Checked:
-            selection.add(index)
-        else:
-            selection.discard(index)
-
-        meshcomponents.assign_components(self.obj, self.geometry, selection)
+    def _slot_changed(self, _slot):
+        if self._updating or self.geometry is None:
+            return
+        indices = set()
+        for obj, sub in self.slot.picks:
+            if obj != self.geometry:
+                continue
+            index = meshcomponents.component_index(sub)
+            if index is not None:
+                indices.add(index)
+        meshcomponents.assign_components(self.obj, self.geometry, indices)
         self._committed()
-
-    def _context_menu(self, point):
-        item = self.list.itemAt(point)
-        if item is None:
-            return
-
-        index = item.data(QtCore.Qt.UserRole)
-        owner = self.owners.get(index)
-        if owner is None or owner == self.obj:
-            return
-
-        menu = QtGui.QMenu(self.list)
-        action = menu.addAction(
-            FreeCAD.Qt.translate("FEM", "Take over from {}").format(owner.Label)
-        )
-        if menu.exec_(self.list.mapToGlobal(point)) != action:
-            return
-
-        indices = {index}
-        meshcomponents.take_over(self.obj, indices, self.owners)
-        meshcomponents.assign_components(self.obj, self.geometry, self.mine | indices)
-        self._committed()
-
-    def _select_in_view(self):
-        FreeCADGui.Selection.clearSelection()
-        document = self.geometry.Document.Name
-        for item in self.list.selectedItems():
-            for element in self._element_names(item.data(QtCore.Qt.UserRole)):
-                FreeCADGui.Selection.addSelection(document, self.geometry.Name, element)
 
     def _committed(self):
-        # No recompute here: that would start meshing right from the panel
         self.rebuild()
         self.selectionChanged.emit()

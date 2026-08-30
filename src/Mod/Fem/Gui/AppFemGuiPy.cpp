@@ -21,6 +21,7 @@
  ***************************************************************************/
 
 #include <QFileInfo>
+#include <set>
 
 
 #include <App/DocumentObjectPy.h>
@@ -41,6 +42,19 @@
 #include "ClipPlaneHandle.h"
 #include "ClipPlaneHandlePy.h"
 #include "FemPerfLog.h"
+
+#ifdef FC_USE_VTK
+# include <App/Application.h>
+# include <App/Document.h>
+# include <Base/Color.h>
+# include <Gui/Application.h>
+# include <Gui/ViewProvider.h>
+# include <Mod/Fem/App/FemAnalysisImport.h>
+# include <Mod/Fem/App/FemGeometry.h>
+
+# include "ViewProviderFemAnalysisImport.h"
+# include "ViewProviderFemGeometry.h"
+#endif
 
 
 namespace FemGui
@@ -123,6 +137,25 @@ public:
             &Module::open,
             "insert(string,string) -- Opens an Abaqus file in a text editor."
         );
+#ifdef FC_USE_VTK
+        add_varargs_method(
+            "setPreselectPromotion",
+            &Module::setPreselectPromotion,
+            "setPreselectPromotion(bool) -- While true, hovering a face or edge of "
+            "FEM geometry lights the solid that owns it."
+        );
+        add_varargs_method(
+            "setElementHighlight",
+            &Module::setElementHighlight,
+            "setElementHighlight(obj, role, elements, [color]) -- Mark shape elements "
+            "on a FemGeometry or FemAnalysisImport view."
+        );
+        add_varargs_method(
+            "clearElementHighlight",
+            &Module::clearElementHighlight,
+            "clearElementHighlight(obj, role) -- Remove the marks of one role."
+        );
+#endif
         initialize("This module is the FemGui module.");  // register with Python
     }
 
@@ -330,6 +363,105 @@ private:
         }
         return result;
     }
+#ifdef FC_USE_VTK
+    Py::Object setPreselectPromotion(const Py::Tuple& args)
+    {
+        PyObject* pyOn = Py_True;
+        if (!PyArg_ParseTuple(args.ptr(), "O", &pyOn)) {
+            throw Py::Exception();
+        }
+        const bool on = PyObject_IsTrue(pyOn) != 0;
+        for (auto* document : App::GetApplication().getDocuments()) {
+            for (auto* obj : document->getObjects()) {
+                Gui::ViewProvider* view = Gui::Application::Instance->getViewProvider(obj);
+                if (auto* geom = dynamic_cast<ViewProviderFemGeometry*>(view)) {
+                    geom->setPreselectPromotion(on);
+                }
+                else if (auto* imported = dynamic_cast<ViewProviderFemAnalysisImport*>(view)) {
+                    imported->setPreselectPromotion(on);
+                }
+            }
+        }
+        return Py::None();
+    }
+    static void parseHighlightElements(PyObject* pyElements, std::set<std::string>& elements)
+    {
+        if (!PySequence_Check(pyElements)) {
+            throw Py::TypeError("elements must be a sequence of names");
+        }
+        const Py_ssize_t count = PySequence_Size(pyElements);
+        for (Py_ssize_t i = 0; i < count; ++i) {
+            Py::Object item(PySequence_GetItem(pyElements, i), true);
+            if (!PyUnicode_Check(item.ptr())) {
+                throw Py::TypeError("elements must be a sequence of names");
+            }
+            elements.insert(PyUnicode_AsUTF8(item.ptr()));
+        }
+    }
+    static Base::Color parseHighlightColor(PyObject* pyColor)
+    {
+        auto color = ViewProviderFemGeometry::defaultElementHighlightColor();
+        if (!pyColor || pyColor == Py_None) {
+            return color;
+        }
+        if (!PySequence_Check(pyColor) || PySequence_Size(pyColor) != 3) {
+            throw Py::TypeError("color must be an (r, g, b) sequence in 0..1");
+        }
+        float channel[3] {};
+        for (int i = 0; i < 3; ++i) {
+            Py::Object item(PySequence_GetItem(pyColor, i), true);
+            channel[i] = static_cast<float>(PyFloat_AsDouble(item.ptr()));
+        }
+        return Base::Color(channel[0], channel[1], channel[2]);
+    }
+    Py::Object setElementHighlight(const Py::Tuple& args)
+    {
+        PyObject* pyObj = nullptr;
+        const char* role = nullptr;
+        PyObject* pyElements = nullptr;
+        PyObject* pyColor = Py_None;
+        if (!PyArg_ParseTuple(
+                args.ptr(),
+                "O!sO|O",
+                &(App::DocumentObjectPy::Type),
+                &pyObj,
+                &role,
+                &pyElements,
+                &pyColor
+            )) {
+            throw Py::Exception();
+        }
+        auto* obj = static_cast<App::DocumentObjectPy*>(pyObj)->getDocumentObjectPtr();
+        std::set<std::string> elements;
+        parseHighlightElements(pyElements, elements);
+        const Base::Color color = parseHighlightColor(pyColor);
+        Gui::ViewProvider* view = Gui::Application::Instance->getViewProvider(obj);
+        if (auto* geom = dynamic_cast<ViewProviderFemGeometry*>(view)) {
+            geom->setElementHighlight(role, elements, color);
+        }
+        else if (auto* imported = dynamic_cast<ViewProviderFemAnalysisImport*>(view)) {
+            imported->setElementHighlight(role, elements, color);
+        }
+        return Py::None();
+    }
+    Py::Object clearElementHighlight(const Py::Tuple& args)
+    {
+        PyObject* pyObj = nullptr;
+        const char* role = nullptr;
+        if (!PyArg_ParseTuple(args.ptr(), "O!s", &(App::DocumentObjectPy::Type), &pyObj, &role)) {
+            throw Py::Exception();
+        }
+        auto* obj = static_cast<App::DocumentObjectPy*>(pyObj)->getDocumentObjectPtr();
+        Gui::ViewProvider* view = Gui::Application::Instance->getViewProvider(obj);
+        if (auto* geom = dynamic_cast<ViewProviderFemGeometry*>(view)) {
+            geom->clearElementHighlight(role);
+        }
+        else if (auto* imported = dynamic_cast<ViewProviderFemAnalysisImport*>(view)) {
+            imported->clearElementHighlight(role);
+        }
+        return Py::None();
+    }
+#endif
     Py::Object open(const Py::Tuple& args)
     {
         char* Name;

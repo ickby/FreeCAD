@@ -31,64 +31,9 @@ __url__ = "https://www.freecad.org"
 
 from PySide import QtGui
 
-import FreeCADGui
+from femguiutils.selection_slots import from_slot_specs
 
 from . import base_femtaskpanel
-
-
-class _ObjectSelectionWidget(QtGui.QWidget):
-    """List of linked document objects with Add / Clear for a property."""
-
-    def __init__(self, obj, propname, parent=None):
-        super().__init__(parent)
-
-        self.obj = obj
-        self.prop = propname
-        self.selected = []
-
-        self.Add = QtGui.QPushButton()
-        self.Add.setText("Add")
-        self.Add.clicked.connect(self.add_selection)
-        self.Remove = QtGui.QPushButton()
-        self.Remove.setText("Clear")
-        self.Remove.clicked.connect(self.clear_all)
-        self.List = QtGui.QListWidget()
-
-        hor = QtGui.QHBoxLayout()
-        hor.addWidget(self.Add)
-        hor.addWidget(self.Remove)
-
-        ver = QtGui.QVBoxLayout()
-        ver.addWidget(self.List)
-        ver.addLayout(hor)
-        self.setLayout(ver)
-
-        used = getattr(obj, propname)
-        if isinstance(used, list):
-            self.selected = list(used)
-            for linked in used:
-                self.List.addItem(linked.Label)
-        elif used:
-            self.selected = [used]
-            self.List.addItem(used.Label)
-
-    def _write_property(self):
-        if "List" in self.obj.getTypeIdOfProperty(self.prop):
-            setattr(self.obj, self.prop, self.selected)
-        else:
-            setattr(self.obj, self.prop, self.selected[0] if self.selected else None)
-
-    def add_selection(self):
-        for new_obj in FreeCADGui.Selection.getSelection():
-            if new_obj not in self.selected:
-                self.selected.append(new_obj)
-                self.List.addItem(new_obj.Label)
-        self._write_property()
-
-    def clear_all(self):
-        self.selected = []
-        self.List.clear()
-        self._write_property()
 
 
 class _ImportTaskPanel(base_femtaskpanel._BaseTaskPanel):
@@ -103,7 +48,20 @@ class _ImportTaskPanel(base_femtaskpanel._BaseTaskPanel):
         self.Keep = QtGui.QRadioButton("Keep separated")
         self.Embed = QtGui.QRadioButton("Embed imports")
         self.EmbedAll = QtGui.QRadioButton("Embed into existing geometry")
-        self.Select = _ObjectSelectionWidget(self.obj, "Import")
+        self.Select = from_slot_specs(
+            self.obj,
+            [
+                {
+                    "property": "Import",
+                    "title": "Import",
+                    "types": (),
+                    "allow_empty_sub": True,
+                    "scope": "any",
+                    "armed": True,
+                    "marks": False,
+                }
+            ],
+        )
 
         vertical_layout.addWidget(self.Keep)
         vertical_layout.addWidget(self.Embed)
@@ -135,3 +93,12 @@ class _ImportTaskPanel(base_femtaskpanel._BaseTaskPanel):
             self.obj.Embed = "Embed import"
         elif self.EmbedAll.isChecked():
             self.obj.Embed = "Embed all"
+
+    def accept(self):
+        self.Select.finish_selection()
+        return super().accept()
+
+    def reject(self):
+        self.Select.finish_selection()
+        return super().reject()
+

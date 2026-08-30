@@ -38,6 +38,7 @@ from pivy import coin  # noqa: F401
 
 import ObjectsFem
 
+from femguiutils import selection_handoff
 from femobjects import geometry_partition
 from femtaskpanels import task_geometry_partition
 from femviewprovider import view_geometry_base
@@ -375,7 +376,8 @@ class TestGeometryPartitionGui(unittest.TestCase):
         picker.finish_selection()
 
         self.assertEqual(len(picker.references), 3)
-        self.assertNotIn((self.imp, "Vertex1"), picker.references, "oldest pick drops out")
+        self.assertIn((self.imp, "Vertex1"), picker.references, "a full slot refuses the extra pick")
+        self.assertNotIn((self.imp, "Vertex4"), picker.references)
 
     def test_object_picker_takes_an_external_datum_plane(self):
         datum = self.document.addObject("Part::DatumPlane", "Datum")
@@ -415,6 +417,19 @@ class TestGeometryPartitionGui(unittest.TestCase):
         # only the targeted box is cut, the second one is left alone
         self.assertEqual(len(self.part.Shape.Solids), 3)
         self.assertAlmostEqual(self.part.Shape.Volume, self.imp.Shape.Volume, places=6)
+
+    def test_create_handoff_prefills_targets(self):
+        """Selecting first and then opening the panel fills the Targets slot."""
+        FreeCADGui.Selection.addSelection(self.document.Name, self.imp.Name, "Face1")
+        selection_handoff.stash_for(self.part.Name, self.document.Name)
+        FreeCADGui.Selection.clearSelection()
+        panel = task_geometry_partition._PartitionTaskPanel(self.part)
+        try:
+            self.assertEqual(panel.target_picker.references, [(self.imp, "Solid1")])
+            self.assertEqual(FreeCADGui.Selection.getSelection(), [])
+        finally:
+            panel.deactivate()
+            selection_handoff.clear()
 
     # -- panel --------------------------------------------------------------
 

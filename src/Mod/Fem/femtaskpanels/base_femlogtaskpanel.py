@@ -214,6 +214,8 @@ class _BaseLogTaskPanel(base_femtaskpanel._BaseTaskPanel, ABC):
         self.timer.stop()
         QtGui.QApplication.restoreOverrideCursor()
         self.set_object_params()
+        if self.component_selection is not None:
+            self.component_selection.finish_selection()
         return super().accept()
 
     def reject(self):
@@ -226,6 +228,8 @@ class _BaseLogTaskPanel(base_femtaskpanel._BaseTaskPanel, ABC):
             self.tool.process.kill()
             FreeCAD.Console.PrintWarning("Process aborted\n")
         else:
+            if self.component_selection is not None:
+                self.component_selection.finish_selection()
             return super().reject()
 
     def clicked(self, button):

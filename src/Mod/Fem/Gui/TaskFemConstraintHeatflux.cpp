@@ -48,16 +48,13 @@ TaskFemConstraintHeatflux::TaskFemConstraintHeatflux(
     ViewProviderFemConstraintHeatflux* ConstraintView,
     QWidget* parent
 )
-    : TaskFemConstraintOnBoundary(ConstraintView, parent, "FEM_ConstraintHeatflux")
+    : TaskFemConstraint(ConstraintView, parent, "FEM_ConstraintHeatflux")
     , ui(new Ui_TaskFemConstraintHeatflux)
 {
     proxy = new QWidget(this);
     ui->setupUi(proxy);
     QMetaObject::connectSlotsByName(this);
 
-    // create a context menu for the listview of the references
-    createActions(ui->lw_references);
-    connect(deleteAction, &QAction::triggered, this, &TaskFemConstraintHeatflux::onReferenceDeleted);
     connect(
         ui->cb_constr_type,
         qOverload<int>(&QComboBox::activated),
@@ -94,9 +91,17 @@ TaskFemConstraintHeatflux::TaskFemConstraintHeatflux(
         this,
         &TaskFemConstraintHeatflux::onAmbientTempChanged
     );
-    connect(ui->lw_references, &QListWidget::itemClicked, this, &TaskFemConstraintHeatflux::setSelection);
 
     this->groupLayout()->addWidget(proxy);
+    {
+        ReferenceSlotSpec spec;
+        spec.property = "References";
+        spec.title = tr("References").toStdString();
+        spec.types = {"Edge", "Face"};
+        spec.homogeneous = false;
+        spec.armed = true;
+        addReferenceSelection({spec}, proxy);
+    }
 
     // Temporarily prevent unnecessary feature recomputes
     ui->qsb_ambienttemp_conv->blockSignals(true);
@@ -105,14 +110,9 @@ TaskFemConstraintHeatflux::TaskFemConstraintHeatflux(
     ui->dsb_emissivity->blockSignals(true);
     ui->qsb_ambienttemp_rad->blockSignals(true);
     ui->qsb_heat_flux->blockSignals(true);
-    ui->lw_references->blockSignals(true);
-    ui->btnAdd->blockSignals(true);
-    ui->btnRemove->blockSignals(true);
 
     // Get the feature data
     auto pcConstraint = ConstraintView->getObject<Fem::ConstraintHeatflux>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
 
     // Fill data into dialog elements
     App::PropertyEnumeration* constrType = &pcConstraint->ConstraintType;
@@ -144,21 +144,6 @@ TaskFemConstraintHeatflux::TaskFemConstraintHeatflux(
 
     ui->qsb_heat_flux->setValue(pcConstraint->DistributedHeatFlux.getQuantityValue());
 
-    ui->lw_references->clear();
-    for (std::size_t i = 0; i < Objects.size(); i++) {
-        ui->lw_references->addItem(makeRefText(Objects[i], SubElements[i]));
-    }
-    if (!Objects.empty()) {
-        ui->lw_references->setCurrentRow(0, QItemSelectionModel::ClearAndSelect);
-    }
-
-    ui->lbl_references->setText(
-        tr("Select geometry of type: ") + QString::fromUtf8("<b>%1</b>").arg(tr("Edge, Face"))
-    );
-
-    // Selection buttons
-    buttonGroup->addButton(ui->btnAdd, static_cast<int>(SelectionChangeModes::refAdd));
-    buttonGroup->addButton(ui->btnRemove, static_cast<int>(SelectionChangeModes::refRemove));
 
     ui->qsb_ambienttemp_conv->blockSignals(false);
     // ui->if_facetemp->blockSignals(false);
@@ -166,29 +151,16 @@ TaskFemConstraintHeatflux::TaskFemConstraintHeatflux(
     ui->dsb_emissivity->blockSignals(false);
     ui->qsb_ambienttemp_rad->blockSignals(false);
     ui->qsb_heat_flux->blockSignals(false);
-    ui->lw_references->blockSignals(false);
-    ui->btnAdd->blockSignals(false);
-    ui->btnRemove->blockSignals(false);
 
     ui->qsb_film_coef->bind(pcConstraint->FilmCoef);
     ui->qsb_ambienttemp_conv->bind(pcConstraint->AmbientTemp);
     ui->qsb_ambienttemp_rad->bind(pcConstraint->AmbientTemp);
     ui->dsb_emissivity->bind(pcConstraint->Emissivity);
     ui->qsb_heat_flux->bind(pcConstraint->DistributedHeatFlux);
-
-    updateUI();
 }
 
 TaskFemConstraintHeatflux::~TaskFemConstraintHeatflux() = default;
 
-void TaskFemConstraintHeatflux::updateUI()
-{
-    if (ui->lw_references->model()->rowCount() == 0) {
-        // Go into reference selection mode if no reference has been selected yet
-        onButtonReference(true);
-        return;
-    }
-}
 
 void TaskFemConstraintHeatflux::onAmbientTempChanged(double val)
 {
@@ -274,175 +246,6 @@ void TaskFemConstraintHeatflux::onConstrTypeChanged(int item)
     }
 }
 
-void TaskFemConstraintHeatflux::addToSelection()
-{
-    std::vector<Gui::SelectionObject> selection
-        = Gui::Selection().getSelectionEx();  // gets vector of selected objects of active document
-    if (selection.empty()) {
-        QMessageBox::warning(this, tr("Selection Error"), tr("Nothing selected!"));
-        return;
-    }
-    Fem::ConstraintHeatflux* pcConstraint = ConstraintView->getObject<Fem::ConstraintHeatflux>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-
-    for (auto& it : selection) {  // for every selected object
-        if (!checkReference(it.getObject())) {
-            return;
-        }
-
-        App::DocumentObject* obj = it.getObject();
-        if (obj->getDocument() != pcConstraint->getDocument()) {
-            QMessageBox::warning(
-                this,
-                tr("Selection Error"),
-                tr("External object selection is not supported")
-            );
-            return;
-        }
-
-        const std::vector<std::string>& subNames = it.getSubNames();
-        if (!subNames.empty()) {
-            for (const auto& subName : subNames) {
-
-            App::DocumentObject* refObj = obj;
-            std::string refSub = subName;
-            normalizeReference(refObj, refSub);
-                if ((subName.substr(0, 4) != "Face") && (subName.substr(0, 4) != "Edge")) {
-                    QMessageBox::warning(
-                        this,
-                        tr("Selection Error"),
-                        tr("Selection must only consist of faces! (edges in 2D models)")
-                    );
-                    return;
-                }
-            }
-        }
-        else {
-            // fix me, if an object is selected completely, getSelectionEx does not return any
-            // SubElements
-        }
-        for (const auto& subName : subNames) {  // for every selected sub element
-
-            App::DocumentObject* refObj = obj;
-            std::string refSub = subName;
-            normalizeReference(refObj, refSub);
-            bool addMe = true;
-            for (auto itr = std::ranges::find(SubElements.begin(), SubElements.end(), subName);
-                 itr != SubElements.end();
-                 itr = std::find(
-                     ++itr,
-                     SubElements.end(),
-                     subName
-                 )) {  // for every sub element in selection that
-                       // matches one in old list
-                if (refObj
-                    == Objects[std::distance(
-                        SubElements.begin(),
-                        itr
-                    )]) {  // if selected sub element's object equals the one in old list
-                           // then it was added before so don't add
-                    addMe = false;
-                }
-            }
-            if (addMe) {
-                QSignalBlocker block(ui->lw_references);
-                Objects.push_back(refObj);
-                SubElements.push_back(refSub);
-                ui->lw_references->addItem(makeRefText(refObj, refSub));
-            }
-        }
-    }
-    // Update UI
-    pcConstraint->References.setValues(Objects, SubElements);
-    updateUI();
-}
-
-void TaskFemConstraintHeatflux::removeFromSelection()
-{
-    std::vector<Gui::SelectionObject> selection
-        = Gui::Selection().getSelectionEx();  // gets vector of selected objects of active document
-    if (selection.empty()) {
-        QMessageBox::warning(this, tr("Selection Error"), tr("Nothing selected!"));
-        return;
-    }
-
-    Fem::ConstraintHeatflux* pcConstraint = ConstraintView->getObject<Fem::ConstraintHeatflux>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-    std::vector<size_t> itemsToDel;
-    for (const auto& it : selection) {  // for every selected object
-        if (!checkReference(it.getObject())) {
-            return;
-        }
-        const std::vector<std::string>& subNames = it.getSubNames();
-        const App::DocumentObject* obj = it.getObject();
-
-        if (!subNames.empty()) {
-            for (const auto& subName : subNames) {
-                if ((subName.substr(0, 4) != "Face") && (subName.substr(0, 4) != "Edge")) {
-                    QMessageBox::warning(
-                        this,
-                        tr("Selection Error"),
-                        tr("Selection must only consist of faces! (edges in 2D models)")
-                    );
-                    return;
-                }
-            }
-        }
-        else {
-            // fix me, if an object is selected completely, getSelectionEx does not return any
-            // SubElements
-        }
-        for (const auto& subName : subNames) {  // for every selected sub element
-            for (auto itr = std::ranges::find(SubElements, subName); itr != SubElements.end(); itr
-                 = std::find(++itr,
-                             SubElements.end(),
-                             subName)) {  // for every sub element in selection that
-                                          // matches one in old list
-                if (obj
-                    == Objects[std::distance(
-                        SubElements.begin(),
-                        itr
-                    )]) {  // if selected sub element's object equals the one in old list
-                           // then it was added before so mark for deletion
-                    itemsToDel.push_back(std::distance(SubElements.begin(), itr));
-                }
-            }
-        }
-    }
-    std::sort(itemsToDel.begin(), itemsToDel.end());
-    while (!itemsToDel.empty()) {
-        Objects.erase(Objects.begin() + itemsToDel.back());
-        SubElements.erase(SubElements.begin() + itemsToDel.back());
-        itemsToDel.pop_back();
-    }
-    // Update UI
-    {
-        QSignalBlocker block(ui->lw_references);
-        ui->lw_references->clear();
-        for (unsigned int j = 0; j < Objects.size(); j++) {
-            ui->lw_references->addItem(makeRefText(Objects[j], SubElements[j]));
-        }
-    }
-    pcConstraint->References.setValues(Objects, SubElements);
-    updateUI();
-}
-
-void TaskFemConstraintHeatflux::onReferenceDeleted()
-{
-    TaskFemConstraintHeatflux::removeFromSelection();
-}
-
-const std::string TaskFemConstraintHeatflux::getReferences() const
-{
-    int rows = ui->lw_references->model()->rowCount();
-    std::vector<std::string> items;
-    for (int r = 0; r < rows; r++) {
-        items.push_back(ui->lw_references->item(r)->text().toStdString());
-    }
-    return TaskFemConstraint::getReferences(items);
-}
 
 std::string TaskFemConstraintHeatflux::getAmbientTemp() const
 {
@@ -499,15 +302,6 @@ void TaskFemConstraintHeatflux::changeEvent(QEvent* e)
     }
 }
 
-void TaskFemConstraintHeatflux::clearButtons(const SelectionChangeModes notThis)
-{
-    if (notThis != SelectionChangeModes::refAdd) {
-        ui->btnAdd->setChecked(false);
-    }
-    if (notThis != SelectionChangeModes::refRemove) {
-        ui->btnRemove->setChecked(false);
-    }
-}
 
 //**************************************************************************
 // TaskDialog

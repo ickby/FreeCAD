@@ -34,7 +34,7 @@ from PySide import QtCore
 import FreeCAD
 import FreeCADGui
 
-from femguiutils import selection_widgets
+from femguiutils import selection_slots
 from . import base_femtaskpanel
 
 
@@ -70,11 +70,12 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
 
         # geometry selection widget
         # Only curves are valid entries!
-        self.selection_widget = selection_widgets.GeometryElementsSelection(
-            obj.References, ["Edge"], True, False
+        self.selection_widget = selection_slots.for_references(
+            obj,
+            ["Edge"],
+            homogeneous=False,
+            empty_means_all=False,
         )
-
-        # form made from param and selection widget
         self.form = [self.parameter_widget, self.selection_widget]
 
     def accept(self):

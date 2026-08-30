@@ -28,7 +28,9 @@ __url__ = "https://www.freecad.org"
 from PySide import QtCore, QtGui
 
 import FreeCAD
-import FreeCADGui
+
+from femguiutils.selection_rules import ReferenceRule, shape_kind
+from femguiutils.selection_slots import ReferenceSelection
 
 from femobjects import geometry_partition
 from femviewprovider import view_geometry_base
@@ -49,62 +51,7 @@ MARK_COLORS = {
 }
 
 
-def _shape_type(subname):
-    if not subname:
-        return None
-    for prefix in ("Solid", "Shell", "Face", "Edge", "Vertex"):
-        if subname.startswith(prefix):
-            return prefix
-    return None
-
-
-def _current_picks():
-    """
-    Selected (object, sub-element) pairs, resolved out of their container.
-
-    The geometry group is a GeoFeatureGroup, so a click on a chain step is
-    reported against the group with the step and the element map encoded into
-    the sub-element path. Letting the selection resolve that is the only
-    reliable way to get back the step and a plain element name.
-    """
-    picks = []
-    for sel in FreeCADGui.Selection.getSelectionEx("", 1):
-        for sub in sel.SubElementNames or ("",):
-            picks.append((sel.Object, sub))
-    return picks
-
-
-def _contains_sub(solid, picked):
-    members = {
-        "Face": solid.Faces,
-        "Edge": solid.Edges,
-        "Vertex": solid.Vertexes,
-    }.get(picked.ShapeType, ())
-    return any(picked.isSame(member) for member in members)
-
-
-def _owning_solid(obj, sub):
-    """
-    Name of the solid a picked sub-element belongs to.
-
-    Picking in the 3D view can only ever hit a face, edge or vertex, so a solid
-    target has to be derived from what was hit.
-    """
-    if sub.startswith("Solid"):
-        return sub
-    shape = getattr(obj, "Shape", None)
-    if shape is None or shape.isNull():
-        return None
-    try:
-        picked = obj.getSubObject(sub)
-    except Exception:
-        return None
-    if picked is None or picked.isNull():
-        return None
-    for index, solid in enumerate(shape.Solids, 1):
-        if _contains_sub(solid, picked):
-            return f"Solid{index}"
-    return None
+_active_picker = None
 
 
 def _references_to_links(references):
@@ -128,6 +75,19 @@ def _links_to_references(links):
     return references
 
 
+def _arm_picker(picker):
+    global _active_picker
+    if _active_picker is not None and _active_picker is not picker:
+        _active_picker.finish_selection()
+    _active_picker = picker
+
+
+def _disarm_picker(picker):
+    global _active_picker
+    if _active_picker is picker:
+        _active_picker = None
+
+
 class _SubElementPicker(QtGui.QGroupBox):
     """Pick sub-elements on a geometry object for partition references."""
 
@@ -140,127 +100,66 @@ class _SubElementPicker(QtGui.QGroupBox):
         types,
         max_count=None,
         allow_external=False,
+        feature=None,
         parent=None,
     ):
         super().__init__(title, parent)
         self.base_obj = base_obj
-        self.types = set(types)
         self.max_count = max_count
         self.allow_external = allow_external
-        self.references = []
-        self.promote_to_solid = False
-        self._observer = None
-
-        self.list = QtGui.QListWidget()
-        self.add_btn = QtGui.QPushButton(FreeCAD.Qt.translate("FEM", "Add"))
-        self.clear_btn = QtGui.QPushButton(FreeCAD.Qt.translate("FEM", "Clear"))
-        self.add_btn.clicked.connect(self.start_selection)
-        self.clear_btn.clicked.connect(self.clear_all)
-
-        row = QtGui.QHBoxLayout()
-        row.addWidget(self.add_btn)
-        row.addWidget(self.clear_btn)
-
+        scope = "any" if allow_external else "geometry"
+        self.group = ReferenceSelection(feature, geometry=base_obj, auto_install=False)
+        rule = ReferenceRule(
+            types=tuple(types),
+            max_count=max_count,
+            homogeneous=True,
+            scope=scope,
+        )
+        self.slot = self.group.add_slot("Targets", title, rule, marks=False)
+        self.slot.picksChanged.connect(lambda *_: self.changed.emit())
         layout = QtGui.QVBoxLayout()
-        layout.addWidget(self.list)
-        layout.addLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.group)
         self.setLayout(layout)
 
+    @property
+    def references(self):
+        return list(self.slot.picks)
+
     def set_references(self, references):
-        self.references = list(references)
-        self._rebuild_list()
+        self.slot.picks = list(references)
+        self.slot._commit()
 
     def set_target_kind(self, kind):
         """Restrict picking to one shape type, dropping picks of the others."""
-        self.types = {kind}
-        self.promote_to_solid = kind == "Solid"
-        kept = [ref for ref in self.references if _shape_type(ref[1]) == kind]
-        if len(kept) != len(self.references):
-            self.references = kept
-            self._rebuild_list()
+        self.slot.set_rule(
+            ReferenceRule(
+                types=(kind,),
+                max_count=self.max_count,
+                homogeneous=True,
+                scope="any" if self.allow_external else "geometry",
+            )
+        )
+        kept = [ref for ref in self.slot.picks if shape_kind(ref[1]) == kind]
+        if kept != self.slot.picks:
+            self.slot.picks = kept
+            self.slot._commit()
             self.changed.emit()
 
-    def _rebuild_list(self):
-        self.list.clear()
-        for obj, sub in self.references:
-            label = obj.Label if not sub else f"{obj.Label}.{sub}"
-            self.list.addItem(label)
-
     def start_selection(self):
-        self.finish_selection()
-        self._observer = _PickerObserver(self.consume_selection)
+        _arm_picker(self)
+        self.group.coordinator.install()
+        self.group.arm(self.slot.slot_id)
         # Whatever is already selected counts, so picking first and then
         # clicking Add works the same way round as Add and then picking.
-        self.consume_selection()
-        type_text = ", ".join(sorted(self.types))
-        FreeCAD.Console.PrintMessage(
-            FreeCAD.Qt.translate(
-                "FEM",
-                "Select {type} on the input geometry and click Add, "
-                "or pick directly while this panel is open.\n",
-            ).format(type=type_text)
-        )
+        self.group.consume_current_selection()
 
     def finish_selection(self):
-        if self._observer:
-            FreeCADGui.Selection.removeObserver(self._observer)
-            self._observer = None
+        self.group.coordinator.remove()
+        _disarm_picker(self)
 
     def clear_all(self):
-        self.references = []
-        self._rebuild_list()
-        self.changed.emit()
-
-    def consume_selection(self):
-        for obj, sub in _current_picks():
-            self._add_reference(obj, sub)
-
-    def _add_reference(self, obj, sub):
-        if obj is None:
-            return
-        if not self.allow_external and obj != self.base_obj:
-            return
-        if self.promote_to_solid and not self.allow_external:
-            solid = _owning_solid(obj, sub)
-            if solid is None:
-                return
-            sub = solid
-        if self.allow_external:
-            if not (
-                obj.isDerivedFrom("Part::DatumPlane")
-                or obj.isDerivedFrom("Sketcher::SketchObject")
-                or (obj.isDerivedFrom("Part::Feature") and sub and sub.startswith("Face"))
-            ):
-                return
-        stype = _shape_type(sub)
-        if self.types and stype not in self.types and not self.allow_external:
-            return
-        if not sub and not self.allow_external:
-            return
-        entry = (obj, sub)
-        if entry in self.references:
-            return
-        if self.max_count is not None and len(self.references) >= self.max_count:
-            self.references.pop(0)
-        self.references.append(entry)
-        self._rebuild_list()
-        self.changed.emit()
-
-
-class _PickerObserver:
-    """
-    Re-reads the resolved selection whenever it changes.
-
-    The raw callback arguments carry the unresolved container path, so the
-    selection itself is asked to resolve them instead.
-    """
-
-    def __init__(self, callback):
-        self.callback = callback
-        FreeCADGui.Selection.addObserver(self)
-
-    def addSelection(self, docName, objName, sub, pos):
-        self.callback()
+        self.slot.clear()
 
 
 class _ObjectPicker(QtGui.QGroupBox):
@@ -271,63 +170,56 @@ class _ObjectPicker(QtGui.QGroupBox):
     def __init__(self, title, base_obj, parent=None):
         super().__init__(title, parent)
         self.base_obj = base_obj
-        self.reference = None
-        self._observer = None
-
-        self.label = QtGui.QLabel(FreeCAD.Qt.translate("FEM", "None"))
-        self.add_btn = QtGui.QPushButton(FreeCAD.Qt.translate("FEM", "Add"))
-        self.clear_btn = QtGui.QPushButton(FreeCAD.Qt.translate("FEM", "Clear"))
-        self.add_btn.clicked.connect(self.start_selection)
-        self.clear_btn.clicked.connect(self.clear_all)
-
-        row = QtGui.QHBoxLayout()
-        row.addWidget(self.add_btn)
-        row.addWidget(self.clear_btn)
-
+        self.group = ReferenceSelection(None, geometry=base_obj, auto_install=False)
+        rule = ReferenceRule(
+            types=("Face",),
+            max_count=1,
+            homogeneous=False,
+            scope="any",
+            object_kinds=(
+                "Part::DatumPlane",
+                "Sketcher::SketchObject",
+                "Part::Feature",
+            ),
+            allow_empty_sub=True,
+        )
+        self.slot = self.group.add_slot("Tool", title, rule, marks=False)
+        self.slot.picksChanged.connect(lambda *_: self.changed.emit())
         layout = QtGui.QVBoxLayout()
-        layout.addWidget(self.label)
-        layout.addLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.group)
         self.setLayout(layout)
 
+    @property
+    def reference(self):
+        if not self.slot.picks:
+            return None
+        obj, sub = self.slot.picks[0]
+        return (obj, (sub,) if sub else ())
+
     def set_reference(self, reference):
-        self.reference = reference
         if reference is None:
-            self.label.setText(FreeCAD.Qt.translate("FEM", "None"))
+            self.slot.picks = []
         else:
             obj, subs = reference[0], reference[1]
-            sub = subs[0] if subs else ""
-            self.label.setText(f"{obj.Label}.{sub}" if sub else obj.Label)
+            sub = ""
+            if subs:
+                sub = subs[0] if not isinstance(subs, str) else subs
+            self.slot.picks = [(obj, sub or "")]
+        self.slot._commit()
 
     def start_selection(self):
-        self.finish_selection()
-        self._observer = _PickerObserver(self.consume_selection)
-        self.consume_selection()
+        _arm_picker(self)
+        self.group.coordinator.install()
+        self.group.arm(self.slot.slot_id)
+        self.group.consume_current_selection()
 
     def finish_selection(self):
-        if self._observer:
-            FreeCADGui.Selection.removeObserver(self._observer)
-            self._observer = None
+        self.group.coordinator.remove()
+        _disarm_picker(self)
 
     def clear_all(self):
-        self.reference = None
-        self.label.setText(FreeCAD.Qt.translate("FEM", "None"))
-        self.changed.emit()
-
-    def consume_selection(self):
-        for obj, sub in _current_picks():
-            self._set_reference(obj, sub)
-
-    def _set_reference(self, obj, sub):
-        if obj is None:
-            return
-        if obj.isDerivedFrom("Part::DatumPlane") or obj.isDerivedFrom("Sketcher::SketchObject"):
-            self.reference = (obj, ())
-        elif obj.isDerivedFrom("Part::Feature") and sub and sub.startswith("Face"):
-            self.reference = (obj, (sub,))
-        else:
-            return
-        self.set_reference(self.reference)
-        self.changed.emit()
+        self.slot.clear()
 
 
 class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
@@ -336,6 +228,10 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
     def __init__(self, obj):
         super().__init__(obj)
         self._selectionWidget = None
+        # Restoring the widgets from the object fires their change signals, and
+        # a write-back before every widget holds its stored value would clear
+        # the ones not restored yet.
+        self._loading = True
         self.base_obj = obj.Base
         self._solids_before = len(obj.Base.Shape.Solids) if obj.Base else 0
 
@@ -358,6 +254,7 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
             self.base_obj,
             ("Solid",),
             max_count=None,
+            feature=obj,
         )
         self.target_picker.set_references(_links_to_references(obj.Elements))
         existing = geometry_partition.target_types(obj.Elements)
@@ -458,6 +355,11 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
                 self.tool_ref.set_reference((tool[0], subs))
 
         self.param_spin.valueChanged.connect(self.apply_properties)
+        self._loading = False
+        # Prefill the Targets slot from a create-command stash. Subordinate
+        # pickers (points, tool, plane) are never a prefill destination.
+        self.target_picker.group.arm("Targets")
+        self.target_picker.group.consume_handoff()
         self._update_method_availability()
         self._update_method_page()
         self._update_summary()
@@ -534,6 +436,8 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
             self.method_hint.setText("")
 
     def apply_properties(self):
+        if self._loading:
+            return
         method = self.method_combo.currentText()
         self.obj.Method = method
         self.obj.Elements = self._element_links()

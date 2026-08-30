@@ -1,6 +1,5 @@
 /***************************************************************************
- *   Copyright (c) 2021 FreeCAD Developers                                 *
- *   Author: Ajinkya Dahale <dahale.a.p@gmail.com>                         *
+ *   Copyright (c) 2026 Stefan Tröger <stefantroeger@gmx.net>              *
  *                                                                         *
  *   This file is part of the FreeCAD CAx development system.              *
  *                                                                         *
@@ -23,55 +22,57 @@
 
 #pragma once
 
-#include <QObject>
+#include <CXX/Objects.hxx>
+#include <QWidget>
+#include <string>
+#include <vector>
 
-#include <Gui/Selection/Selection.h>
-#include <Gui/TaskView/TaskView.h>
-#include <Gui/Widgets.h>
-#include <Mod/Fem/FemGlobal.h>
-
-#include "TaskFemConstraint.h"
-
+namespace App
+{
+class DocumentObject;
+}
 
 namespace FemGui
 {
 
-/** @brief Taskbox for FEM constraints that apply on subsets of the domain boundary
- *
- *  @detail Convenience superclass for taskboxes setting certain constraints
- *  that apply on subsets of the boundary (faces/edges/vertices), where one or
- *  more boundary entities need to be selected.
- */
-class TaskFemConstraintOnBoundary: public TaskFemConstraint
+struct ReferenceSlotSpec
+{
+    std::string property = "References";
+    std::string title;
+    std::vector<std::string> types;
+    int maxCount = 0;
+    bool homogeneous = true;
+    bool armed = false;
+    bool promotionLatched = false;
+    std::string role;
+    std::string id;
+    std::vector<std::string> objectKinds;
+    bool allowEmptySub = false;
+    std::string scope = "geometry";
+};
+
+/** Hide the Add/Remove/list chrome a .ui file still carries after the
+ *  panel hosts the Python reference widget. */
+void hideLegacyReferenceWidgets(QWidget* root);
+
+/** QWidget host for femguiutils.selection_slots.from_slot_specs. */
+class ReferenceSelectionWidget: public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit TaskFemConstraintOnBoundary(
-        ViewProviderFemConstraint* ConstraintView,
-        QWidget* parent = nullptr,
-        const char* pixmapname = ""
+    ReferenceSelectionWidget(
+        App::DocumentObject* obj,
+        const std::vector<ReferenceSlotSpec>& specs,
+        QWidget* parent = nullptr
     );
-    ~TaskFemConstraintOnBoundary() override;
+    ~ReferenceSelectionWidget() override;
 
-protected Q_SLOTS:
-    void onButtonToggled(QAbstractButton* button, bool checked);
-    virtual void addToSelection() = 0;
-    virtual void removeFromSelection() = 0;
+    void finish();
+    void setSlotVisible(const char* slotId, bool visible);
 
-protected:
-    enum class SelectionChangeModes
-    {
-        none,
-        refAdd,
-        refRemove
-    };
-    void onSelectionChanged(const Gui::SelectionChanges&) override;
-    virtual void clearButtons(const SelectionChangeModes notThis) = 0;
-
-protected:
-    enum SelectionChangeModes selChangeMode;
-    Gui::ButtonGroup* buttonGroup;
+private:
+    Py::Object m_panel;
 };
 
 }  // namespace FemGui

@@ -34,6 +34,7 @@
 
 
 class Ui_TaskFemConstraintTransform;
+class QListWidgetItem;
 
 namespace FemGui
 {
@@ -47,17 +48,15 @@ public:
         QWidget* parent = nullptr
     );
     ~TaskFemConstraintTransform() override;
-    const std::string getReferences() const override;
     Base::Rotation getRotation() const;
     std::string get_transform_type() const;
     static std::string getSurfaceReferences(const std::string showConstr);
 
 private Q_SLOTS:
-    void onReferenceDeleted();
+    /// Show in the 3D view the transformable surface a row names.
+    void selectDisplacedSurface(QListWidgetItem* item);
     void Rect();
     void Cyl();
-    void addToSelection();
-    void removeFromSelection();
     void xAxisChanged(double x);
     void yAxisChanged(double y);
     void zAxisChanged(double z);
@@ -66,9 +65,10 @@ private Q_SLOTS:
 protected:
     void changeEvent(QEvent* e) override;
     const QString makeText(const App::DocumentObject* obj) const;
+    /// "ObjName:SubName", which selectDisplacedSurface() parses back.
+    static QString makeSurfaceText(const App::DocumentObject* obj, const std::string& subName);
 
 private:
-    void updateUI();
     std::unique_ptr<Ui_TaskFemConstraintTransform> ui;
 };
 

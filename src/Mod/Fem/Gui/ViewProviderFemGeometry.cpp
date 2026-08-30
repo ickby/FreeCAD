@@ -1074,6 +1074,48 @@ std::string ViewProviderFemGeometry::idElementForColor(vtkIdType id) const
     return it->second.front();
 }
 
+std::vector<std::string> ViewProviderFemGeometry::volumeOwnersOf(const std::string& element) const
+{
+    if (isVolumeElementName(element)) {
+        return {element};
+    }
+    const char* prefix = nullptr;
+    if (element.rfind("Face", 0) == 0) {
+        prefix = "Face";
+    }
+    else if (element.rfind("Edge", 0) == 0) {
+        prefix = "Edge";
+    }
+    else if (element.rfind("Vertex", 0) == 0) {
+        prefix = "Vertex";
+    }
+    std::set<std::string> owners;
+    for (const auto& [id, names] : m_id_elements) {
+        bool hit = std::find(names.begin(), names.end(), element) != names.end();
+        if (!hit && prefix) {
+            hit = elementForShapeId(id, prefix) == element;
+        }
+        if (!hit) {
+            continue;
+        }
+        for (const auto& name : names) {
+            if (isVolumeElementName(name)) {
+                owners.insert(name);
+            }
+        }
+    }
+    return {owners.begin(), owners.end()};
+}
+
+void ViewProviderFemGeometry::setPreselectPromotion(bool on)
+{
+    if (m_preselectPromotion == on) {
+        return;
+    }
+    m_preselectPromotion = on;
+    syncSelectionHighlight();
+}
+
 std::string ViewProviderFemGeometry::getElement(const SoDetail* detail) const
 {
     if (!detail) {
@@ -1425,7 +1467,18 @@ void ViewProviderFemGeometry::syncSelectionHighlight()
     if (pre.pDocName && pre.pObjectName) {
         auto el = elementFromSelection(pre.pDocName, pre.pObjectName, pre.pSubName);
         if (!el.empty()) {
-            m_preselected.insert(std::move(el));
+            if (m_preselectPromotion) {
+                auto owners = volumeOwnersOf(el);
+                if (!owners.empty()) {
+                    m_preselected.insert(owners.begin(), owners.end());
+                }
+                else {
+                    m_preselected.insert(std::move(el));
+                }
+            }
+            else {
+                m_preselected.insert(std::move(el));
+            }
         }
     }
 

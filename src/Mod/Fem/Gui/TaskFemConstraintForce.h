@@ -26,7 +26,7 @@
 #include <QObject>
 #include <memory>
 
-#include "TaskFemConstraintOnBoundary.h"
+#include "TaskFemConstraint.h"
 #include "ViewProviderFemConstraintForce.h"
 
 
@@ -46,7 +46,7 @@ class ViewProvider;
 namespace FemGui
 {
 
-class TaskFemConstraintForce: public TaskFemConstraintOnBoundary
+class TaskFemConstraintForce: public TaskFemConstraint
 {
     Q_OBJECT
 
@@ -57,27 +57,13 @@ public:
     );
     ~TaskFemConstraintForce() override;
     const std::string getForce() const;
-    const std::string getReferences() const override;
-    const std::string getDirectionName() const;
-    const std::string getDirectionObject() const;
     bool getReverse() const;
 
 private Q_SLOTS:
-    void onReferenceDeleted();
-    void onButtonDirection(const bool pressed = false);
     void onCheckReverse(bool);
-    void addToSelection() override;
-    void removeFromSelection() override;
 
 protected:
     void changeEvent(QEvent* e) override;
-    void clearButtons(const SelectionChangeModes notThis) override;
-
-private:
-    std::pair<App::DocumentObject*, std::string> getDirection(
-        const std::vector<Gui::SelectionObject>&
-    ) const;
-    void updateUI();
 
 private:
     std::unique_ptr<Ui_TaskFemConstraintForce> ui;

@@ -44,6 +44,9 @@ TaskFemConstraintPulley::TaskFemConstraintPulley(
 )
     : TaskFemConstraintGear(ConstraintView, parent, "FEM_ConstraintPulley")
 {
+    if (m_references) {
+        m_references->setSlotVisible("Direction", false);
+    }
     connect(
         ui->spinOtherDiameter,
         qOverload<double>(&QDoubleSpinBox::valueChanged),
@@ -91,8 +94,6 @@ TaskFemConstraintPulley::TaskFemConstraintPulley(
     ui->spinTensionForce->setValue(tensionforce);
 
     // Adjust ui
-    ui->buttonDirection->setVisible(false);
-    ui->lineDirection->setVisible(false);
     ui->checkReversed->setVisible(false);
     ui->labelDiameter->setText(tr("Pulley diameter"));
     ui->labelForce->setText(tr("Torque [Nm]"));

@@ -399,6 +399,7 @@ SET(FemTestsApp_SRCS
     femtest/app/test_object.py
     femtest/app/test_open.py
     femtest/app/test_preprocess.py
+    femtest/app/test_selection_rules.py
     femtest/app/test_result.py
     femtest/app/test_solver_elmer.py
     femtest/app/test_solver_mystran.py
@@ -775,7 +776,10 @@ SET(FemGuiUtils_SRCS
     femguiutils/component_selection.py
     femguiutils/disambiguate_solid_selection.py
     femguiutils/migrate_gui.py
-    femguiutils/selection_widgets.py
+    femguiutils/selection_coordinator.py
+    femguiutils/selection_handoff.py
+    femguiutils/selection_rules.py
+    femguiutils/selection_slots.py
     femguiutils/view_panel.py
 )
 

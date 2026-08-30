@@ -117,6 +117,16 @@ PyObject* ViewProviderFemGeometryPy::isChainRenderSuppressed(PyObject* args)
     Py_RETURN_FALSE;
 }
 
+PyObject* ViewProviderFemGeometryPy::setPreselectPromotion(PyObject* args)
+{
+    PyObject* pyOn = nullptr;
+    if (!PyArg_ParseTuple(args, "O!", &PyBool_Type, &pyOn)) {
+        return nullptr;
+    }
+    this->getViewProviderFemGeometryPtr()->setPreselectPromotion(PyObject_IsTrue(pyOn) != 0);
+    Py_Return;
+}
+
 PyObject* ViewProviderFemGeometryPy::setElementHighlight(PyObject* args)
 {
     char* role = nullptr;

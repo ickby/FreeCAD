@@ -39,7 +39,10 @@ ninja = "*"
 noqt5 = "*"
 numpy = ">=1.26,<1.27"
 nlohmann_json = "*"
-occt = ">=7.8,<7.9"
+# The "all" variant is the one built against VTK. FEM renders geometry through
+# OCCT's VIS module (IVtkOCC, IVtkTools), which the "novtk" variant omits, and
+# on win-64 the solver picks "novtk" unless told otherwise.
+occt = { version = ">=7.8,<7.9", build = "all_*" }
 opencamlib = "*"
 openssl = "*"
 pandas = "*"

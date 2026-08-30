@@ -1729,7 +1729,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/hdf4-4.2.15-h5557f11_7.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/hdf5-1.14.3-nompi_hb2c4d47_109.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/icu-75.1-he0c23c2_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/win-64/ifcopenshell-0.7.11-py311_novtk_h740ddcc_200.conda
+      - conda: https://conda.anaconda.org/conda-forge/win-64/ifcopenshell-0.7.11-py311_all_hbbc9d40_100.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/imath-3.1.12-hbb528cf_0.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/jasper-4.2.8-h8ad263b_0.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/jsoncpp-1.9.5-h2d74725_1.tar.bz2
@@ -1807,7 +1807,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/nlohmann_json-3.12.0-h5112557_1.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/nodejs-25.8.2-h80d1838_0.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/numpy-1.26.4-py311h0b4df5a_0.conda
-      - conda: https://conda.anaconda.org/conda-forge/win-64/occt-7.8.1-novtk_hdfbec02_103.conda
+      - conda: https://conda.anaconda.org/conda-forge/win-64/occt-7.8.1-all_hc0579d7_202.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/openblas-0.3.33-pthreads_h4a7f399_0.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/opencamlib-2023.01.11-py311h821223c_8.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/openexr-3.2.2-h9aba623_2.conda
@@ -1829,7 +1829,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/win-64/pyright-1.1.408-py311hf893f09_0.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/pyside6-6.8.3-py311h4238720_0.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/python-3.11.14-h0159041_3_cpython.conda
-      - conda: https://conda.anaconda.org/conda-forge/win-64/pythonocc-core-7.8.1.1-novtk_h0fad4f0_100.conda
+      - conda: https://conda.anaconda.org/conda-forge/win-64/pythonocc-core-7.8.1.1-all_h44a3997_200.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/pyyaml-6.0.3-py311h3f79411_0.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/qhull-2020.2-hc790b64_5.conda
       - conda: https://conda.anaconda.org/conda-forge/win-64/qt6-main-6.8.3-h72a539a_1.conda
@@ -21319,9 +21319,9 @@ packages:
   purls: []
   size: 14544252
   timestamp: 1720853966338
-- conda: https://conda.anaconda.org/conda-forge/win-64/ifcopenshell-0.7.11-py311_novtk_h740ddcc_200.conda
-  sha256: dec2a962cc2545fe2a3a1fe96eb776fce2cf8babd0729bdea7ef9b5487965373
-  md5: 9dc4d2aadc47e9b62d60ea3857fa88a9
+- conda: https://conda.anaconda.org/conda-forge/win-64/ifcopenshell-0.7.11-py311_all_hbbc9d40_100.conda
+  sha256: 01952784c9d26c363d1343cd95d64e1decde96d1b9109335fe1fd0f3a0d054e6
+  md5: 2454a2a50abfb31c63e1e14fbd265df6
   depends:
   - cgal-cpp >=5.6.1,<5.7.0a0
   - hdf5 >=1.14.3,<1.14.4.0a0
@@ -21331,7 +21331,7 @@ packages:
   - mpfr >=4.2.1,<5.0a0
   - mpir >=3.0.0,<4.0a0
   - occt >=7.8.1,<7.8.2.0a0
-  - occt >=7.8.1,<7.8.2.0a0 *novtk*
+  - occt >=7.8.1,<7.8.2.0a0 *all*
   - python >=3.11,<3.12.0a0
   - python_abi 3.11.* *_cp311
   - ucrt >=10.0.20348.0
@@ -21340,8 +21340,11 @@ packages:
   license: LGPL-3.0-or-later
   license_family: LGPL
   purls: []
-  size: 59303009
-  timestamp: 1722026261726
+  run_exports:
+    weak:
+    - ifcopenshell >=0.7.11,<0.7.12.0a0 *all*
+  size: 59051209
+  timestamp: 1722027392792
 - conda: https://conda.anaconda.org/conda-forge/win-64/imath-3.1.12-hbb528cf_0.conda
   sha256: 184c796615cebaa73246f351144f164ee7b61ea809e4ba3c5d98fa9ca333e058
   md5: c25af729c8c1c41f96202f8a96652bbe
@@ -22430,9 +22433,9 @@ packages:
   - pkg:pypi/numpy?source=hash-mapping
   size: 7104093
   timestamp: 1707226459646
-- conda: https://conda.anaconda.org/conda-forge/win-64/occt-7.8.1-novtk_hdfbec02_103.conda
-  sha256: 28e3da6feaec750f1a7b64f0aebc7a5f209d64ce3cbc49a3d1a22d2c81ff32d1
-  md5: 6d69bb81e6f74e7818c3ba59fa026467
+- conda: https://conda.anaconda.org/conda-forge/win-64/occt-7.8.1-all_hc0579d7_202.conda
+  sha256: 0d13d134a27319f01f8191a872465e59c625fb42544b071a208ffde71c0751a7
+  md5: 3402ffbb2e5c0d10d31c89c5674553be
   depends:
   - fontconfig >=2.14.2,<3.0a0
   - fonts-conda-ecosystem
@@ -22442,9 +22445,12 @@ packages:
   - ucrt >=10.0.20348.0
   - vc >=14.2,<15
   - vc14_runtime >=14.29.30139
+  - vtk
+  - vtk-base >=9.3.0,<9.3.1.0a0
   license: LGPL-2.1-only
   license_family: LGPL
   purls: []
+<<<<<<< HEAD
   size: 24745172
   timestamp: 1729330315091
 - conda: https://conda.anaconda.org/conda-forge/win-64/openblas-0.3.33-pthreads_h4a7f399_0.conda
@@ -22458,6 +22464,13 @@ packages:
   run_exports: {}
   size: 264863
   timestamp: 1776999792607
+=======
+  run_exports:
+    weak:
+    - occt >=7.8.1,<7.8.2.0a0
+  size: 24816612
+  timestamp: 1718828645656
+>>>>>>> 3aa5c42298 (FEM: Use occt with vtk also on windows)
 - conda: https://conda.anaconda.org/conda-forge/win-64/opencamlib-2023.01.11-py311h821223c_8.conda
   sha256: 70206211c32e7fd2a02576f91761f19e6179e99979fb9b71d7dd9dcc91a817a1
   md5: ebc9e68bfe3cfe0968167f16352e2b82
@@ -22822,12 +22835,12 @@ packages:
   purls: []
   size: 18353938
   timestamp: 1769471078924
-- conda: https://conda.anaconda.org/conda-forge/win-64/pythonocc-core-7.8.1.1-novtk_h0fad4f0_100.conda
-  sha256: a6621639c76f757b16d1f96984825f73e540943cd8bcf672a2f715457c805255
-  md5: d2c3556a3aea0028221476c899a6d260
+- conda: https://conda.anaconda.org/conda-forge/win-64/pythonocc-core-7.8.1.1-all_h44a3997_200.conda
+  sha256: 128682a9ca08b1dd8de344b5dd5e6325716a02a9cdb985235e5991cc2ecde1ad
+  md5: 224c6a7f8a22fc8993f4c4b2f440eabd
   depends:
   - numpy >=1.19,<3
-  - occt 7.8.1 *novtk*
+  - occt 7.8.1 *all*
   - occt >=7.8.1,<7.8.2.0a0
   - python >=3.11,<3.12.0a0
   - python_abi 3.11.* *_cp311
@@ -22836,12 +22849,13 @@ packages:
   - vc >=14.2,<15
   - vc14_runtime >=14.29.30139
   constrains:
-  - occt 7.8.1 *novtk*
+  - occt 7.8.1 *all*
   license: LGPL-3.0-or-later
   license_family: LGPL
   purls: []
-  size: 40073242
-  timestamp: 1734428925228
+  run_exports: {}
+  size: 40026384
+  timestamp: 1734431012778
 - conda: https://conda.anaconda.org/conda-forge/win-64/pyyaml-6.0.3-py311h3f79411_0.conda
   sha256: 22dcc6c6779e5bd970a7f5208b871c02bf4985cf4d827d479c4a492ced8ce577
   md5: 4e9b677d70d641f233b29d5eab706e20

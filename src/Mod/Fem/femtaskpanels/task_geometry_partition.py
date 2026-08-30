@@ -25,7 +25,7 @@ __title__ = "FreeCAD FEM geometry partition task panel"
 __author__ = "Stefan Tröger"
 __url__ = "https://www.freecad.org"
 
-from PySide import QtCore, QtGui
+from PySide import QtGui
 
 import FreeCAD
 
@@ -51,9 +51,6 @@ MARK_COLORS = {
 }
 
 
-_active_picker = None
-
-
 def _references_to_links(references):
     """Convert picker tuples to PropertyLinkSubList assignment."""
     grouped = {}
@@ -75,151 +72,30 @@ def _links_to_references(links):
     return references
 
 
-def _arm_picker(picker):
-    global _active_picker
-    if _active_picker is not None and _active_picker is not picker:
-        _active_picker.finish_selection()
-    _active_picker = picker
+def _sub_element_rule(kind, max_count=None):
+    """Elements of one kind, on the geometry the step builds on."""
+    return ReferenceRule(
+        types=(kind,),
+        max_count=max_count,
+        homogeneous=True,
+        scope="geometry",
+    )
 
 
-def _disarm_picker(picker):
-    global _active_picker
-    if _active_picker is picker:
-        _active_picker = None
-
-
-class _SubElementPicker(QtGui.QGroupBox):
-    """Pick sub-elements on a geometry object for partition references."""
-
-    changed = QtCore.Signal()
-
-    def __init__(
-        self,
-        title,
-        base_obj,
-        types,
-        max_count=None,
-        allow_external=False,
-        feature=None,
-        parent=None,
-    ):
-        super().__init__(title, parent)
-        self.base_obj = base_obj
-        self.max_count = max_count
-        self.allow_external = allow_external
-        scope = "any" if allow_external else "geometry"
-        self.group = ReferenceSelection(feature, geometry=base_obj, auto_install=False)
-        rule = ReferenceRule(
-            types=tuple(types),
-            max_count=max_count,
-            homogeneous=True,
-            scope=scope,
-        )
-        self.slot = self.group.add_slot("Targets", title, rule, marks=False)
-        self.slot.picksChanged.connect(lambda *_: self.changed.emit())
-        layout = QtGui.QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.group)
-        self.setLayout(layout)
-
-    @property
-    def references(self):
-        return list(self.slot.picks)
-
-    def set_references(self, references):
-        self.slot.picks = list(references)
-        self.slot._commit()
-
-    def set_target_kind(self, kind):
-        """Restrict picking to one shape type, dropping picks of the others."""
-        self.slot.set_rule(
-            ReferenceRule(
-                types=(kind,),
-                max_count=self.max_count,
-                homogeneous=True,
-                scope="any" if self.allow_external else "geometry",
-            )
-        )
-        kept = [ref for ref in self.slot.picks if shape_kind(ref[1]) == kind]
-        if kept != self.slot.picks:
-            self.slot.picks = kept
-            self.slot._commit()
-            self.changed.emit()
-
-    def start_selection(self):
-        _arm_picker(self)
-        self.group.coordinator.install()
-        self.group.arm(self.slot.slot_id)
-        # Whatever is already selected counts, so picking first and then
-        # clicking Add works the same way round as Add and then picking.
-        self.group.consume_current_selection()
-
-    def finish_selection(self):
-        self.group.coordinator.remove()
-        _disarm_picker(self)
-
-    def clear_all(self):
-        self.slot.clear()
-
-
-class _ObjectPicker(QtGui.QGroupBox):
-    """Pick a single external or internal reference object."""
-
-    changed = QtCore.Signal()
-
-    def __init__(self, title, base_obj, parent=None):
-        super().__init__(title, parent)
-        self.base_obj = base_obj
-        self.group = ReferenceSelection(None, geometry=base_obj, auto_install=False)
-        rule = ReferenceRule(
-            types=("Face",),
-            max_count=1,
-            homogeneous=False,
-            scope="any",
-            object_kinds=(
-                "Part::DatumPlane",
-                "Sketcher::SketchObject",
-                "Part::Feature",
-            ),
-            allow_empty_sub=True,
-        )
-        self.slot = self.group.add_slot("Tool", title, rule, marks=False)
-        self.slot.picksChanged.connect(lambda *_: self.changed.emit())
-        layout = QtGui.QVBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.group)
-        self.setLayout(layout)
-
-    @property
-    def reference(self):
-        if not self.slot.picks:
-            return None
-        obj, sub = self.slot.picks[0]
-        return (obj, (sub,) if sub else ())
-
-    def set_reference(self, reference):
-        if reference is None:
-            self.slot.picks = []
-        else:
-            obj, subs = reference[0], reference[1]
-            sub = ""
-            if subs:
-                sub = subs[0] if not isinstance(subs, str) else subs
-            self.slot.picks = [(obj, sub or "")]
-        self.slot._commit()
-
-    def start_selection(self):
-        _arm_picker(self)
-        self.group.coordinator.install()
-        self.group.arm(self.slot.slot_id)
-        self.group.consume_current_selection()
-
-    def finish_selection(self):
-        self.group.coordinator.remove()
-        _disarm_picker(self)
-
-    def clear_all(self):
-        self.slot.clear()
+def _tool_rule():
+    """A whole datum, sketch or face, on any object in the document."""
+    return ReferenceRule(
+        types=("Face",),
+        max_count=1,
+        homogeneous=False,
+        scope="any",
+        object_kinds=(
+            "Part::DatumPlane",
+            "Sketcher::SketchObject",
+            "Part::Feature",
+        ),
+        allow_empty_sub=True,
+    )
 
 
 class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
@@ -227,7 +103,6 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
 
     def __init__(self, obj):
         super().__init__(obj)
-        self._selectionWidget = None
         # Restoring the widgets from the object fires their change signals, and
         # a write-back before every widget holds its stored value would clear
         # the ones not restored yet.
@@ -237,6 +112,14 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
 
         self.form = QtGui.QWidget()
         layout = QtGui.QVBoxLayout()
+
+        # One group for the whole panel, not one per box. The coordinator it
+        # owns keeps a single slot armed and a single gate on the 3D view, so
+        # arming any box disarms the last and a pick has one place to land.
+        self.picker = ReferenceSelection(
+            obj, parent=self.form, geometry=self.base_obj, auto_install=False
+        )
+        self.picker.hide()
 
         # A step cuts either solids or sub-elements, never both, so the kind is
         # chosen up front. It also tells the picker how to read a 3D click,
@@ -249,21 +132,21 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         ):
             self.kind_combo.addItem(label, kind)
 
-        self.target_picker = _SubElementPicker(
+        # The panel draws its own marks, in the colours below, so the slots
+        # are told to leave the marking alone and only to match the colour.
+        self.targets = self._add_slot(
+            "Targets",
             FreeCAD.Qt.translate("FEM", "Targets"),
-            self.base_obj,
-            ("Solid",),
-            max_count=None,
-            feature=obj,
+            _sub_element_rule("Solid"),
+            MARK_TARGETS,
         )
-        self.target_picker.set_references(_links_to_references(obj.Elements))
+        self.targets.set_picks(_links_to_references(obj.Elements))
         existing = geometry_partition.target_types(obj.Elements)
         kind_index = self.kind_combo.findData(next(iter(existing)) if existing else "Solid")
         if kind_index >= 0:
             self.kind_combo.setCurrentIndex(kind_index)
-        self.target_picker.set_target_kind(self.kind_combo.currentData())
+        self.apply_target_kind()
         self.kind_combo.currentIndexChanged.connect(self.kind_changed)
-        self.target_picker.changed.connect(self.targets_changed)
 
         self.method_combo = QtGui.QComboBox()
         for method in geometry_partition.PARTITION_METHODS:
@@ -273,29 +156,24 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         self.method_hint = QtGui.QLabel()
         self.method_hint.setWordWrap(True)
 
-        self.stack = QtGui.QStackedWidget()
-
-        self.points_3 = _SubElementPicker(
+        self.points_3 = self._add_slot(
+            "Points3",
             FreeCAD.Qt.translate("FEM", "Plane points"),
-            self.base_obj,
-            ("Vertex",),
-            max_count=3,
+            _sub_element_rule("Vertex", max_count=3),
+            MARK_POINTS,
         )
-        self.points_3.changed.connect(self.apply_properties)
-
-        self.tool_ref = _ObjectPicker(
+        self.tool_ref = self._add_slot(
+            "Tool",
             FreeCAD.Qt.translate("FEM", "Plane reference"),
-            self.base_obj,
+            _tool_rule(),
+            MARK_TOOL,
         )
-        self.tool_ref.changed.connect(self.apply_properties)
-
-        self.tool_face = _SubElementPicker(
+        self.tool_face = self._add_slot(
+            "ToolFace",
             FreeCAD.Qt.translate("FEM", "Face to extend"),
-            self.base_obj,
-            ("Face",),
-            max_count=1,
+            _sub_element_rule("Face", max_count=1),
+            MARK_TOOL,
         )
-        self.tool_face.changed.connect(self.apply_properties)
 
         self.param_spin = QtGui.QDoubleSpinBox()
         self.param_spin.setRange(0.0, 1.0)
@@ -307,22 +185,26 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         param_row.addWidget(QtGui.QLabel(FreeCAD.Qt.translate("FEM", "Parameter")))
         param_row.addWidget(self.param_spin)
         param_row.addWidget(self.param_mid)
-        param_page = QtGui.QWidget()
-        param_page.setLayout(param_row)
+        self.param_page = QtGui.QWidget()
+        self.param_page.setLayout(param_row)
 
-        self.points_2 = _SubElementPicker(
+        self.points_2 = self._add_slot(
+            "Points2",
             FreeCAD.Qt.translate("FEM", "Path vertices"),
-            self.base_obj,
-            ("Vertex",),
-            max_count=2,
+            _sub_element_rule("Vertex", max_count=2),
+            MARK_POINTS,
         )
-        self.points_2.changed.connect(self.apply_properties)
 
-        self.stack.addWidget(QtGui.QWidget())  # 0 plane 3p -> points_3 shown separately
-        self.stack.addWidget(self.tool_ref)
-        self.stack.addWidget(self.tool_face)
-        self.stack.addWidget(param_page)
-        self.stack.addWidget(self.points_2)
+        # What a method asks for is shown and the rest is hidden. Stacking
+        # them instead would hold the height of the tallest page open under
+        # every method, and most of them ask for one line or nothing at all.
+        self.method_pages = {
+            geometry_partition.METHOD_PLANE_3P: self.points_3,
+            geometry_partition.METHOD_PLANE_REF: self.tool_ref,
+            geometry_partition.METHOD_EXTEND_FACE: self.tool_face,
+            geometry_partition.METHOD_EDGE_PARAM: self.param_page,
+            geometry_partition.METHOD_SHORTEST_PATH: self.points_2,
+        }
 
         self.summary = QtGui.QLabel()
 
@@ -330,13 +212,14 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         kind_row.addWidget(QtGui.QLabel(FreeCAD.Qt.translate("FEM", "Target kind")))
         kind_row.addWidget(self.kind_combo)
         layout.addLayout(kind_row)
-        layout.addWidget(self.target_picker)
+        layout.addWidget(self.targets)
         layout.addWidget(QtGui.QLabel(FreeCAD.Qt.translate("FEM", "Method")))
         layout.addWidget(self.method_combo)
         layout.addWidget(self.method_hint)
-        layout.addWidget(self.points_3)
-        layout.addWidget(self.stack)
+        for page in self.method_pages.values():
+            layout.addWidget(page)
         layout.addWidget(self.summary)
+        layout.addStretch(1)
         self.form.setLayout(layout)
 
         # A stored method can have become invalid for the stored targets, so the
@@ -345,32 +228,55 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         index = self.method_combo.findText(method)
         if index >= 0:
             self.method_combo.setCurrentIndex(index)
-        self.points_3.set_references(_links_to_references(obj.Points))
+        stored_points = _links_to_references(obj.Points)
+        if obj.Method == geometry_partition.METHOD_SHORTEST_PATH:
+            self.points_2.set_picks(stored_points)
+        else:
+            self.points_3.set_picks(stored_points)
         if obj.Tool:
             tool = obj.Tool
             subs = tool[1] if isinstance(tool[1], (list, tuple)) else (tool[1],)
+            sub = subs[0] if subs else ""
             if obj.Method == geometry_partition.METHOD_EXTEND_FACE:
-                self.tool_face.set_references([(tool[0], subs[0])] if subs and subs[0] else [])
+                self.tool_face.set_picks([(tool[0], sub)] if sub else [])
             else:
-                self.tool_ref.set_reference((tool[0], subs))
+                self.tool_ref.set_picks([(tool[0], sub)])
 
         self.param_spin.valueChanged.connect(self.apply_properties)
+        # Only now, so restoring the boxes above does not write back over the
+        # ones that have not been restored yet.
+        self.targets.picksChanged.connect(lambda *_: self.targets_changed())
+        for slot in (self.points_3, self.tool_ref, self.tool_face, self.points_2):
+            slot.picksChanged.connect(lambda *_: self.apply_properties())
         self._loading = False
-        # Prefill the Targets slot from a create-command stash. Subordinate
-        # pickers (points, tool, plane) are never a prefill destination.
-        self.target_picker.group.arm("Targets")
-        self.target_picker.group.consume_handoff()
+
         self._update_method_availability()
         self._update_method_page()
+        # Picking starts on Targets, and a create-command stash lands there.
+        # Subordinate boxes are never a prefill destination.
+        self.picker.begin_selection()
+        self.picker.arm("Targets")
+        self.picker.consume_handoff()
         self._update_summary()
         self._update_marks()
         self._update_tool_preview()
 
+    def _add_slot(self, slot_id, title, rule, mark_role):
+        return self.picker.add_slot(slot_id, title, rule, marks=False, color=MARK_COLORS[mark_role])
+
     def _element_links(self):
-        return _references_to_links(self.target_picker.references)
+        return _references_to_links(self.targets.picks)
+
+    def apply_target_kind(self):
+        """Restrict the target box to one shape kind, dropping picks of the others."""
+        kind = self.kind_combo.currentData()
+        self.targets.set_rule(_sub_element_rule(kind))
+        kept = [ref for ref in self.targets.picks if shape_kind(ref[1]) == kind]
+        if kept != self.targets.picks:
+            self.targets.set_picks(kept)
 
     def kind_changed(self):
-        self.target_picker.set_target_kind(self.kind_combo.currentData())
+        self.apply_target_kind()
         self.targets_changed()
 
     def targets_changed(self):
@@ -423,15 +329,13 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
 
     def _update_method_page(self):
         method = self.method_combo.currentText()
-        self.points_3.setVisible(method == geometry_partition.METHOD_PLANE_3P)
-        pages = {
-            geometry_partition.METHOD_PLANE_3P: 0,
-            geometry_partition.METHOD_PLANE_REF: 1,
-            geometry_partition.METHOD_EXTEND_FACE: 2,
-            geometry_partition.METHOD_EDGE_PARAM: 3,
-            geometry_partition.METHOD_SHORTEST_PATH: 4,
-        }
-        self.stack.setCurrentIndex(pages.get(method, 0))
+        for name, page in self.method_pages.items():
+            page.setVisible(name == method)
+        # A box the method just hid cannot be clicked any more, so picking
+        # would go on filling one the user can no longer see.
+        armed = self.picker.coordinator.armed_slot
+        if armed is not None and not armed.isVisibleTo(self.form):
+            self.picker.arm("Targets")
         if not self.method_hint.text():
             self.method_hint.setText("")
 
@@ -444,23 +348,19 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         self.obj.Parameter = self.param_spin.value()
 
         if method == geometry_partition.METHOD_PLANE_3P:
-            self.obj.Points = _references_to_links(self.points_3.references)
+            self.obj.Points = _references_to_links(self.points_3.picks)
             self.obj.Tool = None
         elif method == geometry_partition.METHOD_PLANE_REF:
             self.obj.Points = []
-            self.obj.Tool = self.tool_ref.reference
+            self.obj.Tool = self._tool_link(self.tool_ref, keep_whole_object=True)
         elif method == geometry_partition.METHOD_EXTEND_FACE:
             self.obj.Points = []
-            refs = self.tool_face.references
-            if refs:
-                self.obj.Tool = (refs[0][0], (refs[0][1],))
-            else:
-                self.obj.Tool = None
+            self.obj.Tool = self._tool_link(self.tool_face)
         elif method == geometry_partition.METHOD_EDGE_PARAM:
             self.obj.Points = []
             self.obj.Tool = None
         elif method == geometry_partition.METHOD_SHORTEST_PATH:
-            self.obj.Points = _references_to_links(self.points_2.references)
+            self.obj.Points = _references_to_links(self.points_2.picks)
             self.obj.Tool = None
 
         self.obj.Document.recompute()
@@ -468,19 +368,28 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         self._update_marks()
         self._update_tool_preview()
 
+    def _tool_link(self, slot, keep_whole_object=False):
+        """The slot's single pick as a PropertyLinkSub value, or None."""
+        if not slot.picks:
+            return None
+        obj, sub = slot.picks[0]
+        if not sub and not keep_whole_object:
+            return None
+        return (obj, (sub,) if sub else ())
+
     def _marked_elements(self):
         """Element names to mark per role, for the method currently chosen."""
         method = self.method_combo.currentText()
         points = []
         if method == geometry_partition.METHOD_PLANE_3P:
-            points = self.points_3.references
+            points = self.points_3.picks
         elif method == geometry_partition.METHOD_SHORTEST_PATH:
-            points = self.points_2.references
+            points = self.points_2.picks
         tool = []
         if method == geometry_partition.METHOD_EXTEND_FACE:
-            tool = self.tool_face.references
+            tool = self.tool_face.picks
         return {
-            MARK_TARGETS: self.target_picker.references,
+            MARK_TARGETS: self.targets.picks,
             MARK_POINTS: points,
             MARK_TOOL: tool,
         }
@@ -511,14 +420,7 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         )
 
     def deactivate(self):
-        for picker in (
-            self.target_picker,
-            self.points_3,
-            self.tool_ref,
-            self.tool_face,
-            self.points_2,
-        ):
-            picker.finish_selection()
+        self.picker.finish_selection()
         if self.base_obj:
             view_geometry_base.clear_input_marks(self.obj, MARK_TARGETS, MARK_POINTS, MARK_TOOL)
             view_geometry_base.clear_tool_preview(self.obj)

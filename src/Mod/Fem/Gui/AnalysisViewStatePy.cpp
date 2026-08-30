@@ -217,6 +217,12 @@ void AnalysisViewStatePy::init_type()
         "removeClipPlane(name)"
     );
     add_varargs_method(
+        "clearClipPlanes",
+        &AnalysisViewStatePy::clearClipPlanes,
+        "clearClipPlanes() -- drop every clip plane at once, which recomputes "
+        "the view one time rather than once per plane"
+    );
+    add_varargs_method(
         "getClipPlanes",
         &AnalysisViewStatePy::getClipPlanes,
         "getClipPlanes() -> {name: (origin, direction, scope)}"
@@ -574,6 +580,15 @@ Py::Object AnalysisViewStatePy::removeClipPlane(const Py::Tuple& args)
     }
     if (state()) {
         state()->removeClipPlane(name);
+    }
+    return Py::None();
+}
+
+Py::Object AnalysisViewStatePy::clearClipPlanes(const Py::Tuple& args)
+{
+    (void)args;
+    if (state()) {
+        state()->clearClipPlanes();
     }
     return Py::None();
 }

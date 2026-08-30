@@ -64,6 +64,20 @@ def _drawn_size(vobj):
     return box.getSize().getValue()
 
 
+def _flush_deletions():
+    """
+    Let the widgets that were told to delete themselves actually go.
+
+    A dock that has been shut down is still a child of the main window until
+    then, so two of them answer to the name FEMView and a lookup finds the
+    dead one first. The application does this between workbench switches by
+    running its event loop; a test has to ask.
+    """
+    event = QtCore.QEvent
+    deferred = event.Type.DeferredDelete if hasattr(event, "Type") else event.DeferredDelete
+    QtCore.QCoreApplication.sendPostedEvents(None, deferred)
+
+
 def _row_names(model, parent=None):
     """Element names the tree offers, whatever the depth they sit at."""
     if parent is None:
@@ -756,6 +770,110 @@ class TestViewPanelGui(unittest.TestCase):
 
         editor.widget.FlipButton.click()
         assert_normal([0.0, -1.0, 0.0])
+
+    # -- planes belong to the analysis, rows only reach them ------------------
+
+    def test_the_planes_outlive_the_panel_that_made_them(self):
+        """
+        Closing the panel, or leaving the workbench, is not a request to stop
+        clipping: the analysis is expected to come back cut the way it was
+        left. So the rows go and the planes stay, and reopening builds the
+        rows again rather than a second set of planes.
+        """
+        self.settings.widget.ClipButton.click()
+        state = FemGui.getAnalysisViewState(self.analysis)
+        planes = dict(state.getClipPlanes())
+        self.assertEqual(len(planes), 1)
+
+        view_panel.unsetup_visualization_panel()
+        _flush_deletions()
+        self.assertEqual(dict(state.getClipPlanes()), planes, "the panel took the plane with it")
+
+        view_panel.setup_visualization_panel()
+        dock = FreeCADGui.getMainWindow().findChild(QtGui.QDockWidget, "FEMView")
+        self.explorer = dock.widget()._explorer
+        self.settings = dock.widget()._settings
+        self.assertEqual([row.name for row in self.settings.clip_widgets()], list(planes))
+        self.assertEqual(dict(state.getClipPlanes()), planes, "and no second plane came of it")
+
+    def test_a_plane_added_from_outside_grows_its_own_row(self):
+        """
+        What the toolbar command does, and all it has to do: put a plane in
+        the view state. The row, the dragger and the cut follow from there, so
+        nothing outside the panel needs to know the panel exists.
+        """
+        self.assertEqual(self.settings.clip_widgets(), [])
+        FemGui.addClipPlane(self.analysis)
+
+        rows = self.settings.clip_widgets()
+        self.assertEqual(len(rows), 1)
+        self.assertIn(rows[0].name, FemGui.getAnalysisViewState(self.analysis).getClipPlanes())
+        self.assertFalse(self.settings.widget.ClipHint.isVisible())
+
+    def test_a_plane_switched_off_keeps_its_place(self):
+        """
+        Off is not gone. The row stays, so switching back on picks the plane
+        up where it was left rather than back in the middle of the model.
+        """
+        self.settings.widget.ClipButton.click()
+        row = self.settings.clip_widgets()[0]
+        row.handle.setPlane(FreeCAD.Vector(5, 0, 0), FreeCAD.Vector(1, 0, 0))
+
+        row.widget.ClipButton.click()
+        self.assertFalse(row.handle.isActive())
+        self.assertEqual(
+            [widget.name for widget in self.settings.clip_widgets()],
+            [row.name],
+            "a plane that cuts nothing is still a plane",
+        )
+
+        row.widget.ClipButton.click()
+        self.assertTrue(row.handle.isActive())
+        self.assertAlmostEqual(row.handle.getOrigin().x, 5.0, places=4)
+
+    def test_the_command_cuts_along_the_face_it_was_given(self):
+        """
+        The old command read a picked face the same way, and the direction is
+        the part worth pinning down: a face normal points out of the material,
+        so a plane keeping that half would keep everything but the solid.
+        """
+        from femcommands import commands as femcommands
+
+        source = self.document.getObject("Source")
+        face = source.Shape.Faces[0]
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.document.Name, source.Name, "Face1")
+
+        femcommands._ClippingPlaneAdd().Activated()
+
+        planes = FemGui.getAnalysisViewState(self.analysis).getClipPlanes()
+        self.assertEqual(len(planes), 1)
+        origin, direction, scope = next(iter(planes.values()))
+
+        centre = face.CenterOfMass
+        u, v = face.Surface.parameter(centre)
+        outward = face.normalAt(u, v).negative()
+        for got, want in zip(origin, centre):
+            self.assertAlmostEqual(got, want, places=5)
+        for got, want in zip(direction, outward):
+            self.assertAlmostEqual(got, want, places=5)
+        self.assertEqual(scope, "", "a picked face says where to cut, not what to cut")
+
+    def test_the_command_clears_every_plane_at_once(self):
+        """
+        One change of the view state rather than one per plane, so the
+        geometry and the mesh are recomputed once between them.
+        """
+        from femcommands import commands as femcommands
+
+        FemGui.addClipPlane(self.analysis)
+        FemGui.addClipPlane(self.analysis)
+        self.assertEqual(len(self.settings.clip_widgets()), 2)
+
+        femcommands._ClippingPlaneRemoveAll().Activated()
+        self.assertEqual(dict(FemGui.getAnalysisViewState(self.analysis).getClipPlanes()), {})
+        self.assertEqual(self.settings.clip_widgets(), [])
+        self.assertTrue(self.settings.widget.ClipHint.isVisible())
 
     # -- the entry point the user takes -------------------------------------
 

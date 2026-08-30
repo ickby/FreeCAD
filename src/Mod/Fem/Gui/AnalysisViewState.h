@@ -143,12 +143,22 @@ public:
     void setCellTypeHidden(const std::string& cellType, bool hidden);
     bool isCellTypeHidden(const std::string& cellType) const;
 
+    /**
+     * Every plane of the analysis, the switched off ones included.
+     *
+     * This is the list the user sees and the set the 3D handles are built
+     * from. Anything that actually cuts geometry wants activeClipPlanes().
+     */
     const std::map<std::string, ClippingPlane>& clipPlanes() const
     {
         return m_clipPlanes;
     }
+    /** The planes that cut, which is what renderers care about. */
+    std::map<std::string, ClippingPlane> activeClipPlanes() const;
     void setClipPlane(const std::string& name, const ClippingPlane& plane);
     void removeClipPlane(const std::string& name);
+    /** Drop every plane at once, so the renderers recompute one time. */
+    void clearClipPlanes();
 
     /**
      * Classification for the active stage colour mode.

@@ -58,10 +58,19 @@ struct FemGuiExport ClippingPlane
     Base::Vector3d Direction;
     /** Import path prefix, or empty to clip the whole analysis. */
     std::string Scope;
+    /**
+     * Whether the plane cuts anything at the moment.
+     *
+     * Being listed and cutting are two different things: a plane switched off
+     * keeps its place in the list and its handle in the 3D view, so it can be
+     * switched back on where it was left. Only the cutting ones are saved.
+     */
+    bool Active {true};
 
     bool operator==(const ClippingPlane& other) const
     {
-        return Origin == other.Origin && Direction == other.Direction && Scope == other.Scope;
+        return Origin == other.Origin && Direction == other.Direction && Scope == other.Scope
+            && Active == other.Active;
     }
     bool operator!=(const ClippingPlane& other) const
     {

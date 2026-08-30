@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import overload
 
-from FreeCAD import DocumentObject
+from FreeCAD import DocumentObject, Vector
 
 @overload
 def setActiveAnalysis() -> None:
@@ -38,13 +38,26 @@ def getAnalysisViewState(analysis: DocumentObject | None = None, /) -> object | 
     """Return the runtime AnalysisViewState for the given or active analysis."""
     ...
 
-def createClipPlane(
-    analysis: DocumentObject | None = None, name: str | None = None, /
+def addClipPlane(
+    analysis: DocumentObject | None = None,
+    origin: Vector | None = None,
+    normal: Vector | None = None,
+    scope: str = "",
+    /,
 ) -> object | None:
-    """Return an interactive clip plane handle for the given or active analysis.
+    """Add a clip plane to the given or active analysis and return it.
 
-    A new plane starts clipping at the center of the model. Passing the name of
-    an existing clip plane adopts that plane instead of adding a new one.
+    Without a place the plane cuts the top off the model. With one it cuts
+    through there, which is how a picked face becomes a clip plane. The normal
+    points at the half that is kept.
+    """
+    ...
+
+def getClipPlane(analysis: DocumentObject, name: str, /) -> object | None:
+    """Return the clip plane of that name, or None if the analysis has no such plane.
+
+    The 3D handle belongs to the analysis and comes and goes with the plane, so
+    it is looked up when needed rather than held on to.
     """
     ...
 

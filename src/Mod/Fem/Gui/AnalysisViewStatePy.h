@@ -52,6 +52,8 @@ public:
     Py::Object setActiveStage(const Py::Tuple&);
     Py::Object getDimensionMode(const Py::Tuple&);
     Py::Object setDimensionMode(const Py::Tuple&);
+    Py::Object getShowConstruction(const Py::Tuple&);
+    Py::Object setShowConstruction(const Py::Tuple&);
     Py::Object getWireframe(const Py::Tuple&);
     Py::Object setWireframe(const Py::Tuple&);
     Py::Object getOverlay(const Py::Tuple&);

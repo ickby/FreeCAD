@@ -124,14 +124,16 @@ public:
     /**
      * Evaluate FemVisibilityMask into setVisibilityMask and store dimMode.
      * Call before updateVTK(). underAchieved (optional) receives toplevels
-     * where achieved mesh dim < declared analysis dim.
+     * where achieved mesh dim < declared analysis dim, mapped to the dimension
+     * the mesh did reach.
      */
     void applyVisibilityMask(
         const Fem::FemGeometry* geometry,
         DimensionMode dimMode,
+        bool showConstruction,
         const std::set<std::string>& hiddenElements,
         const std::set<std::string>& hiddenCellTypes,
-        std::set<std::string>* underAchieved = nullptr
+        std::map<std::string, int>* underAchieved = nullptr
     );
 
     /** Replace the material palette (distinctColors by default). */

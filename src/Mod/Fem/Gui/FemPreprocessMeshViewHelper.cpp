@@ -371,7 +371,7 @@ void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
 
     if (!state) {
         auto visibility =
-            FemVisibilityMask::evaluate(m_vtkmesh, geometry, DimensionMode::Highest, {}, {});
+            FemVisibilityMask::evaluate(m_vtkmesh, geometry, DimensionMode::Highest, false, {}, {});
         applyElementSubset(visibility);
         m_renderer.setVisibilityMask(visibility);
         m_renderer.setClipPlanes({});
@@ -384,6 +384,7 @@ void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
     }
 
     const DimensionMode dimMode = state->dimensionMode();
+    const bool showConstruction = state->showConstruction();
     const bool wireframe = state->wireframe();
     const ColorMode colorMode = state->colorMode();
     const auto hidden = localHiddenElements(state->hiddenElements());
@@ -396,11 +397,13 @@ void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
     // plane and the wireframe are not among them: the renderer applies both on
     // top of the masks, so moving a plane leaves what the model hides alone.
     const bool sameMasks = !meshChanged && m_viewStateCacheValid && m_cachedDimMode == dimMode
-        && m_cachedHidden == hidden && m_cachedHiddenCellTypes == hiddenTypes;
+        && m_cachedShowConstruction == showConstruction && m_cachedHidden == hidden
+        && m_cachedHiddenCellTypes == hiddenTypes;
     const bool colorOnly = sameMasks && m_cachedWireframe == wireframe && m_cachedClips == clips
         && m_cachedColorMode != colorMode;
 
     m_cachedDimMode = dimMode;
+    m_cachedShowConstruction = showConstruction;
     m_cachedWireframe = wireframe;
     m_cachedColorMode = colorMode;
     m_cachedHidden = hidden;
@@ -419,11 +422,12 @@ void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
 
     if (!sameMasks) {
         FEM_PERF_SCOPE("mesh.visibilityMask");
-        std::set<std::string> underAchieved;
+        std::map<std::string, int> underAchieved;
         m_cachedVisibility = FemVisibilityMask::evaluate(
             m_vtkmesh,
             geometry,
             dimMode,
+            showConstruction,
             hidden,
             hiddenTypes,
             &underAchieved
@@ -444,7 +448,8 @@ void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
     if (overlayNeeded && m_vtkmesh) {
         if (!sameMasks || m_cachedOverlay.empty()) {
             FEM_PERF_SCOPE("mesh.visibilityMask.overlay");
-            m_cachedOverlay = FemVisibilityMask::evaluate(m_vtkmesh, geometry, dimMode, {}, {});
+            m_cachedOverlay =
+                FemVisibilityMask::evaluate(m_vtkmesh, geometry, dimMode, showConstruction, {}, {});
             applyElementSubset(m_cachedOverlay);
         }
         m_renderer.setOverlayMask(m_cachedOverlay);

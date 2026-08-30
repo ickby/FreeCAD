@@ -59,6 +59,9 @@ public:
     static constexpr const char* ArrayOrigCell = "origcell";
     static constexpr const char* ArrayEntityIds = "CellEntityIds";
 
+    /** Marks the construction half of a cell-type key; no VTK name contains ':'. */
+    static constexpr const char* ConstructionSuffix = ":construction";
+
     /** Bake celldim, celltype and origcell int arrays onto the input grid. */
     static void bakeCellArrays(vtkUnstructuredGrid* grid);
 
@@ -69,22 +72,61 @@ public:
     static std::string cellTypeKey(int vtkCellType);
 
     /**
+     * The same key, told apart by which side of the analysis the cell is on.
+     *
+     * One VTK type can be both at once: the triangles skinning a solid and the
+     * triangles of a shell are all tria3, but only the latter are solved on.
+     * Keying them apart is what lets the two be coloured and hidden on their
+     * own, so @a construction has to be answered the same way here as by
+     * analysisCells(), never from the live dimension mode or hidden elements.
+     */
+    static std::string cellTypeKey(int vtkCellType, bool construction);
+
+    /**
+     * Per-cell flags (1 = the analysis solves on this cell, 0 = the mesher
+     * built the mesh from it).
+     *
+     * This is the definition the construction elements are named after, and
+     * the split behind the two-sided cell-type key. Deliberately blind to the
+     * dimension mode and to hidden elements: what a cell is does not change
+     * with what is on screen.
+     */
+    static std::vector<unsigned char> analysisCells(
+        vtkUnstructuredGrid* grid,
+        const Fem::FemGeometry* geometry
+    );
+
+    /**
      * Build a per-cell visibility mask (1 = keep, 0 = drop).
+     *
+     * Two questions are asked of every cell, and they are independent. Which
+     * dimensions were asked for, that is @a dimMode, Highest standing for all
+     * of them. And whether the cell is one the analysis solves or one the
+     * mesher built the mesh from, which is what @a showConstruction lets
+     * through. A cell is kept when it answers both, so asking for a dimension
+     * the analysis does not have shows nothing until the construction elements
+     * are taken in.
      *
      * @param grid          Input unstructured grid (with baked arrays preferred)
      * @param geometry      Optional FemGeometry for entity owners / declared dims
-     * @param dimMode       Highest uses per-owner declared dim; else fixed dim
+     * @param dimMode       Which dimensions to keep; Highest means all of them
+     * @param showConstruction Keep cells below their entity's analysis dimension
      * @param hiddenElements Element / Component names to hide
-     * @param hiddenCellTypes Cell-type keys to hide (empty = all visible)
-     * @param underAchieved  Optional: toplevel elements where achieved < declared
+     * @param hiddenCellTypes Two-sided cell-type keys to hide (empty = all
+     *                       visible), as cellTypeKey(type, construction) reads
+     *                       them, so that skin triangles can go without taking
+     *                       the shell triangles with them
+     * @param underAchieved  Optional: toplevel elements where achieved < declared,
+     *                       mapped to the dimension the mesh did reach
      */
     static std::vector<unsigned char> evaluate(
         vtkUnstructuredGrid* grid,
         const Fem::FemGeometry* geometry,
         DimensionMode dimMode,
+        bool showConstruction,
         const std::set<std::string>& hiddenElements,
         const std::set<std::string>& hiddenCellTypes,
-        std::set<std::string>* underAchieved = nullptr
+        std::map<std::string, int>* underAchieved = nullptr
     );
 
     /** Resolve entity name for a cell from CellEntityIds / group cell data. */

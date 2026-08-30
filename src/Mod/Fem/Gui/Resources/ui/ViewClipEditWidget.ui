@@ -181,14 +181,80 @@
      </property>
     </widget>
    </item>
-   <item row="4" column="0">
+   <item row="4" column="1" colspan="3">
+    <layout class="QHBoxLayout" name="NormalPresets">
+     <property name="spacing">
+      <number>2</number>
+     </property>
+     <item>
+      <widget class="QToolButton" name="NormalXButton">
+       <property name="minimumSize">
+        <size>
+         <width>30</width>
+         <height>0</height>
+        </size>
+       </property>
+       <property name="text">
+        <string notr="true">X</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QToolButton" name="NormalYButton">
+       <property name="minimumSize">
+        <size>
+         <width>30</width>
+         <height>0</height>
+        </size>
+       </property>
+       <property name="text">
+        <string notr="true">Y</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QToolButton" name="NormalZButton">
+       <property name="minimumSize">
+        <size>
+         <width>30</width>
+         <height>0</height>
+        </size>
+       </property>
+       <property name="text">
+        <string notr="true">Z</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="normalSpacer">
+       <property name="orientation">
+        <enum>Qt::Orientation::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>10</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QToolButton" name="FlipButton">
+       <property name="text">
+        <string>Flip</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item row="5" column="0">
     <widget class="QLabel" name="ScopeLabel">
      <property name="text">
       <string>Clips</string>
      </property>
     </widget>
    </item>
-   <item row="4" column="1" colspan="3">
+   <item row="5" column="1" colspan="3">
     <widget class="QComboBox" name="Scope"/>
    </item>
    <item row="3" column="3">

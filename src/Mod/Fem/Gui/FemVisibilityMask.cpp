@@ -54,21 +54,31 @@ vtkIntArray* ensureIntArray(vtkUnstructuredGrid* grid, const char* name, vtkIdTy
     return arr;
 }
 
-int fixedDimension(DimensionMode mode)
+/// Bits 0..3 of a dimension bitmask, i.e. every dimension a cell can have.
+constexpr unsigned AllDimensions = 0xFu;
+
+/// Dimensions @a mode asks for, as a bitmask. Highest asks for all of them and
+/// leaves it to the analysis dimension of each entity to narrow it down.
+unsigned requestedDimensions(DimensionMode mode)
 {
     switch (mode) {
         case DimensionMode::Point:
-            return 0;
+            return 1u << 0u;
         case DimensionMode::Curve:
-            return 1;
+            return 1u << 1u;
         case DimensionMode::Surface:
-            return 2;
+            return 1u << 2u;
         case DimensionMode::Volume:
-            return 3;
+            return 1u << 3u;
         case DimensionMode::Highest:
         default:
-            return -1;
+            return AllDimensions;
     }
+}
+
+unsigned dimensionBit(int dim)
+{
+    return (dim >= 0 && dim <= 3) ? (1u << static_cast<unsigned>(dim)) : 0u;
 }
 
 bool isHiddenElement(
@@ -269,13 +279,34 @@ std::string FemVisibilityMask::entityOfCell(vtkDataSet* grid, vtkIdType cell)
     return {};
 }
 
+std::string FemVisibilityMask::cellTypeKey(int vtkCellType, bool construction)
+{
+    std::string key = cellTypeKey(vtkCellType);
+    if (construction) {
+        key += ConstructionSuffix;
+    }
+    return key;
+}
+
+std::vector<unsigned char> FemVisibilityMask::analysisCells(
+    vtkUnstructuredGrid* grid,
+    const Fem::FemGeometry* geometry
+)
+{
+    // Every dimension asked for and no construction let through leaves exactly
+    // the cells the analysis solves on, which is the definition, so there is
+    // nothing here to keep in step with evaluate().
+    return evaluate(grid, geometry, DimensionMode::Highest, false, {}, {});
+}
+
 std::vector<unsigned char> FemVisibilityMask::evaluate(
     vtkUnstructuredGrid* grid,
     const Fem::FemGeometry* geometry,
     DimensionMode dimMode,
+    bool showConstruction,
     const std::set<std::string>& hiddenElements,
     const std::set<std::string>& hiddenCellTypes,
-    std::set<std::string>* underAchieved
+    std::map<std::string, int>* underAchieved
 )
 {
     if (underAchieved) {
@@ -301,7 +332,15 @@ std::vector<unsigned char> FemVisibilityMask::evaluate(
     auto* celldimArr = vtkIntArray::SafeDownCast(grid->GetCellData()->GetArray(ArrayCellDim));
     auto* celltypeArr = vtkIntArray::SafeDownCast(grid->GetCellData()->GetArray(ArrayCellType));
 
-    const int fixedDim = fixedDimension(dimMode);
+    const unsigned requested = requestedDimensions(dimMode);
+
+    // What the analysis dimension of an entity permits, narrowed to what was
+    // asked for. Showing the construction elements drops the first half: every
+    // element of the requested dimension is then fair game, whether or not the
+    // analysis reaches down that far.
+    auto keepBits = [&](unsigned analysisBits) {
+        return showConstruction ? requested : (requested & analysisBits);
+    };
 
     // Resolve the entity of every cell once; the lookup walks the cell data
     // arrays and is used by several passes below.
@@ -315,19 +354,23 @@ std::vector<unsigned char> FemVisibilityMask::evaluate(
         }
     }
 
-    // Mesh-derived highest (no entity info): keep only max dimension present
+    // Mesh-derived analysis dimension (no entity info): nothing declares what
+    // the analysis solves, so the highest dimension the mesh reaches stands in
+    // for it and everything below it counts as construction.
     if (!hasEntityInfo || !geometry) {
         int maxDim = -1;
         for (vtkIdType i = 0; i < n; ++i) {
             maxDim = std::max(maxDim, celldimArr->GetValue(i));
         }
-        const int keepDim = (fixedDim >= 0) ? fixedDim : maxDim;
+        const unsigned analysisBits = dimensionBit(maxDim);
+        const unsigned bits = keepBits(analysisBits);
         for (vtkIdType i = 0; i < n; ++i) {
             const int cdim = celldimArr->GetValue(i);
             const int ctype = celltypeArr->GetValue(i);
-            const bool dimOk = (cdim == keepDim);
+            const bool dimOk = (bits & dimensionBit(cdim)) != 0;
+            const bool construction = (analysisBits & dimensionBit(cdim)) == 0;
             const bool typeOk = hiddenCellTypes.empty()
-                || !hiddenCellTypes.count(cellTypeKey(ctype));
+                || !hiddenCellTypes.count(cellTypeKey(ctype, construction));
             mask[static_cast<size_t>(i)] = (dimOk && typeOk) ? 1 : 0;
         }
         return mask;
@@ -356,11 +399,13 @@ std::vector<unsigned char> FemVisibilityMask::evaluate(
     // Per-entity dimension bitmask
     // dimmask[entity] = OR over non-hidden owners: (1 << effective_dim(o))
     std::map<std::string, unsigned> dimmask;
+    // The same OR taken over every owner, hidden ones included. Only this one
+    // may name a cell construction or not: hiding a shell must not turn the
+    // faces it shares with a solid into scaffolding behind the user's back, or
+    // the keys here and the keys the tree offers would part ways.
+    std::map<std::string, unsigned> analysisOf;
 
-    auto effectiveDim = [&](const std::string& owner) -> int {
-        if (fixedDim >= 0) {
-            return fixedDim;
-        }
+    auto effectiveDim = [&](const std::string& owner, bool record) -> int {
         int declared = geometry->getAnalysisDimension(owner);
         if (declared < 0) {
             // Unknown name (e.g. numeric group id): fall back to achieved
@@ -370,8 +415,8 @@ std::vector<unsigned char> FemVisibilityMask::evaluate(
         auto it = achieved.find(owner);
         const int ach = it != achieved.end() ? it->second : -1;
         const int effective = Fem::effectiveAnalysisDimension(declared, ach);
-        if (ach >= 0 && ach < declared && underAchieved) {
-            underAchieved->insert(owner);
+        if (ach >= 0 && ach < declared && record && underAchieved) {
+            (*underAchieved)[owner] = ach;
             Base::Console().warning(
                 "FemVisibilityMask: '%s' declared dim %d but mesh only achieved %d — "
                 "widening display mask\n",
@@ -401,82 +446,100 @@ std::vector<unsigned char> FemVisibilityMask::evaluate(
             dimmask[entity] = 0;
             continue;
         }
-        unsigned bits = 0;
+        // What the analysis solves on this entity. Independent of the mode, so
+        // that a fixed dimension can still be told apart from construction.
+        unsigned analysisBits = 0;
+        unsigned allOwnerBits = 0;
+        // An entity all of whose owners are hidden goes with them; the mode is
+        // no way back in.
+        bool visible = false;
         for (const auto& owner : ownersOfEntity(geometry, entity)) {
-            if (isOwnerHidden(owner)) {
+            const bool hidden = isOwnerHidden(owner);
+            // A hidden owner still says what the entity is; it has no say in
+            // what is drawn, and no badge to earn in the tree either.
+            const unsigned bit = dimensionBit(effectiveDim(owner, !hidden));
+            allOwnerBits |= bit;
+            if (hidden) {
                 continue;
             }
-            const int dim = effectiveDim(owner);
-            if (dim >= 0 && dim <= 3) {
-                bits |= (1u << static_cast<unsigned>(dim));
-            }
+            visible = true;
+            analysisBits |= bit;
         }
         // Embedded shell / rebar: DimensionOverride on the entity itself is
         // OR'd in even when the entity is owned by a solid (matches
         // FemGeometry::getEntityDimensionMask).
-        if (fixedDim < 0) {
-            const auto& overrides = geometry->DimensionOverride.getValue();
-            auto oit = overrides.find(entity);
-            if (oit != overrides.end() && !oit->second.empty()) {
-                try {
-                    int d = std::stoi(oit->second);
-                    auto ait = achieved.find(entity);
-                    if (ait != achieved.end() && ait->second >= 0 && ait->second < d) {
-                        if (underAchieved) {
-                            underAchieved->insert(entity);
-                            Base::Console().warning(
-                                "FemVisibilityMask: '%s' declared dim %d but mesh only "
-                                "achieved %d — widening display mask\n",
-                                entity.c_str(),
-                                d,
-                                ait->second
-                            );
-                        }
-                        d = ait->second;
+        const auto& overrides = geometry->DimensionOverride.getValue();
+        auto oit = overrides.find(entity);
+        if (oit != overrides.end() && !oit->second.empty()) {
+            try {
+                int d = std::stoi(oit->second);
+                auto ait = achieved.find(entity);
+                if (ait != achieved.end() && ait->second >= 0 && ait->second < d) {
+                    if (underAchieved) {
+                        (*underAchieved)[entity] = ait->second;
+                        Base::Console().warning(
+                            "FemVisibilityMask: '%s' declared dim %d but mesh only "
+                            "achieved %d — widening display mask\n",
+                            entity.c_str(),
+                            d,
+                            ait->second
+                        );
                     }
-                    if (d >= 0 && d <= 3) {
-                        bits |= (1u << static_cast<unsigned>(d));
-                    }
+                    d = ait->second;
                 }
-                catch (...) {
-                    Base::Console().warning(
-                        "FemVisibilityMask: invalid DimensionOverride for '%s': '%s'\n",
-                        entity.c_str(),
-                        oit->second.c_str()
-                    );
+                if (dimensionBit(d) != 0) {
+                    visible = true;
+                    analysisBits |= dimensionBit(d);
+                    allOwnerBits |= dimensionBit(d);
                 }
             }
+            catch (...) {
+                Base::Console().warning(
+                    "FemVisibilityMask: invalid DimensionOverride for '%s': '%s'\n",
+                    entity.c_str(),
+                    oit->second.c_str()
+                );
+            }
         }
-        dimmask[entity] = bits;
+        dimmask[entity] = visible ? keepBits(analysisBits) : 0u;
+        analysisOf[entity] = allOwnerBits;
     }
+
+    // Cells no entity claims decide from the mesh alone: the highest dimension
+    // among them stands in for what the analysis solves there.
+    const unsigned ungroupedAnalysisBits = dimensionBit(ungroupedMaxDim);
+    const unsigned ungroupedBits = keepBits(ungroupedAnalysisBits);
 
     // Evaluate keep(cell)
     for (vtkIdType i = 0; i < n; ++i) {
         const int cdim = celldimArr->GetValue(i);
         const int ctype = celltypeArr->GetValue(i);
-        const bool typeOk = hiddenCellTypes.empty()
-            || !hiddenCellTypes.count(cellTypeKey(ctype));
 
-        if (!typeOk || cdim < 0) {
+        if (cdim < 0) {
             mask[static_cast<size_t>(i)] = 0;
             continue;
         }
 
         const std::string& entity = entityOf[static_cast<size_t>(i)];
-        if (entity.empty()) {
-            // Nothing declares a dimension for this cell, so decide from the
-            // mesh alone: keep it when it is of the highest dimension among the
-            // other cells no entity claims. Hiding it outright would make
-            // partially grouped meshes lose elements without any hint.
-            const int keepDim = (fixedDim >= 0) ? fixedDim : ungroupedMaxDim;
-            mask[static_cast<size_t>(i)] = (cdim == keepDim) ? 1 : 0;
-            continue;
+        // Hiding an unclaimed cell outright would make partially grouped meshes
+        // lose elements without any hint, so they get the ungrouped fallback.
+        unsigned bits = ungroupedBits;
+        unsigned analysisBits = ungroupedAnalysisBits;
+        if (!entity.empty()) {
+            auto it = dimmask.find(entity);
+            bits = (it != dimmask.end()) ? it->second : 0u;
+            auto ait = analysisOf.find(entity);
+            analysisBits = (ait != analysisOf.end()) ? ait->second : 0u;
         }
 
-        auto it = dimmask.find(entity);
-        const unsigned bits = (it != dimmask.end()) ? it->second : 0u;
-        const bool dimOk = (bits & (1u << static_cast<unsigned>(cdim))) != 0;
-        mask[static_cast<size_t>(i)] = dimOk ? 1 : 0;
+        // Which of the two keys the cell answers to has to be settled before
+        // the hidden types can be asked about it.
+        const bool construction = (analysisBits & dimensionBit(cdim)) == 0;
+        const bool typeOk = hiddenCellTypes.empty()
+            || !hiddenCellTypes.count(cellTypeKey(ctype, construction));
+
+        mask[static_cast<size_t>(i)] =
+            (typeOk && (bits & dimensionBit(cdim)) != 0) ? 1 : 0;
     }
 
     return mask;

@@ -106,7 +106,12 @@
           </property>
           <item>
            <property name="text">
-            <string>1D</string>
+            <string>All</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>3D</string>
            </property>
           </item>
           <item>
@@ -116,7 +121,12 @@
           </item>
           <item>
            <property name="text">
-            <string>3D</string>
+            <string>1D</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>0D</string>
            </property>
           </item>
          </widget>
@@ -137,6 +147,40 @@
        </layout>
       </item>
       <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_4">
+        <item>
+         <widget class="QCheckBox" name="Construction">
+          <property name="text">
+           <string>Construction elements</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_3">
+          <property name="orientation">
+           <enum>Qt::Orientation::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>10</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QLabel" name="ElementCount">
+          <property name="text">
+           <string/>
+          </property>
+          <property name="alignment">
+           <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignVCenter</set>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
        <widget class="QGroupBox" name="ClippingGroup">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Preferred" vsizetype="Minimum">
@@ -148,6 +192,19 @@
          <string/>
         </property>
         <layout class="QVBoxLayout" name="verticalLayout_3">
+         <property name="spacing">
+          <number>2</number>
+         </property>
+         <item>
+          <widget class="QLabel" name="ClipHint">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
+           <property name="text">
+            <string>No clipping plane</string>
+           </property>
+          </widget>
+         </item>
          <item>
           <layout class="QHBoxLayout" name="horizontalLayout_5">
            <item>

@@ -39,6 +39,8 @@ from pivy import coin  # noqa: F401
 import ObjectsFem
 
 from femguiutils import selection_handoff
+from femguiutils.selection_rules import shape_kind
+from femguiutils.selection_slots import ReferenceSelection
 from femobjects import geometry_partition
 from femtaskpanels import task_geometry_partition
 from femviewprovider import view_geometry_base
@@ -131,6 +133,40 @@ def _preview_coord_count(preview):
     return coords[0].point.getNum()
 
 
+class _Picker:
+    """
+    One reference box, driven the way the panel drives its own.
+
+    The panel holds five of these in a single group; a test that is only
+    about the picking rules wants one, so it gets a group of its own.
+    """
+
+    def __init__(self, geometry, kind, max_count=None, rule=None):
+        self.max_count = max_count
+        self.group = ReferenceSelection(None, geometry=geometry, auto_install=False)
+        self.slot = self.group.add_slot(
+            "Targets",
+            "Targets",
+            rule or task_geometry_partition._sub_element_rule(kind, max_count),
+            marks=False,
+        )
+
+    @property
+    def references(self):
+        return list(self.slot.picks)
+
+    def set_target_kind(self, kind):
+        self.slot.set_rule(task_geometry_partition._sub_element_rule(kind, self.max_count))
+        self.slot.set_picks([ref for ref in self.slot.picks if shape_kind(ref[1]) == kind])
+
+    def start_selection(self):
+        self.group.begin_selection()
+        self.group.consume_current_selection()
+
+    def finish_selection(self):
+        self.group.finish_selection()
+
+
 class TestGeometryPartitionGui(unittest.TestCase):
     fcc_print("import TestGeometryPartitionGui")
 
@@ -163,12 +199,8 @@ class TestGeometryPartitionGui(unittest.TestCase):
                 return f"Face{index}"
         raise AssertionError("no face on the second box")
 
-    def _picker(self, kind, max_count=None):
-        picker = task_geometry_partition._SubElementPicker(
-            "Targets", self.imp, (kind,), max_count=max_count
-        )
-        picker.set_target_kind(kind)
-        return picker
+    def _picker(self, kind, max_count=None, rule=None):
+        return _Picker(self.imp, kind, max_count=max_count, rule=rule)
 
     def test_00print(self):
         fcc_print(
@@ -376,7 +408,9 @@ class TestGeometryPartitionGui(unittest.TestCase):
         picker.finish_selection()
 
         self.assertEqual(len(picker.references), 3)
-        self.assertIn((self.imp, "Vertex1"), picker.references, "a full slot refuses the extra pick")
+        self.assertIn(
+            (self.imp, "Vertex1"), picker.references, "a full slot refuses the extra pick"
+        )
         self.assertNotIn((self.imp, "Vertex4"), picker.references)
 
     def test_object_picker_takes_an_external_datum_plane(self):
@@ -387,13 +421,12 @@ class TestGeometryPartitionGui(unittest.TestCase):
         )
         self.document.recompute()
 
-        picker = task_geometry_partition._ObjectPicker("Reference", self.imp)
+        picker = self._picker("Face", rule=task_geometry_partition._tool_rule())
         FreeCADGui.Selection.addSelection(self.document.Name, datum.Name, "")
         picker.start_selection()
         picker.finish_selection()
 
-        self.assertIsNotNone(picker.reference)
-        self.assertEqual(picker.reference[0], datum)
+        self.assertEqual([obj for obj, _sub in picker.references], [datum])
 
     def test_picked_solids_drive_the_partition(self):
         picker = self._picker("Solid")
@@ -425,7 +458,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
         FreeCADGui.Selection.clearSelection()
         panel = task_geometry_partition._PartitionTaskPanel(self.part)
         try:
-            self.assertEqual(panel.target_picker.references, [(self.imp, "Solid1")])
+            self.assertEqual(panel.targets.picks, [(self.imp, "Solid1")])
             self.assertEqual(FreeCADGui.Selection.getSelection(), [])
         finally:
             panel.deactivate()
@@ -440,7 +473,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
         panel = task_geometry_partition._PartitionTaskPanel(self.part)
         try:
             self.assertEqual(panel.kind_combo.currentData(), "Edge")
-            self.assertEqual(panel.target_picker.references, [(self.imp, "Edge1")])
+            self.assertEqual(panel.targets.picks, [(self.imp, "Edge1")])
             self.assertTrue(
                 geometry_partition.method_available(
                     panel.method_combo.currentText(), self.part.Elements
@@ -478,9 +511,82 @@ class TestGeometryPartitionGui(unittest.TestCase):
             self.assertEqual(panel.kind_combo.currentData(), "Solid")
             index = panel.kind_combo.findData("Edge")
             panel.kind_combo.setCurrentIndex(index)
-            self.assertEqual(panel.target_picker.references, [])
+            self.assertEqual(panel.targets.picks, [])
         finally:
             panel.deactivate()
+
+    def test_an_open_panel_takes_a_pick_into_targets(self):
+        """
+        Nothing between opening the panel and clicking in the 3D view.
+
+        Every box used to carry a coordinator of its own and none of them was
+        ever installed, so no observer was listening: the Targets arm button
+        lit up over nothing and no pick ever arrived.
+        """
+        panel = task_geometry_partition._PartitionTaskPanel(self.part)
+        try:
+            FreeCADGui.Selection.addSelection(self.document.Name, self.imp.Name, "Face1")
+            self.assertEqual(panel.targets.picks, [(self.imp, "Solid1")])
+        finally:
+            panel.deactivate()
+
+    def test_arming_one_box_disarms_the_other(self):
+        """A pick lands in one box, so only one may be armed to take it."""
+        self.part.Method = geometry_partition.METHOD_PLANE_3P
+        self.document.recompute()
+
+        panel = task_geometry_partition._PartitionTaskPanel(self.part)
+        try:
+            self.assertTrue(panel.targets._armed, "the panel opens ready to take targets")
+
+            panel.points_3.arm()
+            self.assertTrue(panel.points_3._armed)
+            self.assertFalse(panel.targets._armed)
+            self.assertIs(panel.picker.coordinator.armed_slot, panel.points_3)
+        finally:
+            panel.deactivate()
+
+    def test_the_plane_points_box_takes_vertices(self):
+        """The three-point method's box is armable and picks land in it."""
+        self.part.Method = geometry_partition.METHOD_PLANE_3P
+        self.document.recompute()
+
+        panel = task_geometry_partition._PartitionTaskPanel(self.part)
+        try:
+            panel.points_3.arm()
+            for sub in ("Vertex1", "Vertex2", "Vertex3"):
+                FreeCADGui.Selection.addSelection(self.document.Name, self.imp.Name, sub)
+
+            self.assertEqual(
+                [sub for _obj, sub in panel.points_3.picks],
+                ["Vertex1", "Vertex2", "Vertex3"],
+            )
+            self.assertEqual(len(self.part.Points), 1, "the picks have to reach the property")
+        finally:
+            panel.deactivate()
+
+    def test_a_box_the_method_hides_gives_up_the_arm(self):
+        """Picking may not go on filling a box that has left the screen."""
+        self.part.Method = geometry_partition.METHOD_PLANE_3P
+        self.document.recompute()
+
+        panel = task_geometry_partition._PartitionTaskPanel(self.part)
+        try:
+            panel.points_3.arm()
+            panel.kind_combo.setCurrentIndex(panel.kind_combo.findData("Edge"))
+            index = panel.method_combo.findText(geometry_partition.METHOD_EDGE_PARAM)
+            panel.method_combo.setCurrentIndex(index)
+
+            self.assertIs(panel.picker.coordinator.armed_slot, panel.targets)
+        finally:
+            panel.deactivate()
+
+    def test_closing_the_panel_hands_the_3d_view_back(self):
+        panel = task_geometry_partition._PartitionTaskPanel(self.part)
+        self.assertTrue(panel.picker.coordinator._gated)
+        panel.deactivate()
+        self.assertFalse(panel.picker.coordinator._gated)
+        self.assertFalse(panel.picker.coordinator._installed)
 
     # -- marks --------------------------------------------------------------
 
@@ -521,7 +627,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
             )
             self.assertEqual(self._marked_face_count(task_geometry_partition.MARK_TARGETS), 0)
 
-            panel.target_picker.start_selection()
+            # No arming step: an open panel is already listening on Targets.
             FreeCADGui.Selection.addSelection(self.document.Name, self.imp.Name, "Face1")
             self.assertEqual(
                 self.imp.ViewObject.getElementHighlight(task_geometry_partition.MARK_TARGETS),
@@ -571,7 +677,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
 
         panel = task_geometry_partition._PartitionTaskPanel(self.part)
         try:
-            panel.points_3.set_references([(self.imp, "Vertex1"), (self.imp, "Vertex2")])
+            panel.points_3.set_picks([(self.imp, "Vertex1"), (self.imp, "Vertex2")])
             panel.apply_properties()
             self.assertEqual(
                 sorted(

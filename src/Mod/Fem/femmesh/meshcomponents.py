@@ -178,6 +178,24 @@ def component_element_names(geometry, index):
     return names
 
 
+def component_lookup(geometry):
+    """
+    Every geometry entity name mapped to the component it belongs to.
+
+    What a 3D click reports is an entity, not a component, and the entity is
+    as likely to be a face of a solid as the toplevel element itself. Asking
+    the sub-entities too is what lets any click on a component find it.
+
+    Components are topologically separate, so no name lands in two of them.
+    The map costs a findSubShape per entity, so build it once and keep it.
+    """
+    lookup = {}
+    for index in range(1, component_count(geometry) + 1):
+        for name in component_element_names(geometry, index):
+            lookup.setdefault(name, index)
+    return lookup
+
+
 def trim_mesh(obj, geometry, lost):
     """
     Take the mesh of the given components out of the mesh of an object.

@@ -37,6 +37,8 @@ import Part
 import Fem
 import ObjectsFem
 
+from femmesh import meshcomponents
+
 from .support_utils import fcc_print
 
 
@@ -72,14 +74,10 @@ def _find_subs(shape, kind, predicate):
 
 
 def _measure(shape):
-    """Volume, area or length, whichever describes the shape."""
-    if shape.isNull():
-        return 0.0
-    if shape.Solids:
-        return shape.Volume
-    if shape.Faces:
-        return shape.Area
-    return shape.Length
+    """Solid volume, loose-face area and loose-edge length, as the step measures them."""
+    from femobjects.geometry_partition import _measure as measure
+
+    return measure(shape)
 
 
 def _make_tet_mesh():
@@ -269,6 +267,30 @@ class TestFemGeometry(unittest.TestCase):
 
         self.assertEqual(geom.getComponentCount(), 2)
 
+    def test_every_entity_of_a_component_leads_back_to_it(self):
+        """
+        A 3D click reports the entity under the pointer, which is as likely to
+        be a face of a solid as the toplevel element itself. The component
+        picker maps one to the other through this, so the sub-entities have to
+        be in it and no name may land in two components.
+        """
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        face = _face_xy()
+        face.translate(FreeCAD.Vector(50, 0, 0))
+        geom.Shape = Part.makeCompound([_box(), face])
+        self.document.recompute()
+
+        lookup = meshcomponents.component_lookup(geom)
+        for index in range(1, geom.getComponentCount() + 1):
+            names = meshcomponents.component_element_names(geom, index)
+            self.assertTrue(names)
+            for name in names:
+                self.assertEqual(lookup.get(name), index, f"{name} does not lead to {index}")
+
+        # The box carries its faces and edges, the loose face only its own
+        self.assertTrue(any(name.startswith("Solid") for name in lookup))
+        self.assertTrue(any(name.startswith("Vertex") for name in lookup))
+
     def test_dimension_override(self):
         geom = self.document.addObject("Fem::FemGeometry", "Geometry")
         geom.Shape = _box()
@@ -361,6 +383,18 @@ class TestGeometryPartition(unittest.TestCase):
         self.assertEqual(part.Base, imp, "the group must wire the step input")
         return group, imp, part
 
+    def _vertex_names(self, shape, *points):
+        """Sub-element names of the vertices sitting at those positions."""
+        names = []
+        for point in points:
+            for index, vertex in enumerate(shape.Vertexes, 1):
+                if (vertex.Point - point).Length < 1e-7:
+                    names.append(f"Vertex{index}")
+                    break
+            else:
+                raise AssertionError(f"no vertex at {point}")
+        return tuple(names)
+
     def _datum(self, base, normal, name="Datum"):
         plane = self.document.addObject("Part::DatumPlane", name)
         plane.Placement = FreeCAD.Placement(base, FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), normal))
@@ -374,12 +408,15 @@ class TestGeometryPartition(unittest.TestCase):
 
     def assertMeasurePreserved(self, before, after):
         """A partition only adds cuts, so volume/area/length cannot change."""
-        self.assertAlmostEqual(
-            _measure(after),
-            _measure(before),
-            delta=max(_measure(before) * 1e-6, 1e-9),
-            msg="partition changed the total measure of the shape",
-        )
+        from femobjects.geometry_partition import MEASURE_NAMES
+
+        for name, was, now in zip(MEASURE_NAMES, _measure(before), _measure(after)):
+            self.assertAlmostEqual(
+                now,
+                was,
+                delta=max(abs(was) * 1e-6, 1e-9),
+                msg=f"partition changed the {name} of the shape",
+            )
 
     def test_00print(self):
         fcc_print(
@@ -1080,6 +1117,61 @@ class TestGeometryPartition(unittest.TestCase):
         self.assertEqual(len(part.Shape.Solids), 0)
         self.assertEqual(len(part.Shape.Faces), 2 * len(imp.Shape.Faces))
         self.assertMeasurePreserved(imp.Shape, part.Shape)
+
+    def test_a_solid_is_cut_beside_a_loose_face(self):
+        """
+        Mixed geometry: a solid to cut and a face that is no part of it.
+
+        Part's Volume over such a compound is not the volume of its solids —
+        the loose face enters the integral too — so measuring the shape as a
+        single number made every cut here look like it had eaten geometry,
+        and the step refused a partition that was perfectly sound.
+        """
+        from femobjects import geometry_partition as gp
+
+        solid = Part.makeBox(10, 10, 5)
+        loose = Part.makePlane(10, 10, FreeCAD.Vector(10, 0, 2))
+        _, imp, part = self._chain(solid, loose)
+        self.assertNotAlmostEqual(
+            imp.Shape.Volume,
+            solid.Volume,
+            msg="this test is pointless unless the compound misreports its volume",
+        )
+
+        # A slanted plane through three corners of the box. Named by position,
+        # because the loose face takes the first vertex numbers of the compound.
+        corners = self._vertex_names(
+            imp.Shape,
+            FreeCAD.Vector(0, 0, 0),
+            FreeCAD.Vector(10, 0, 5),
+            FreeCAD.Vector(0, 10, 0),
+        )
+        part.Method = gp.METHOD_PLANE_3P
+        part.Elements = [(imp, ("Solid1",))]
+        part.Points = [(imp, corners)]
+        self.document.recompute()
+
+        self.assertValid(part)
+        self.assertEqual(len(part.Shape.Solids), 2, "the solid has to come out cut in two")
+        self.assertMeasurePreserved(imp.Shape, part.Shape)
+        self.assertAlmostEqual(
+            sum(face.Area for face in part.Shape.Faces if face.Area == loose.Area),
+            loose.Area,
+            msg="the loose face has to survive the cut untouched",
+        )
+
+    def test_a_loose_face_is_not_counted_as_volume(self):
+        """The three measures are kept apart, so neither can mask the other."""
+        from femobjects import geometry_partition as gp
+
+        solid = Part.makeBox(10, 10, 5)
+        loose = Part.makePlane(10, 10, FreeCAD.Vector(10, 0, 2))
+        mixed = Part.makeCompound([solid, loose])
+
+        volume, area, length = gp._measure(mixed)
+        self.assertAlmostEqual(volume, solid.Volume)
+        self.assertAlmostEqual(area, loose.Area, msg="only the face that bounds no solid counts")
+        self.assertAlmostEqual(length, 0.0, msg="every edge here bounds a face")
 
     def test_foreign_target_is_rejected(self):
         from femobjects import geometry_partition as gp

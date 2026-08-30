@@ -229,6 +229,25 @@ def _tr(text, **kwargs):
     return translated
 
 
+def header_button_side(widget):
+    """
+    Side of a square header button: the height of a text button beside it.
+
+    Nothing here is a fixed pixel count. A text button is sized from the font
+    by the style, so a header row measured off one keeps its proportions at
+    any font size and under any style.
+    """
+    probe = QtGui.QToolButton(widget)
+    # Parented so it is measured under the style and font it would live in,
+    # but a child is shown along with its parent unless it is told not to be
+    probe.hide()
+    probe.setText(_tr("Clear"))
+    side = probe.sizeHint().height()
+    probe.setParent(None)
+    probe.deleteLater()
+    return side
+
+
 def flatten_links(value):
     """PropertyLinkSubList / LinkSub / Link / LinkList -> [(obj, sub), ...]."""
     picks = []
@@ -463,13 +482,7 @@ class ReferenceSlot(QtGui.QFrame):
             self._sync_metrics()
 
     def _sync_metrics(self):
-        """
-        The header's square buttons stand as tall as the Clear beside them.
-
-        Nothing here is a fixed pixel count: Clear is an ordinary button that
-        the style sizes from the font, so a row measured off it keeps its
-        proportions at any font size and on any style.
-        """
+        """The header's square buttons stand as tall as the Clear beside them."""
         side = self.clear_btn.sizeHint().height()
         # The two are glyphs in a text button, and text keeps its own size
         # while the box around it grows. Scale it so they fill their button
@@ -792,6 +805,11 @@ class ReferenceSlot(QtGui.QFrame):
                     self.picks.append(pick)
         self._commit()
 
+    def set_picks(self, picks):
+        """Replace the whole list, as when a panel restores a stored value."""
+        self.picks = list(picks)
+        self._commit()
+
     def clear(self):
         self.picks = []
         self._commit()
@@ -989,6 +1007,20 @@ class ReferenceSelection(QtGui.QWidget):
             return
         self.coordinator.arm(target)
 
+    def begin_selection(self):
+        """
+        Start listening for picks, and arm a slot to receive them.
+
+        Shown groups do this for themselves. A host that lays the slot
+        widgets out itself, rather than showing the group, has to say when
+        picking starts — without it the arm button lights up over nothing
+        and no pick ever arrives.
+        """
+        self.coordinator.install()
+        self._watch_modifier(True)
+        if self.coordinator.armed_slot is None and self.slots:
+            self.arm(self.slots[0].slot_id)
+
     def finish_selection(self):
         self.coordinator.remove()
         self._watch_modifier(False)
@@ -1044,10 +1076,7 @@ class ReferenceSelection(QtGui.QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         if self.auto_install:
-            self.coordinator.install()
-            self._watch_modifier(True)
-            if self.coordinator.armed_slot is None and self.slots:
-                self.arm(self.slots[0].slot_id)
+            self.begin_selection()
         for slot in self.slots:
             slot._update_marks()
 
@@ -1175,8 +1204,7 @@ def from_slot_specs(obj, specs, geometry=None):
     Build a group from a list of dicts. The C++ host calls this.
 
     Each spec: property, title, types, max_count, homogeneous, armed,
-    promotion_latched, role, object_kinds, allow_empty_sub, id, scope,
-    component, marks.
+    promotion_latched, role, object_kinds, allow_empty_sub, id, scope, marks.
     """
     group = ReferenceSelection(obj, geometry=geometry)
     armed = None
@@ -1190,7 +1218,6 @@ def from_slot_specs(obj, specs, geometry=None):
             scope=spec.get("scope") or "geometry",
             object_kinds=tuple(spec.get("object_kinds") or ()),
             allow_empty_sub=spec.get("allow_empty_sub", False),
-            component=spec.get("component", False),
         )
         slot = group.add_slot(
             spec.get("id") or spec.get("property") or f"slot{len(group.slots)}",

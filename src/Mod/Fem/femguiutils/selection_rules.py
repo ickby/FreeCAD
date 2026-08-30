@@ -151,7 +151,7 @@ class ReferenceRule:
 
     types: shape kinds this slot stores (Face, Edge, Vertex, Solid, ...).
     An empty types with object_kinds means whole objects of those types.
-    An empty types with neither object_kinds nor component means any whole object.
+    An empty types without object_kinds means any whole object.
     """
 
     types: tuple = ()
@@ -160,7 +160,6 @@ class ReferenceRule:
     scope: str = "geometry"
     object_kinds: tuple = ()
     allow_empty_sub: bool = False
-    component: bool = False
 
     def __post_init__(self):
         object.__setattr__(self, "types", tuple(self.types))
@@ -169,7 +168,7 @@ class ReferenceRule:
     @property
     def promotion(self):
         """locked | offered | unavailable, derived from types the way today's radio was."""
-        if self.component or self.object_kinds or self.allow_empty_sub:
+        if self.object_kinds or self.allow_empty_sub:
             return PROMOTION_UNAVAILABLE
         has_solid = "Solid" in self.types
         has_surface = any(kind in self.types for kind in ("Face", "Edge", "Vertex", "Shell"))
@@ -185,8 +184,6 @@ class ReferenceRule:
         types = set(self.types)
         if self.promotion != PROMOTION_UNAVAILABLE:
             types.update(PROMOTABLE_KINDS)
-        if self.component:
-            types.update(("Solid", "Face", "Edge", "Vertex", "Component"))
         if self.object_kinds or self.allow_empty_sub:
             types.add("")
         return types
@@ -381,8 +378,6 @@ def pickable_phrase(rule, pick_mode=PICK_DIRECT, current=()):
         return _tr("{types} only — one type per feature.", types=_join_types((kind,)))
     if rule.object_kinds:
         return _tr("Click an object in the 3D view or the tree.")
-    if rule.component:
-        return _tr("Components, from the solid you click.")
     if not rule.types:
         return _tr("Click an object in the 3D view or the tree.")
     return _tr("{types}.", types=_join_types(rule.types))
@@ -459,36 +454,6 @@ def _in_scope(rule, obj, geometry):
     return _in_geometry_chain(geometry, obj)
 
 
-def component_of(geometry, obj, sub, solids_of=None):
-    """1-based ComponentN names on *geometry* that contain the pick."""
-    if geometry is None:
-        return []
-    kind = shape_kind(sub)
-    if kind == "Component":
-        return [leaf_name(sub)]
-    names = []
-    if kind in PROMOTABLE_KINDS:
-        finder = solids_of if solids_of is not None else owning_solids
-        names = [leaf_name(item) for item in finder(obj, sub)]
-    elif kind:
-        names = [leaf_name(sub)]
-    if not names:
-        return []
-    try:
-        count = geometry.getComponentCount()
-    except Exception:
-        return []
-    found = []
-    for index in range(count):
-        try:
-            tops = list(geometry.getToplevelElements(index))
-        except Exception:
-            continue
-        if any(name in tops for name in names):
-            found.append(f"Component{index + 1}")
-    return found
-
-
 def _matches_object_kind(rule, obj):
     if not rule.object_kinds:
         return True
@@ -534,9 +499,6 @@ def evaluate(
                 )
             )
         return Refuse(_tr("Selected object is not a part."))
-
-    if rule.component:
-        return _evaluate_component(rule, obj, sub, current, geometry=geometry, solids_of=solids_of)
 
     # Empty types means a whole object (import picker, object-kind scopes).
     if not rule.types:
@@ -670,7 +632,6 @@ def _accept_stored(rule, obj, sub, current, pick_mode):
         kind
         and kind not in rule.types
         and not (kind == "Solid" and rule.promotion != PROMOTION_UNAVAILABLE)
-        and not (kind == "Component" and rule.component)
     ):
         return Refuse(
             _tr(
@@ -682,21 +643,3 @@ def _accept_stored(rule, obj, sub, current, pick_mode):
         )
 
     return Accept([pick])
-
-
-def _evaluate_component(rule, obj, sub, current, *, geometry, solids_of=None):
-    if geometry is None:
-        return Refuse(_tr("No geometry to pick components from."))
-    names = component_of(geometry, obj, sub, solids_of=solids_of)
-    if not names:
-        if shape_kind(sub) is None:
-            return Refuse(_tr("Click a solid to take its component."))
-        return Refuse(
-            _tr(
-                "{leaf} does not belong to any component.",
-                leaf=leaf_name(sub) or obj.Label,
-            )
-        )
-    if len(names) > 1:
-        return NeedsChoice([(geometry, name) for name in names], source=(obj, sub))
-    return _accept_stored(rule, geometry, names[0], current, PICK_DIRECT)

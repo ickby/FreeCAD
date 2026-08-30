@@ -324,13 +324,6 @@ class TestSelectionRules(unittest.TestCase):
         self.assertIsInstance(result, Accept)
         self.assertEqual(result.picks, [(self.source, "")])
 
-    def test_component_pick_from_a_solid(self):
-        rule = ReferenceRule(component=True)
-        result = self._eval(rule, self.geometry, "Solid1")
-        self.assertIsInstance(result, Accept)
-        self.assertEqual(result.picks[0][0], self.geometry)
-        self.assertTrue(result.picks[0][1].startswith("Component"))
-
     # -- which refusals may be answered with "try the other slot" -----------
 
     def test_a_wrong_type_may_be_redirected(self):

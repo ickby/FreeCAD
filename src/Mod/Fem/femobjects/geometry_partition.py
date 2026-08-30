@@ -398,15 +398,35 @@ def _plane_placement(face):
     return FreeCAD.Placement(surf.Position, rot)
 
 
+MEASURE_NAMES = ("volume", "area", "length")
+
+
 def _measure(shape):
-    """Volume, area or length of a shape, whichever describes it."""
+    """
+    Volume of the solids, area of the loose faces, length of the loose edges.
+
+    Three numbers rather than one, because an analysis geometry can hold all
+    three kinds at once and one of them cannot stand for the others. Part's
+    own Volume over such a compound is not the volume of its solids either:
+    a face that bounds nothing still enters the integral, so a solid of 500
+    beside a stray face reads as 485.7 — a size no partition can preserve.
+
+    Faces that bound a solid and edges that bound a face are left out. Those
+    are what a cut adds to: splitting a solid raises its face count, and the
+    invariant is about what the cut must not consume.
+    """
     if shape.isNull():
-        return 0.0
-    if shape.Solids:
-        return shape.Volume
-    if shape.Faces:
-        return shape.Area
-    return shape.Length
+        return (0.0, 0.0, 0.0)
+    volume = sum(solid.Volume for solid in shape.Solids)
+    bounding = {face.hashCode() for solid in shape.Solids for face in solid.Faces}
+    area = sum(face.Area for face in shape.Faces if face.hashCode() not in bounding)
+    bounding = {edge.hashCode() for face in shape.Faces for edge in face.Edges}
+    length = sum(edge.Length for edge in shape.Edges if edge.hashCode() not in bounding)
+    return (volume, area, length)
+
+
+def _measure_tolerance(value):
+    return max(abs(value) * 1e-6, 1e-9)
 
 
 def _solid_pieces_by_plane(element, placement):
@@ -524,7 +544,10 @@ def _split_sub_elements(base_shape, targets, tool_shape):
     result = base_shape.replaceShape(pairs)
     if result.isNull():
         raise ValueError("Partition left an empty shape")
-    if _measure(result) < _measure(base_shape) - max(_measure(base_shape) * 1e-6, 1e-9):
+    if any(
+        now < was - _measure_tolerance(was)
+        for was, now in zip(_measure(base_shape), _measure(result))
+    ):
         raise ValueError(
             "Partition would delete geometry; the tool does not cut the targets cleanly"
         )
@@ -660,13 +683,12 @@ def _checked(base_shape, result):
     """
     if result is None or result.isNull():
         raise ValueError("Partition produced an empty shape")
-    before = _measure(base_shape)
-    after = _measure(result)
-    if abs(after - before) > max(before * 1e-6, 1e-9):
-        raise ValueError(
-            f"Partition changed the size of the geometry: {before:.6g} before, "
-            f"{after:.6g} after. This is a partition bug, please report it."
-        )
+    for name, was, now in zip(MEASURE_NAMES, _measure(base_shape), _measure(result)):
+        if abs(now - was) > _measure_tolerance(was):
+            raise ValueError(
+                f"Partition changed the {name} of the geometry: {was:.6g} before, "
+                f"{now:.6g} after. This is a partition bug, please report it."
+            )
     return result
 
 

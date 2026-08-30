@@ -349,6 +349,14 @@ std::string ViewProviderFemConstraint::gethideMeshShowPartStr()
 
 bool ViewProviderFemConstraint::setEdit(int ModNum)
 {
+    // The reference slots write References as they are picked, so Cancel has
+    // to have a transaction to abort. A create command already opened one,
+    // and nesting a second would split its undo step in two.
+    if (Gui::Document* document = getDocument()) {
+        if (!document->hasPendingCommand()) {
+            document->openCommand(QT_TRANSLATE_NOOP("Command", "Edit constraint"));
+        }
+    }
     Gui::Command::doCommand(
         Gui::Command::Doc,
         "%s",

@@ -143,6 +143,19 @@ public:
     void syncSelectionHighlight();
 
     /**
+     * While true, hovering a Face/Edge/Vertex lights the solid(s) that own it.
+     *
+     * Used while a promoting reference slot is armed. The solid becomes the
+     * preselected element, so the existing volume-preselect path colours every
+     * face of it. Ambiguous faces light every owner.
+     */
+    void setPreselectPromotion(bool on);
+    bool isPreselectPromotion() const
+    {
+        return m_preselectPromotion;
+    }
+
+    /**
      * Mark shape elements in a colour of their own, independent of what is
      * selected.
      *
@@ -260,6 +273,8 @@ protected:
     bool idHasAnyElement(vtkIdType id, const std::set<std::string>& elements) const;
     /** Toplevel element used to colour the shape with this vtk id, or empty. */
     std::string idElementForColor(vtkIdType id) const;
+    /** Volume toplevels that own this element, or empty. */
+    std::vector<std::string> volumeOwnersOf(const std::string& element) const;
 
     // vtk elements
     vtkSmartPointer<vtkPolyData> m_visdata;
@@ -299,6 +314,7 @@ protected:
 
     std::set<std::string> m_selected;
     std::set<std::string> m_preselected;
+    bool m_preselectPromotion {false};
 
     // Marked elements per role, in the order the roles were first set, so a
     // later role wins where two of them name the same element.

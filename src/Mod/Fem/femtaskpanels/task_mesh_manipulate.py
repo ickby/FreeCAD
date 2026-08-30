@@ -34,7 +34,7 @@ from PySide import QtCore, QtGui
 import FreeCAD
 import FreeCADGui
 
-from femguiutils import selection_widgets
+from femguiutils import selection_slots
 from . import base_femtaskpanel
 from . import base_fempreviewpanel
 
@@ -58,8 +58,11 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel, base_fempreviewpanel._TaskPan
 
         # geometry selection widget
         # only allow valid restriction objects!
-        self.selection_widget = selection_widgets.GeometryElementsSelection(
-            obj.References, ["Face", "Edge", "Vertex", "Solid"], True, False
+        self.selection_widget = selection_slots.for_references(
+            obj,
+            ["Face", "Edge", "Vertex", "Solid"],
+            homogeneous=False,
+            empty_means_all=False,
         )
         self.selection_widget.setWindowTitle("Reference Geometries for Restriction")
         self.selection_widget.setWindowIcon(FreeCADGui.getIcon(":icons/FEM_MeshManipulate.svg"))

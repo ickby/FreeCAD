@@ -65,7 +65,6 @@ set(FemGui_UIC_SRCS
     TaskObjectName.ui
     TaskFemConstraint.ui
     TaskFemConstraintBearing.ui
-    TaskFemConstraintFixed.ui
     TaskFemConstraintRigidBody.ui
     TaskFemConstraintForce.ui
     TaskFemConstraintFluidBoundary.ui
@@ -134,12 +133,11 @@ SET(FemGui_DLG_SRCS
     TaskFemConstraint.ui
     TaskFemConstraint.cpp
     TaskFemConstraint.h
-    TaskFemConstraintOnBoundary.cpp
-    TaskFemConstraintOnBoundary.h
+    ReferenceSelectionWidget.cpp
+    ReferenceSelectionWidget.h
     TaskFemConstraintBearing.ui
     TaskFemConstraintBearing.cpp
     TaskFemConstraintBearing.h
-    TaskFemConstraintFixed.ui
     TaskFemConstraintFixed.cpp
     TaskFemConstraintFixed.h
     TaskFemConstraintRigidBody.ui

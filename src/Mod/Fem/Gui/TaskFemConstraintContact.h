@@ -46,7 +46,6 @@ public:
         QWidget* parent = nullptr
     );
     ~TaskFemConstraintContact() override;
-    const std::string getReferences() const override;
     const std::string getAdjust() const;
     const std::string getSlope() const;
     bool getFriction() const;
@@ -56,19 +55,12 @@ public:
     const std::vector<bool> getRevSlave() const;
 
 private Q_SLOTS:
-    void onReferenceDeletedSlave();
-    void onReferenceDeletedMaster();
-    void addToSelectionSlave();
-    void removeFromSelectionSlave();
-    void addToSelectionMaster();
-    void removeFromSelectionMaster();
     void onFrictionChanged(bool);
 
 protected:
     void changeEvent(QEvent* e) override;
 
 private:
-    void updateUI();
     std::unique_ptr<Ui_TaskFemConstraintContact> ui;
 };
 

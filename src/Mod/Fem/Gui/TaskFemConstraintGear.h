@@ -43,20 +43,16 @@ public:
     double getDiameter() const;
     double getForce() const;
     double getForceAngle() const;
-    const std::string getDirectionName() const;
-    const std::string getDirectionObject() const;
     bool getReverse() const;
 
 private Q_SLOTS:
     void onDiameterChanged(double dia);
     void onForceChanged(double force);
     void onForceAngleChanged(double angle);
-    void onButtonDirection(const bool pressed = true);
     void onCheckReversed(bool);
 
 protected:
     void changeEvent(QEvent* e) override;
-    void onSelectionChanged(const Gui::SelectionChanges& msg) override;
 };
 
 /// simulation dialog for the TaskView

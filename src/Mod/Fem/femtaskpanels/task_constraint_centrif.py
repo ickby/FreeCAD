@@ -35,7 +35,7 @@ from PySide import QtGui
 import FreeCAD
 import FreeCADGui
 
-from femguiutils import selection_widgets
+from femguiutils import selection_slots
 from . import base_femtaskpanel
 
 
@@ -58,28 +58,33 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
         )
         self.init_parameter_widget()
 
-        # axis of rotation selection widget
-        self.axis_selection_widget = selection_widgets.GeometryElementsSelection(
-            obj.RotationAxis, ["Edge"], False, False
-        )
-        self.axis_selection_widget.setWindowTitle(
-            self.axis_selection_widget.tr("Axis Reference Selector")
+        self.selection_widget = selection_slots.from_slot_specs(
+            obj,
+            [
+                {
+                    "id": "References",
+                    "property": "References",
+                    "title": FreeCAD.Qt.translate("FEM", "Body"),
+                    "types": ["Solid", "Face"],
+                    "armed": True,
+                },
+                {
+                    "id": "RotationAxis",
+                    "property": "RotationAxis",
+                    "title": FreeCAD.Qt.translate("FEM", "Axis"),
+                    "types": ["Edge"],
+                    "max_count": 1,
+                },
+            ],
         )
 
-        # loaded body selection widget
-        self.body_selection_widget = selection_widgets.GeometryElementsSelection(
-            obj.References, ["Solid", "Face"], False, False
-        )
-
-        # form made from param and selection widget
-        self.form = [self.parameter_widget, self.body_selection_widget, self.axis_selection_widget]
+        self.form = [self.parameter_widget, self.selection_widget]
 
     def accept(self):
-        # check values RotationAxis
-        items = len(self.axis_selection_widget.references)
+        items = len(self.selection_widget.slot("RotationAxis").picks)
         FreeCAD.Console.PrintMessage(
             "Task panel: found axis references: {}\n{}\n".format(
-                items, self.axis_selection_widget.references
+                items, self.selection_widget.slot("RotationAxis").picks
             )
         )
 
@@ -99,32 +104,13 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
             elif msgBox.clickedButton() == ignoreButton:
                 pass
 
-        # check values BodyReference
-        items = len(self.body_selection_widget.references)
+        items = len(self.selection_widget.slot("References").picks)
         FreeCAD.Console.PrintMessage(
             "Task panel: found body references: {}\n{}\n".format(
-                items, self.body_selection_widget.references
+                items, self.selection_widget.slot("References").picks
             )
         )
 
-        # if no solid is added as reference all volume elements are used
-        """
-        if items == 0:
-            msgBox = QtGui.QMessageBox()
-            msgBox.setIcon(QtGui.QMessageBox.Question)
-            msgBox.setText("Constraint Centrif requires at least one solid")
-            msgBox.setWindowTitle("FEM Constraint Centrifuge - Body Selection")
-            retryButton = msgBox.addButton(QtGui.QMessageBox.Retry)
-            ignoreButton = msgBox.addButton(QtGui.QMessageBox.Ignore)
-            msgBox.exec_()
-
-            if msgBox.clickedButton() == retryButton:
-                return False
-            elif msgBox.clickedButton() == ignoreButton:
-                pass
-        """
-
-        # check value RotationFrequency
         if self.rotation_frequency == 0:
             msgBox = QtGui.QMessageBox()
             msgBox.setIcon(QtGui.QMessageBox.Question)
@@ -140,15 +126,11 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
                 pass
 
         self.obj.RotationFrequency = self.rotation_frequency
-        self.obj.RotationAxis = self.axis_selection_widget.references
-        self.obj.References = self.body_selection_widget.references
-        self.axis_selection_widget.finish_selection()
-        self.body_selection_widget.finish_selection()
+        self.selection_widget.finish_selection()
         return super().accept()
 
     def reject(self):
-        self.axis_selection_widget.finish_selection()
-        self.body_selection_widget.finish_selection()
+        self.selection_widget.finish_selection()
         return super().reject()
 
     def init_parameter_widget(self):

@@ -1198,6 +1198,20 @@ void ViewProviderFemAnalysisImport::clearElementHighlight(const std::string& rol
     setElementHighlight(role, {}, Base::Color());
 }
 
+void ViewProviderFemAnalysisImport::setPreselectPromotion(bool on)
+{
+    std::function<void(ImportRenderNode&)> walk = [&](ImportRenderNode& node) {
+        node.geometry.setPreselectPromotion(on);
+        for (auto& child : node.nested) {
+            walk(*child);
+        }
+    };
+    for (auto& node : m_renderNodes) {
+        walk(*node);
+    }
+    syncSelectionHighlight();
+}
+
 const ViewProviderFemAnalysisImport::ImportRenderNode* ViewProviderFemAnalysisImport::pickedNode(
     const SoPath* path
 ) const

@@ -658,8 +658,62 @@ void FemGeometryViewHelper::setSelectionState(
         return out;
     };
     m_selected = local(selected);
-    m_preselected = local(preselected);
+    auto pre = local(preselected);
+    if (m_preselectPromotion) {
+        std::set<std::string> promoted;
+        for (const auto& el : pre) {
+            auto owners = volumeOwnersOf(el);
+            if (!owners.empty()) {
+                promoted.insert(owners.begin(), owners.end());
+            }
+            else {
+                promoted.insert(el);
+            }
+        }
+        m_preselected = std::move(promoted);
+    }
+    else {
+        m_preselected = std::move(pre);
+    }
     applySelectionHighlight();
+}
+
+void FemGeometryViewHelper::setPreselectPromotion(bool on)
+{
+    m_preselectPromotion = on;
+}
+
+std::vector<std::string> FemGeometryViewHelper::volumeOwnersOf(const std::string& element) const
+{
+    if (isVolumeElementName(element)) {
+        return {element};
+    }
+    const char* prefix = nullptr;
+    if (element.rfind("Face", 0) == 0) {
+        prefix = "Face";
+    }
+    else if (element.rfind("Edge", 0) == 0) {
+        prefix = "Edge";
+    }
+    else if (element.rfind("Vertex", 0) == 0) {
+        prefix = "Vertex";
+    }
+    std::set<std::string> owners;
+    for (const auto& [id, names] : m_id_elements) {
+        bool hit = std::find(names.begin(), names.end(), element) != names.end();
+        if (!hit && prefix) {
+            hit = elementForShapeId(id, prefix) == element;
+        }
+        if (!hit) {
+            continue;
+        }
+        for (const auto& name : names) {
+            if (isVolumeElementName(name)) {
+                owners.insert(name);
+            }
+        }
+    }
+    return {owners.begin(), owners.end()};
 }
 
 void FemGeometryViewHelper::applySelectionHighlight()

@@ -164,6 +164,16 @@ public:
     );
 
     /**
+     * While true, a preselected Face/Edge/Vertex is mapped to its owning
+     * volume toplevels before highlight is applied.
+     */
+    void setPreselectPromotion(bool on);
+    bool isPreselectPromotion() const
+    {
+        return m_preselectPromotion;
+    }
+
+    /**
      * Colour the faces of @a elements, named as a reference on this instance
      * names them, until the same @a role is set again or cleared.
      *
@@ -215,6 +225,7 @@ private:
     ) const;
     std::set<std::string> suppressedToplevels(Fem::FemGeometry* geom) const;
     const Base::Color* highlightColorFor(const std::string& element, vtkIdType id) const;
+    std::vector<std::string> volumeOwnersOf(const std::string& element) const;
     AnalysisViewState* viewState() const;
 
     struct ElementHighlight
@@ -226,6 +237,7 @@ private:
     std::vector<ElementHighlight> m_highlights;
     std::set<std::string> m_selected;
     std::set<std::string> m_preselected;
+    bool m_preselectPromotion {false};
 
     Gui::ViewProviderDocumentObject* m_viewProvider {nullptr};
     AnalysisFinder m_findAnalysis;

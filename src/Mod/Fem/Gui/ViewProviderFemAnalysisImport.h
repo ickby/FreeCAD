@@ -130,6 +130,12 @@ public:
      */
     void syncSelectionHighlight();
 
+    /**
+     * While true, hovering a Face/Edge/Vertex of this instance lights the
+     * solid(s) that own it. See ViewProviderFemGeometry::setPreselectPromotion.
+     */
+    void setPreselectPromotion(bool on);
+
     /** Mark referenced elements, named as a reference on this import names them. */
     void setElementHighlight(
         const std::string& role,

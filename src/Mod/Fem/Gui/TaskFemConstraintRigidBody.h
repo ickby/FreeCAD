@@ -24,7 +24,7 @@
 
 #include <QObject>
 
-#include "TaskFemConstraintOnBoundary.h"
+#include "TaskFemConstraint.h"
 #include "ViewProviderFemConstraintRigidBody.h"
 
 
@@ -32,7 +32,7 @@ class Ui_TaskFemConstraintRigidBody;
 
 namespace FemGui
 {
-class TaskFemConstraintRigidBody: public TaskFemConstraintOnBoundary
+class TaskFemConstraintRigidBody: public TaskFemConstraint
 {
     Q_OBJECT
 
@@ -42,8 +42,6 @@ public:
         QWidget* parent = nullptr
     );
     ~TaskFemConstraintRigidBody() override;
-
-    const std::string getReferences() const override;
     Base::Vector3d getReferenceNode() const;
     Base::Vector3d getDisplacement() const;
     Base::Rotation getRotation() const;
@@ -53,9 +51,6 @@ public:
     std::vector<std::string> getRotationalMode() const;
 
 private Q_SLOTS:
-    void onReferenceDeleted();
-    void addToSelection() override;
-    void removeFromSelection() override;
     void onTransModeXChanged(int);
     void onTransModeYChanged(int);
     void onTransModeZChanged(int);
@@ -68,10 +63,8 @@ private Q_SLOTS:
 
 protected:
     void changeEvent(QEvent* e) override;
-    void clearButtons(const SelectionChangeModes notThis) override;
 
 private:
-    void updateUI();
     Ui_TaskFemConstraintRigidBody* ui;
 };
 

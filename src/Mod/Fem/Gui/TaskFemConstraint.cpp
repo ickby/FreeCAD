@@ -22,29 +22,21 @@
  ***************************************************************************/
 
 
-#include <QAction>
-#include <QKeyEvent>
+#include <QBoxLayout>
 #include <QListWidget>
 #include <QMessageBox>
-#include <sstream>
 
 
 #include <App/Document.h>
-#include <App/PropertyLinks.h>
-#include <Gui/Application.h>
+#include <App/DocumentObject.h>
+#include <Base/Exception.h>
 #include <Gui/BitmapFactory.h>
 #include <Gui/Command.h>
 #include <Gui/Document.h>
 #include <Gui/Selection/Selection.h>
-#include <Gui/Tools.h>
-#include <Gui/ViewProvider.h>
-#include <Mod/Fem/App/FemAnalysisImport.h>
 #include <Mod/Fem/App/FemConstraint.h>
-#include <Mod/Fem/App/FemGeometry.h>
-#include <Mod/Fem/App/FemTools.h>
 
 #include "TaskFemConstraint.h"
-#include "ui_TaskFemConstraint.h"
 
 
 using namespace FemGui;
@@ -59,94 +51,40 @@ TaskFemConstraint::TaskFemConstraint(
 )
     : TaskBox(Gui::BitmapFactory().pixmap(pixmapname), tr("Analysis Feature Properties"), true, parent)
     , proxy(nullptr)
-    , actionList(nullptr)
-    , clearListAction(nullptr)
-    , deleteAction(nullptr)
     , ConstraintView(ConstraintView)
-    , selectionMode(selref)
 {}
 
-bool TaskFemConstraint::event(QEvent* event)
+TaskFemConstraint::~TaskFemConstraint()
 {
-    if (event && event->type() == QEvent::ShortcutOverride) {
-        auto ke = static_cast<QKeyEvent*>(event);  // NOLINT
-        if (deleteAction) {
-            if (ke->matches(QKeySequence::Delete) || ke->matches(QKeySequence::Backspace)) {
-                ke->accept();
-            }
-        }
+    if (m_references) {
+        m_references->finish();
+        m_references = nullptr;
     }
-    return TaskBox::event(event);
 }
 
-void TaskFemConstraint::keyPressEvent(QKeyEvent* ke)
-{
-    // if we have a Del key, trigger the deleteAction
-    if (ke->matches(QKeySequence::Delete) || ke->matches(QKeySequence::Backspace)) {
-        if (deleteAction && deleteAction->isEnabled()) {
-            ke->accept();
-            deleteAction->trigger();
-        }
-    }
-
-    TaskBox::keyPressEvent(ke);
-}
-
-const std::string TaskFemConstraint::getReferences(const std::vector<std::string>& items) const
-{
-    std::string result;
-    for (std::vector<std::string>::const_iterator i = items.begin(); i != items.end(); i++) {
-        int pos = i->find_last_of(":");
-        std::string objStr = "App.ActiveDocument." + i->substr(0, pos);
-        std::string refStr = "\"" + i->substr(pos + 1) + "\"";
-        result = result + (i != items.begin() ? ", " : "") + "(" + objStr + "," + refStr + ")";
-    }
-
-    return result;
-}
-
-Fem::FemGeometry* TaskFemConstraint::referenceGeometry() const
+void TaskFemConstraint::addReferenceSelection(const std::vector<ReferenceSlotSpec>& specs, QWidget* host)
 {
     if (ConstraintView.expired()) {
-        return nullptr;
+        return;
     }
-
-    return Fem::Tools::getAnalysisGeometry(ConstraintView->getObject());
-}
-
-bool TaskFemConstraint::checkReference(const App::DocumentObject* obj)
-{
-    // An analysis that builds its own geometry keeps every reference on it, so
-    // that the shape the mesh is made of is the one the references address.
-    if (Fem::FemGeometry* geometry = referenceGeometry()) {
-        if (obj == geometry) {
-            return true;
+    // Before the new widget becomes a child of the host, so that hiding by
+    // name can only reach what the .ui file brought.
+    if (host) {
+        hideLegacyReferenceWidgets(host);
+    }
+    QWidget* parent = host ? host : this;
+    m_references = new ReferenceSelectionWidget(ConstraintView->getObject(), specs, parent);
+    if (host) {
+        if (auto* layout = qobject_cast<QBoxLayout*>(host->layout())) {
+            layout->insertWidget(0, m_references);
         }
-
-        if (obj->isDerivedFrom<Fem::FemAnalysisImport>()) {
-            return true;
+        else {
+            this->groupLayout()->addWidget(m_references);
         }
-
-        QMessageBox::warning(
-            this,
-            tr("Selection Error"),
-            tr("Select on the geometry of the analysis, %1.")
-                .arg(QString::fromUtf8(geometry->Label.getValue()))
-        );
-        return false;
     }
-
-    if (!Fem::Tools::getFeatureShape(obj)) {
-        QMessageBox::warning(this, tr("Selection Error"), tr("Selected object is not a part!"));
-        return false;
+    else {
+        this->groupLayout()->addWidget(m_references);
     }
-
-    return true;
-}
-
-void TaskFemConstraint::normalizeReference(App::DocumentObject*& /*obj*/, std::string& /*subName*/) const
-{
-    // References are stored on the import object with dotted paths; no flattening.
 }
 
 const std::string TaskFemConstraint::getScale() const
@@ -156,106 +94,10 @@ const std::string TaskFemConstraint::getScale() const
     return std::to_string(pcConstraint->Scale.getValue());
 }
 
-void TaskFemConstraint::setSelection(QListWidgetItem* item)
-{
-    // highlights the list item in the model
-
-    // get the document name
-    std::string docName = ConstraintView->getObject()->getDocument()->getName();
-    // name of the item
-    std::string ItemName = item->text().toStdString();
-    std::string delimiter = ":";
-    size_t pos = 0;
-    pos = ItemName.find(delimiter);
-    // the objName is the name piece before the ':' of the item name
-    std::string objName = ItemName.substr(0, pos);
-    // the subName is the name piece behind the ':'
-    ItemName.erase(0, pos + delimiter.length());
-    // clear existing selection
-    Gui::Selection().clearSelection();
-    // highlight the selected item
-    Gui::Selection().addSelection(docName.c_str(), objName.c_str(), ItemName.c_str(), 0, 0, 0);
-}
-
-void TaskFemConstraint::onReferenceClearList()
-{
-    QSignalBlocker block(actionList);
-    actionList->clear();
-}
-
-void TaskFemConstraint::onReferenceDeleted(const int row)
-{
-    Fem::Constraint* pcConstraint = ConstraintView->getObject<Fem::Constraint>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-
-    Objects.erase(Objects.begin() + row);
-    SubElements.erase(SubElements.begin() + row);
-    pcConstraint->References.setValues(Objects, SubElements);
-}
-
-void TaskFemConstraint::onButtonReference(const bool pressed)
-{
-    if (pressed) {
-        selectionMode = selref;
-    }
-    else {
-        selectionMode = selnone;
-    }
-    Gui::Selection().clearSelection();
-}
-
-const QString TaskFemConstraint::makeRefText(const std::string& objName, const std::string& subName) const
-{
-    return QString::fromUtf8((objName + ":" + subName).c_str());
-}
-
-const QString TaskFemConstraint::makeRefText(
-    const App::DocumentObject* obj,
-    const std::string& subName
-) const
-{
-    // getReferences() and setSelection() parse this text back into an object,
-    // so it has to stay the internal name and not become the label.
-    return QString::fromUtf8((std::string(obj->getNameInDocument()) + ":" + subName).c_str());
-}
-
-void TaskFemConstraint::createActions(QListWidget* parentList)
-{
-    actionList = parentList;
-    createDeleteAction(parentList);
-    createClearListAction(parentList);
-}
-
-void TaskFemConstraint::createClearListAction(QListWidget* parentList)
-{
-    clearListAction = new QAction(tr("Clear list"), this);
-    connect(clearListAction, &QAction::triggered, this, &TaskFemConstraint::onReferenceClearList);
-
-    parentList->addAction(clearListAction);
-    parentList->setContextMenuPolicy(Qt::ActionsContextMenu);
-}
-
-void TaskFemConstraint::createDeleteAction(QListWidget* parentList)
-{
-    // creates a context menu, a shortcut for it and connects it to a slot function
-
-    deleteAction = new QAction(tr("Delete"), this);
-    deleteAction->setShortcut(Gui::QtTools::deleteKeySequence());
-
-    // display shortcut behind the context menu entry
-    deleteAction->setShortcutVisibleInContextMenu(true);
-
-    parentList->addAction(deleteAction);
-    parentList->setContextMenuPolicy(Qt::ActionsContextMenu);
-}
-
 //**************************************************************************
 //**************************************************************************
 // TaskDialog
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-//==== calls from the TaskView ===============================================================
 
 void TaskDlgFemConstraint::open()
 {
@@ -271,17 +113,10 @@ bool TaskDlgFemConstraint::accept()
     std::string name = ConstraintView->getObject()->getNameInDocument();
 
     try {
-        std::string refs = parameter->getReferences();
-
-        if (!refs.empty()) {
-            Gui::Command::doCommand(
-                Gui::Command::Doc,
-                "App.ActiveDocument.%s.References = [%s]",
-                name.c_str(),
-                refs.c_str()
-            );
-        }
-        else {
+        // The slots write the property live, so accept() only has to check
+        // that something was picked.
+        auto* constraint = ConstraintView->getObject<Fem::Constraint>();
+        if (!constraint || constraint->References.getValues().empty()) {
             QMessageBox::warning(
                 parameter,
                 tr("Input Error"),
@@ -315,7 +150,6 @@ bool TaskDlgFemConstraint::accept()
 
 bool TaskDlgFemConstraint::reject()
 {
-    // roll back the changes
     ConstraintView->getDocument()->abortCommand();
     Gui::Command::doCommand(Gui::Command::Gui, "Gui.activeDocument().resetEdit()");
     Gui::Command::updateActive();

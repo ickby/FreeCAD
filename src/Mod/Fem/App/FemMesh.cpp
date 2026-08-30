@@ -29,6 +29,7 @@
 #include <cstring>
 #include <memory>
 #include <string_view>
+#include <utility>
 
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
@@ -2979,10 +2980,16 @@ int FemMesh::removeElements(const std::vector<int>& ids)
     SMESH_Mesh* mesh = this->getSMesh();
     SMESHDS_Mesh* meshDS = mesh->GetMeshDS();
 
+    // The width of a mesh id is int against the bundled SMESH and 64 bit
+    // against an external one built with SALOME_USE_64BIT_IDS. A list of one
+    // does not convert to a list of the other, and the name smIdType is absent
+    // from the bundled headers, so the type is taken from the API itself.
+    using MeshId = decltype(std::declval<SMDS_MeshElement>().GetID());
+
     // Nodes are shared, so which of them survive is only known once the
     // elements are gone
     std::set<const SMDS_MeshNode*> nodes;
-    std::list<int> elements;
+    std::list<MeshId> elements;
     for (int id : ids) {
         const SMDS_MeshElement* element = meshDS->FindElement(id);
         if (!element) {
@@ -2997,9 +3004,9 @@ int FemMesh::removeElements(const std::vector<int>& ids)
     }
 
     SMESH_MeshEditor editor(mesh);
-    const int removed = editor.Remove(elements, false);
+    const auto removed = editor.Remove(elements, false);
 
-    std::list<int> orphans;
+    std::list<MeshId> orphans;
     for (const SMDS_MeshNode* node : nodes) {
         if (node->NbInverseElements() == 0) {
             orphans.push_back(node->GetID());
@@ -3015,7 +3022,7 @@ int FemMesh::removeElements(const std::vector<int>& ids)
         }
     }
 
-    return removed;
+    return static_cast<int>(removed);
 }
 
 bool FemMesh::removeGroup(int GroupId)

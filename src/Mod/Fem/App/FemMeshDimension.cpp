@@ -306,8 +306,11 @@ DimensionClassification Fem::classifyDimensions(
     };
 
     // Size cellDimension to the highest element id so indexing by id-1 is safe.
-    const int maxId = std::max(meshDS->MaxElementID(), 0);
-    result.cellDimension.assign(static_cast<std::size_t>(maxId), -1);
+    // An id is smIdType, which is int against the bundled SMESH and 64 bit
+    // against an external one, so the two cannot be handed to std::max
+    // together and the comparison is spelled out instead.
+    const auto highest = meshDS->MaxElementID();
+    result.cellDimension.assign(highest > 0 ? static_cast<std::size_t>(highest) : 0, -1);
 
     auto raiseEntityDimension = [&result](const std::string& entity, int dim) {
         if (dim < 0) {

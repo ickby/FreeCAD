@@ -492,10 +492,15 @@ std::vector<unsigned char> ViewProviderFemAnalysisImport::buildComponentSubsetMa
         return {};
     }
 
+    // An id is smIdType, which is int against the bundled SMESH and 64 bit
+    // against an external one, so it cannot meet a plain int in std::max.
     int maxId = 0;
     SMDS_ElemIteratorPtr it = smesh->GetMeshDS()->elementsIterator(SMDSAbs_All);
     while (it->more()) {
-        maxId = std::max(maxId, it->next()->GetID());
+        const auto id = static_cast<int>(it->next()->GetID());
+        if (id > maxId) {
+            maxId = id;
+        }
     }
     if (maxId <= 0) {
         return {};

@@ -489,9 +489,10 @@ void FemMeshRenderer::setClassification(const Classification* classification)
 void FemMeshRenderer::applyVisibilityMask(
     const Fem::FemGeometry* geometry,
     DimensionMode dimMode,
+    bool showConstruction,
     const std::set<std::string>& hiddenElements,
     const std::set<std::string>& hiddenCellTypes,
-    std::set<std::string>* underAchieved
+    std::map<std::string, int>* underAchieved
 )
 {
     m_dimensionMode = dimMode;
@@ -506,6 +507,7 @@ void FemMeshRenderer::applyVisibilityMask(
         m_vtkmesh,
         geometry,
         dimMode,
+        showConstruction,
         hiddenElements,
         hiddenCellTypes,
         underAchieved

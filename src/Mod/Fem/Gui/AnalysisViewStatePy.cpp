@@ -62,35 +62,39 @@ ActiveStage stageFromString(const std::string& s)
     return ActiveStage::Geometry;
 }
 
+// Python talks dimensions, not shapes. "Surface" reads as a name for what is
+// drawn, which is how it came to mean two different things depending on the
+// mesh; "2D" can only mean the one. The shape names are still accepted so that
+// scripts written against the older spelling keep working.
 const char* dimensionToString(DimensionMode mode)
 {
     switch (mode) {
         case DimensionMode::Highest:
-            return "Highest";
+            return "All";
         case DimensionMode::Volume:
-            return "Volume";
+            return "3D";
         case DimensionMode::Surface:
-            return "Surface";
+            return "2D";
         case DimensionMode::Curve:
-            return "Curve";
+            return "1D";
         case DimensionMode::Point:
-            return "Point";
+            return "0D";
     }
-    return "Highest";
+    return "All";
 }
 
 DimensionMode dimensionFromString(const std::string& s)
 {
-    if (s == "Volume" || s == "3D") {
+    if (s == "3D" || s == "Volume") {
         return DimensionMode::Volume;
     }
-    if (s == "Surface" || s == "2D") {
+    if (s == "2D" || s == "Surface") {
         return DimensionMode::Surface;
     }
-    if (s == "Curve" || s == "1D") {
+    if (s == "1D" || s == "Curve") {
         return DimensionMode::Curve;
     }
-    if (s == "Point" || s == "0D") {
+    if (s == "0D" || s == "Point") {
         return DimensionMode::Point;
     }
     return DimensionMode::Highest;
@@ -143,7 +147,18 @@ void AnalysisViewStatePy::init_type()
     add_varargs_method(
         "setDimensionMode",
         &AnalysisViewStatePy::setDimensionMode,
-        "setDimensionMode(str)"
+        "setDimensionMode(str) -- one of All, 3D, 2D, 1D, 0D"
+    );
+    add_varargs_method(
+        "getShowConstruction",
+        &AnalysisViewStatePy::getShowConstruction,
+        "getShowConstruction()"
+    );
+    add_varargs_method(
+        "setShowConstruction",
+        &AnalysisViewStatePy::setShowConstruction,
+        "setShowConstruction(bool) -- take the elements the mesher built the mesh\n"
+        "from into the dimension mode as well, not only the ones the analysis solves."
     );
     add_varargs_method("getWireframe", &AnalysisViewStatePy::getWireframe, "getWireframe()");
     add_varargs_method("setWireframe", &AnalysisViewStatePy::setWireframe, "setWireframe(bool)");
@@ -207,7 +222,11 @@ void AnalysisViewStatePy::init_type()
         "getClipPlanes() -> {name: (origin, direction, scope)}"
     );
 
-    add_varargs_method("getCategories", &AnalysisViewStatePy::getCategories, "getCategories()");
+    add_varargs_method(
+        "getCategories",
+        &AnalysisViewStatePy::getCategories,
+        "getCategories() -> [{key, label, color, construction, count}]"
+    );
     add_varargs_method(
         "categoryOfElement",
         &AnalysisViewStatePy::categoryOfElement,
@@ -216,7 +235,7 @@ void AnalysisViewStatePy::init_type()
     add_varargs_method(
         "getUnderAchievedElements",
         &AnalysisViewStatePy::getUnderAchievedElements,
-        "getUnderAchievedElements()"
+        "getUnderAchievedElements() -> {element: dimension the mesh reached}"
     );
 
     add_varargs_method("beginUpdate", &AnalysisViewStatePy::beginUpdate, "beginUpdate()");
@@ -321,6 +340,27 @@ Py::Object AnalysisViewStatePy::setDimensionMode(const Py::Tuple& args)
     }
     if (state()) {
         state()->setDimensionMode(dimensionFromString(name));
+    }
+    return Py::None();
+}
+
+Py::Object AnalysisViewStatePy::getShowConstruction(const Py::Tuple& args)
+{
+    (void)args;
+    if (!state()) {
+        return Py::Boolean(false);
+    }
+    return Py::Boolean(state()->showConstruction());
+}
+
+Py::Object AnalysisViewStatePy::setShowConstruction(const Py::Tuple& args)
+{
+    PyObject* value = nullptr;
+    if (!PyArg_ParseTuple(args.ptr(), "O", &value)) {
+        throw Py::Exception();
+    }
+    if (state()) {
+        state()->setShowConstruction(PyObject_IsTrue(value) != 0);
     }
     return Py::None();
 }
@@ -571,6 +611,8 @@ Py::Object AnalysisViewStatePy::getCategories(const Py::Tuple& args)
         color.setItem(2, Py::Float(cat.color.b));
         color.setItem(3, Py::Float(cat.color.a));
         d.setItem("color", color);
+        d.setItem("construction", Py::Boolean(cat.construction));
+        d.setItem("count", Py::Long(cat.count));
         list.append(d);
     }
     return list;
@@ -595,13 +637,13 @@ Py::Object AnalysisViewStatePy::categoryOfElement(const Py::Tuple& args)
 Py::Object AnalysisViewStatePy::getUnderAchievedElements(const Py::Tuple& args)
 {
     (void)args;
-    Py::List list;
+    Py::Dict dict;
     if (state()) {
-        for (const auto& e : state()->underAchievedElements()) {
-            list.append(Py::String(e));
+        for (const auto& [element, achieved] : state()->underAchievedElements()) {
+            dict.setItem(element, Py::Long(achieved));
         }
     }
-    return list;
+    return dict;
 }
 
 Py::Object AnalysisViewStatePy::beginUpdate(const Py::Tuple& args)

@@ -702,7 +702,7 @@ void ViewProviderFemAnalysisImport::updateNodePlacement(
     // through this instance. Without one, what the helpers draw is the same
     // wherever the instance stands, and rebuilding it would cost a drag its
     // smoothness for nothing.
-    if (m_boundViewState && !m_boundViewState->clipPlanes().empty()) {
+    if (m_boundViewState && !m_boundViewState->activeClipPlanes().empty()) {
         node.geometry.onViewStateChanged();
         node.mesh.onViewStateChanged();
     }

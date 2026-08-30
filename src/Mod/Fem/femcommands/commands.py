@@ -149,7 +149,7 @@ class _ClippingPlaneAdd(CommandManager):
         self.tooltip = Qt.QT_TRANSLATE_NOOP(
             "FEM_ClippingPlaneAdd", "Adds a clipping plane on a selected face"
         )
-        self.is_active = "with_document"
+        self.is_active = "with_analysis"
 
     def GetResources(self):
         resources = super().GetResources()
@@ -157,46 +157,28 @@ class _ClippingPlaneAdd(CommandManager):
         return resources
 
     def Activated(self):
-        from pivy import coin
-        from femtools.femutils import getBoundBoxOfAllDocumentShapes
+        import FemGui
         from femtools.femutils import getSelectedFace
 
-        overallboundbox = getBoundBoxOfAllDocumentShapes(FreeCAD.ActiveDocument)
-        # print(overallboundbox)
-        if overallboundbox:
-            min_bb_length = min(
-                {
-                    overallboundbox.XLength,
-                    overallboundbox.YLength,
-                    overallboundbox.ZLength,
-                }
-            )
-        else:
-            min_bb_length = 10.0  # default
+        analysis = FemGui.getActiveAnalysis()
+        if analysis is None:
+            return
 
-        dbox = min_bb_length * 0.2
+        # No face picked is not a mistake worth an error: the plane lands in
+        # the middle of the model, which is where the view panel puts one too,
+        # and dragging it is the point of the handle it comes with.
+        face = getSelectedFace(FreeCADGui.Selection.getSelectionEx())
+        if face is None:
+            FemGui.addClipPlane(analysis)
+            return
 
-        aFace = getSelectedFace(FreeCADGui.Selection.getSelectionEx())
-        if aFace:
-            f_CoM = aFace.CenterOfMass
-            f_uvCoM = aFace.Surface.parameter(f_CoM)  # u,v at CoM for normalAt calculation
-            f_normal = aFace.normalAt(f_uvCoM[0], f_uvCoM[1])
-        else:
-            f_CoM = FreeCAD.Vector(0, 0, 0)
-            f_normal = FreeCAD.Vector(0, 0, 1)
-
-        coin_normal_vector = coin.SbVec3f(-f_normal.x, -f_normal.y, -f_normal.z)
-        coin_bound_box = coin.SbBox3f(
-            f_CoM.x - dbox,
-            f_CoM.y - dbox,
-            f_CoM.z - dbox * 0.15,
-            f_CoM.x + dbox,
-            f_CoM.y + dbox,
-            f_CoM.z + dbox * 0.15,
-        )
-        clip_plane = coin.SoClipPlaneManip()
-        clip_plane.setValue(coin_bound_box, coin_normal_vector, 1)
-        FreeCADGui.ActiveDocument.ActiveView.getSceneGraph().insertChild(clip_plane, 1)
+        origin = face.CenterOfMass
+        u, v = face.Surface.parameter(origin)
+        # A clip plane normal points at the half that survives, and a face
+        # normal points out of the material, so the plane keeps what the face
+        # bounds only when the two are opposed.
+        normal = face.normalAt(u, v).negative()
+        FemGui.addClipPlane(analysis, origin, normal)
 
 
 class _ClippingPlaneRemoveAll(CommandManager):
@@ -210,7 +192,7 @@ class _ClippingPlaneRemoveAll(CommandManager):
         self.tooltip = Qt.QT_TRANSLATE_NOOP(
             "FEM_ClippingPlaneRemoveAll", "Removes all clipping planes"
         )
-        self.is_active = "with_document"
+        self.is_active = "with_analysis"
 
     def GetResources(self):
         resources = super().GetResources()
@@ -218,13 +200,15 @@ class _ClippingPlaneRemoveAll(CommandManager):
         return resources
 
     def Activated(self):
-        line1 = "for node in list(sg.getChildren()):\n"
-        line2 = "    if isinstance(node, coin.SoClipPlane):\n"
-        line3 = "        sg.removeChild(node)"
-        FreeCADGui.doCommand("from pivy import coin")
-        FreeCADGui.doCommand("sg = Gui.ActiveDocument.ActiveView.getSceneGraph()")
-        FreeCADGui.doCommand("nodes = sg.getChildren()")
-        FreeCADGui.doCommand(line1 + line2 + line3)
+        import FemGui
+
+        analysis = FemGui.getActiveAnalysis()
+        state = FemGui.getAnalysisViewState(analysis) if analysis else None
+        if state is None:
+            return
+        # In one go, so the geometry and the mesh are recomputed once between
+        # them rather than once per plane that goes.
+        state.clearClipPlanes()
 
 
 class _ConstantVacuumPermittivity(CommandManager):

@@ -72,6 +72,7 @@ public:
 
     Py::Object setClipPlane(const Py::Tuple&);
     Py::Object removeClipPlane(const Py::Tuple&);
+    Py::Object clearClipPlanes(const Py::Tuple&);
     Py::Object getClipPlanes(const Py::Tuple&);
 
     Py::Object getCategories(const Py::Tuple&);

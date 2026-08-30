@@ -23,20 +23,31 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include <CXX/Extensions.hxx>
 #include <CXX/Objects.hxx>
 
+#include <App/DocumentObserver.h>
+
 #include "ClipPlaneHandle.h"
+
+namespace Fem
+{
+class FemAnalysis;
+}
 
 namespace FemGui
 {
 
 /**
- * Python wrapper owning one ClipPlaneHandle.
+ * Python view of one clip plane of an analysis.
  *
- * The handle is torn down with the Python object, so a view panel row that
- * drops its reference also drops the dragger from the 3D view.
+ * Names the plane rather than holding its handle: handles belong to the
+ * analysis view provider and come and go with the plane, so a view panel row
+ * that outlives one, or is dropped while one lives on, finds the right answer
+ * either way. A wrapper whose plane is gone answers as an empty one instead
+ * of reaching into freed memory.
  */
 class ClipPlaneHandlePy: public Py::PythonExtension<ClipPlaneHandlePy>
 {
@@ -44,9 +55,9 @@ public:
     using BaseType = Py::PythonExtension<ClipPlaneHandlePy>;
 
     static void init_type();
-    static Py::Object create(std::unique_ptr<ClipPlaneHandle> handle);
+    static Py::Object create(Fem::FemAnalysis* analysis, std::string name);
 
-    explicit ClipPlaneHandlePy(std::unique_ptr<ClipPlaneHandle> handle);
+    ClipPlaneHandlePy(Fem::FemAnalysis* analysis, std::string name);
     ~ClipPlaneHandlePy() override;
 
     Py::Object repr() override;
@@ -69,7 +80,13 @@ public:
     Py::Object remove(const Py::Tuple&);
 
 private:
-    std::unique_ptr<ClipPlaneHandle> m_handle;
+    /// The live handle, or null once the plane or the analysis is gone
+    ClipPlaneHandle* handle() const;
+    Fem::FemAnalysis* analysis() const;
+    AnalysisViewState* viewState() const;
+
+    App::DocumentObjectWeakPtrT m_analysis;
+    std::string m_name;
 };
 
 }  // namespace FemGui

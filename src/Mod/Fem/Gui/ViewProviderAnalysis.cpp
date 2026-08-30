@@ -27,13 +27,17 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QTextStream>
+#include <QTimer>
 
 
+#include <App/Application.h>
 #include <App/Document.h>
 #include <App/DocumentObjectGroup.h>
 #include <App/MaterialObject.h>
 #include <App/TextDocument.h>
+#include <Base/Tools.h>
 #include <Gui/ActionFunction.h>
+#include <Gui/Application.h>
 #include <Gui/Command.h>
 #include <Gui/Control.h>
 #include <Gui/Document.h>
@@ -56,6 +60,7 @@
 #include "TaskDlgAnalysis.h"
 #include "ViewProviderAnalysis.h"
 #include "AnalysisViewState.h"
+#include "ClipPlaneHandle.h"
 
 
 using namespace FemGui;
@@ -130,6 +135,10 @@ ViewProviderFemAnalysis::ViewProviderFemAnalysis()
 
 ViewProviderFemAnalysis::~ViewProviderFemAnalysis()
 {
+    viewStateConn.disconnect();
+    // Before the view state goes, while the handles can still find it
+    clipPlaneHandles.clear();
+
     if (auto* obj = freecad_cast<Fem::FemAnalysis*>(getObject())) {
         AnalysisViewState::destroyForAnalysis(obj);
     }
@@ -143,7 +152,66 @@ void ViewProviderFemAnalysis::attach(App::DocumentObject* obj)
     if (auto* analysis = freecad_cast<Fem::FemAnalysis*>(obj)) {
         // Ensure view state exists and is loaded from persisted properties
         AnalysisViewState::forAnalysis(analysis);
+        connectViewState();
     }
+}
+
+void ViewProviderFemAnalysis::connectViewState()
+{
+    if (viewStateConn.connected()) {
+        return;
+    }
+    auto* analysis = freecad_cast<Fem::FemAnalysis*>(getObject());
+    auto* state = analysis ? AnalysisViewState::forAnalysis(analysis) : nullptr;
+    if (!state) {
+        return;
+    }
+    viewStateConn = state->connectChanged([this]() {
+        syncClipPlaneHandles();
+    });
+}
+
+void ViewProviderFemAnalysis::syncClipPlaneHandles()
+{
+    auto* analysis = freecad_cast<Fem::FemAnalysis*>(getObject());
+    auto* state = analysis ? AnalysisViewState::find(analysis) : nullptr;
+    if (!state || syncingClipPlanes) {
+        return;
+    }
+    Base::StateLocker lock(syncingClipPlanes, true);
+
+    const auto& planes = state->clipPlanes();
+
+    // Gone planes first, so a handle is never built next to the one it replaces
+    for (auto it = clipPlaneHandles.begin(); it != clipPlaneHandles.end();) {
+        it = planes.count(it->first) > 0 ? std::next(it) : clipPlaneHandles.erase(it);
+    }
+
+    for (const auto& entry : planes) {
+        auto found = clipPlaneHandles.find(entry.first);
+        if (found == clipPlaneHandles.end()) {
+            if (auto handle = ClipPlaneHandle::create(analysis, entry.first)) {
+                clipPlaneHandles.emplace(entry.first, std::move(handle));
+            }
+            continue;
+        }
+        // Almost no change of the view state is about clipping, and re-fitting
+        // a plane indicator means measuring the model, so only a plane that
+        // somebody has actually moved or switched is handed back to its
+        // handle. A handle that made the change already knows about it.
+        auto known = syncedClipPlanes.find(entry.first);
+        if (known == syncedClipPlanes.end() || known->second != entry.second) {
+            found->second->refresh();
+        }
+    }
+
+    syncedClipPlanes = planes;
+}
+
+ClipPlaneHandle* ViewProviderFemAnalysis::getClipPlaneHandle(const std::string& name) const
+{
+    auto it = clipPlaneHandles.find(name);
+    return it != clipPlaneHandles.end() ? it->second.get() : nullptr;
 }
 
 void ViewProviderFemAnalysis::updateData(const App::Property* prop)
@@ -155,10 +223,43 @@ void ViewProviderFemAnalysis::finishRestoring()
 {
     Gui::ViewProviderDocumentObjectGroup::finishRestoring();
 
-    if (auto* analysis = freecad_cast<Fem::FemAnalysis*>(getObject())) {
-        if (auto* state = AnalysisViewState::forAnalysis(analysis)) {
-            state->loadFromViewProvider(this);
+    auto* analysis = freecad_cast<Fem::FemAnalysis*>(getObject());
+    if (!analysis) {
+        return;
+    }
+    if (auto* state = AnalysisViewState::forAnalysis(analysis)) {
+        connectViewState();
+        // Gives the restored planes their handles, through the change this
+        // fires once the planes are read back.
+        state->loadFromViewProvider(this);
+    }
+
+    // A plane indicator is sized against the model, and the objects it
+    // measures are still being restored around us. Named rather than
+    // captured, so a document that closes before this runs takes it with it.
+    const std::string docName = analysis->getDocument()->getName();
+    const std::string objName = analysis->getNameInDocument();
+    QTimer::singleShot(0, [docName, objName]() {
+        auto* doc = App::GetApplication().getDocument(docName.c_str());
+        auto* guiDoc = doc && Gui::Application::Instance
+            ? Gui::Application::Instance->getDocument(doc)
+            : nullptr;
+        if (!guiDoc) {
+            return;
         }
+        auto* obj = freecad_cast<Fem::FemAnalysis*>(doc->getObject(objName.c_str()));
+        auto* vp = obj ? freecad_cast<ViewProviderFemAnalysis*>(guiDoc->getViewProvider(obj))
+                       : nullptr;
+        if (vp) {
+            vp->refreshClipPlaneHandles();
+        }
+    });
+}
+
+void ViewProviderFemAnalysis::refreshClipPlaneHandles()
+{
+    for (auto& entry : clipPlaneHandles) {
+        entry.second->refresh();
     }
 }
 

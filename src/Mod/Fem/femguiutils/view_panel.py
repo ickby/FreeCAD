@@ -82,6 +82,18 @@ def _ui_path(name):
     return FreeCAD.getHomePath() + "Mod/Fem/Resources/ui/" + name
 
 
+def _clip_sort_key(name):
+    """
+    Order clip planes the way their names count.
+
+    They are named "Clip 1", "Clip 2" and so on, and sorted as text the tenth
+    lands between the first and the second.
+    """
+    head = name.rstrip("0123456789")
+    tail = name[len(head) :]
+    return (head, int(tail) if tail else -1)
+
+
 def _thousands(number):
     """Group an element count, thin space rather than comma or point.
 
@@ -1339,7 +1351,11 @@ class GeometryExplorer(QtGui.QTreeView):
             return
         self._sync_pending = False
 
-        doc = self.geom_obj.Document.Name
+        try:
+            doc = self.geom_obj.Document.Name
+        except (AttributeError, ReferenceError, RuntimeError):
+            # The deferred pass can outlive the document it was scheduled for
+            return
         wanted = set()
         for sel in FreeCADGui.Selection.getSelectionEx(doc, 0):
             obj_name = sel.Object.Name
@@ -1708,15 +1724,14 @@ class _clipWidget(QtGui.QWidget):
     One row of the clipping list, driving a FemGui clip plane handle.
 
     The 3D side -- dragger, plane indicator and view state updates -- lives in
-    the handle, so this widget only mirrors button states. Dropping the handle
-    removes the plane from the view, which is why shutdown() must run before
-    the row goes away.
+    the handle, which belongs to the analysis rather than to this row. So the
+    row can come and go with the panel while the plane keeps cutting, and a
+    plane added from the toolbar grows a row here without being asked to.
     """
 
-    def __init__(self, handle, analysis=None, on_removed=None, parent=None):
+    def __init__(self, handle, analysis=None, parent=None):
         super().__init__(parent)
         self.handle = handle
-        self.on_removed = on_removed
 
         self.widget = FreeCADGui.PySideUic.loadUi(_ui_path("ViewClipWidget.ui"))
         self.widget.ClipButton.setChecked(handle.isActive())
@@ -1805,11 +1820,15 @@ class _clipWidget(QtGui.QWidget):
         self.separator.setVisible(bool(on))
 
     def shutdown(self):
-        """Drop the clip plane and its 3D widget, then retire the row."""
+        """
+        Retire the row. The plane stays.
+
+        Closing the panel, or leaving the workbench, is not a request to stop
+        clipping: the analysis is expected to come back cut the way it was
+        left. Dropping a plane is delete_clicked().
+        """
         self.editor.shutdown()
-        if self.handle:
-            self.handle.remove()
-            self.handle = None
+        self.handle = None
         self.setParent(None)
         self.deleteLater()
 
@@ -1828,12 +1847,9 @@ class _clipWidget(QtGui.QWidget):
         self.edit_menu.popup(button.mapToGlobal(QtCore.QPoint(0, button.height())))
 
     def delete_clicked(self, value):
-        on_removed = self.on_removed
-        self.shutdown()
-        # After the row has left the layout, so that the list it is counted out
-        # of is the one that remains.
-        if on_removed:
-            on_removed()
+        """Drop the plane, which is what takes this row and the dragger with it."""
+        if self.handle:
+            self.handle.remove()
 
     def clip_changed(self, value):
         if self.handle:
@@ -1899,7 +1915,6 @@ class ViewSettings(QtGui.QWidget):
         self._has_mesh = False
         self._vs_callback = None
         self._updating = False
-        self._clip_key = None
         self._edit_obj = None
         self._edit_stage = None
         self._counts = None
@@ -1921,7 +1936,6 @@ class ViewSettings(QtGui.QWidget):
 
     def shutdown(self):
         self.clear_clipping_planes()
-        self._clip_key = None
         self._disconnect_view_state()
         FemGui.removeActiveAnalysisObserver(self)
         FreeCADGui.removeDocumentObserver(self._gui_observer)
@@ -1941,19 +1955,14 @@ class ViewSettings(QtGui.QWidget):
             return
 
         def _on_changed():
+            # A plane may have been added or dropped from anywhere: the
+            # toolbar, another row, a macro. The list of rows is worked out
+            # from the planes rather than tracked alongside them.
+            self.setup_clipping_planes()
             self.setup_widgets()
 
         self._vs_callback = _on_changed
         self.view_state.connectChanged(self._vs_callback)
-
-    def _analysis_key(self):
-        """Identity of the current analysis that survives a dead wrapper."""
-        if not self.active_analysis:
-            return None
-        try:
-            return (self.active_analysis.Document.Name, self.active_analysis.Name)
-        except (AttributeError, ReferenceError, RuntimeError):
-            return None
 
     def setup_analysis(self):
         self.geom_obj = None
@@ -1989,15 +1998,12 @@ class ViewSettings(QtGui.QWidget):
         self._connect_view_state()
         self._counts = self._read_element_counts()
 
-        # setup_analysis() also runs on every geometry or mesh change, where the
-        # clip planes have to stay put and only re-fit their indicator.
-        key = self._analysis_key()
-        if key != self._clip_key:
-            self._clip_key = key
-            self.setup_clipping_planes()
-        else:
-            for widget in self.clip_widgets():
-                widget.refresh()
+        # setup_analysis() also runs on every geometry or mesh change, where
+        # the planes stay put and only their indicators need re-fitting to a
+        # model that may have changed size.
+        self.setup_clipping_planes()
+        for widget in self.clip_widgets():
+            widget.refresh()
 
         self.setup_widgets()
 
@@ -2271,11 +2277,12 @@ class ViewSettings(QtGui.QWidget):
 
     def clear_clipping_planes(self):
         """
-        Retire all clip rows.
+        Retire all clip rows, leaving the planes themselves alone.
 
-        Rows outlive nothing: their handles reference the analysis they were
-        made for, so switching analysis or closing the document has to drop
-        them here instead of leaving stale rows behind.
+        A row describes the plane of one analysis, so switching analysis or
+        closing the document has to drop it instead of leaving a stale one
+        behind. The planes stay where they are, ready for the rows that the
+        next analysis, or the next opening of this panel, builds for them.
         """
         layout = self.widget.ClippingGroup.layout()
         for widget in self.clip_widgets():
@@ -2299,38 +2306,65 @@ class ViewSettings(QtGui.QWidget):
             widget.set_separated(position > 0)
 
     def setup_clipping_planes(self):
-        """Rebuild the clip rows for the current analysis, planes included."""
-        self.clear_clipping_planes()
-        if not self.active_analysis or not self.view_state:
-            return
-        # Planes restored from a saved document are already in the view state
-        # and only need their handle back.
-        for name in sorted(self.view_state.getClipPlanes().keys()):
-            self._add_clip_widget(name)
-        self.setup_clip_list()
+        """
+        Give every plane of the analysis a row, and no other.
 
-    def _add_clip_widget(self, name=None):
-        try:
-            handle = (
-                FemGui.createClipPlane(self.active_analysis, name)
-                if name
-                else FemGui.createClipPlane(self.active_analysis)
-            )
-        except Exception as exc:
-            FreeCAD.Console.PrintError(f"FEM view panel: cannot create clipping plane: {exc}\n")
-            return None
-        if handle is None:
-            return None
-
+        The planes are the truth here, not the rows: one may have been added
+        from the toolbar, dropped by another row, or restored from a saved
+        document, and all three arrive as the same list being different from
+        the one on screen. Rows that are still wanted are kept rather than
+        rebuilt, so a plane being dragged does not lose its open editor.
+        """
+        planes = (
+            sorted(self.view_state.getClipPlanes(), key=_clip_sort_key) if self.view_state else []
+        )
         layout = self.widget.ClippingGroup.layout()
-        widget = _clipWidget(handle, self.active_analysis, on_removed=self.setup_clip_list)
-        layout.insertWidget(layout.count() - 1, widget)
+        widgets = self.clip_widgets()
+
+        # This runs on every change of the view state, and almost none of them
+        # are about clipping, so the list that already matches is left alone
+        # rather than taken apart and put back together the same.
+        if [widget.name for widget in widgets] == planes:
+            self.setup_clip_list()
+            return
+
+        rows = {widget.name: widget for widget in widgets}
+
+        # Out of the layout first, all of them, so that re-inserting the ones
+        # that stay cannot leave a row listed twice.
+        for name, widget in rows.items():
+            layout.removeWidget(widget)
+            if name not in planes:
+                widget.shutdown()
+
+        # Rows go under the hint and above the add button, both of which the
+        # group box holds whether there are planes or not.
+        base = layout.indexOf(self.widget.ClipHint) + 1
+        for position, name in enumerate(planes):
+            widget = rows.get(name) or self._build_clip_widget(name)
+            if widget is None:
+                continue
+            layout.insertWidget(base + position, widget)
+
         self.setup_clip_list()
-        return widget
+
+    def _build_clip_widget(self, name):
+        handle = FemGui.getClipPlane(self.active_analysis, name)
+        return _clipWidget(handle, self.active_analysis) if handle else None
 
     def add_clipping_plane(self, value):
-        if self.active_analysis and self.view_state:
-            self._add_clip_widget()
+        """
+        Add a plane, which grows its own row through the view state.
+
+        The same call the toolbar command makes: nothing here builds a row by
+        hand, so the two ways of adding a plane cannot drift apart.
+        """
+        if not self.active_analysis or not self.view_state:
+            return
+        try:
+            FemGui.addClipPlane(self.active_analysis)
+        except Exception as exc:
+            FreeCAD.Console.PrintError(f"FEM view panel: cannot add clipping plane: {exc}\n")
 
     def viewmode_changed(self, value):
         if self._updating or not self.view_state:

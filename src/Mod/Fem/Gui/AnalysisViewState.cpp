@@ -298,6 +298,27 @@ void AnalysisViewState::removeClipPlane(const std::string& name)
     }
 }
 
+void AnalysisViewState::clearClipPlanes()
+{
+    if (m_clipPlanes.empty()) {
+        return;
+    }
+    m_clipPlanes.clear();
+    persist();
+    notifyChanged();
+}
+
+std::map<std::string, ClippingPlane> AnalysisViewState::activeClipPlanes() const
+{
+    std::map<std::string, ClippingPlane> active;
+    for (const auto& entry : m_clipPlanes) {
+        if (entry.second.Active) {
+            active.emplace(entry);
+        }
+    }
+    return active;
+}
+
 void AnalysisViewState::setUnderAchievedElements(std::map<std::string, int> elements)
 {
     m_underAchieved = std::move(elements);
@@ -533,7 +554,12 @@ void AnalysisViewState::saveToViewProvider(ViewProviderFemAnalysis* vp) const
     std::vector<std::string> data;
     names.reserve(m_clipPlanes.size());
     data.reserve(m_clipPlanes.size());
+    // Only the planes that cut: a switched off one is a runtime convenience,
+    // and saving it would reopen the document already clipping nothing.
     for (const auto& entry : m_clipPlanes) {
+        if (!entry.second.Active) {
+            continue;
+        }
         names.push_back(entry.first);
         data.push_back(encodeClipPlane(entry.second));
     }

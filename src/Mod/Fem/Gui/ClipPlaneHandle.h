@@ -80,17 +80,34 @@ public:
     ClipPlaneHandle& operator=(const ClipPlaneHandle&) = delete;
 
     /**
-     * Build a handle for @a analysis.
+     * Build the 3D handle for the plane @a name of @a analysis.
      *
-     * @param name Clip plane name. An empty name generates an unused one and
-     *             starts clipping at the model center; an existing name adopts
-     *             that plane, which is how planes restored from a saved
-     *             document get their handle back.
+     * Adopts the plane of that name, so the handle shows where the plane
+     * already is. Creating a plane is addPlane(): a handle never writes one,
+     * which is what keeps the analysis view provider free to build handles
+     * while it is reacting to a change of the very same view state.
+     *
      * @return nullptr if the analysis has no view provider to attach to.
      */
     static std::unique_ptr<ClipPlaneHandle> create(
         Fem::FemAnalysis* analysis,
-        const std::string& name = {}
+        const std::string& name
+    );
+
+    /**
+     * Add a plane cutting the top off the model, and return its name.
+     *
+     * The plane goes straight into the view state, which is what gives it a
+     * handle, a row in the view panel and a cut through the geometry.
+     */
+    static std::string addPlane(Fem::FemAnalysis* analysis);
+
+    /** Add a plane at a chosen place, e.g. on a face the user picked. */
+    static std::string addPlane(
+        Fem::FemAnalysis* analysis,
+        const Base::Vector3d& origin,
+        const Base::Vector3d& normal,
+        const std::string& scope = {}
     );
 
     /** Clip plane name unused by both the view state and the live handles. */
@@ -121,7 +138,7 @@ public:
         return m_name;
     }
 
-    /** Whether the plane is applied to the view state. */
+    /** Whether the plane is cutting; a switched off one keeps its handle. */
     bool isActive() const
     {
         return m_active;
@@ -157,15 +174,22 @@ public:
      */
     void refresh();
 
-    /** Drop the plane and detach from the scene; later calls are no-ops. */
-    void remove();
+    /**
+     * Take the dragger and the indicator out of the scene; the plane stays.
+     *
+     * Dropping a handle is not dropping a plane: the panel closes, the
+     * workbench is left, and the analysis is expected to come back clipped
+     * the way it was. Deleting a plane is removeClipPlane() on the view
+     * state, which retires the handle from the outside.
+     */
+    void detach();
 
 private:
     ClipPlaneHandle(Fem::FemAnalysis* analysis, std::string name, SoSeparator* parent);
 
     void buildSceneGraph();
     void hideArrowLabel();
-    void initializePlane();
+    void adoptPlane();
 
     Fem::FemAnalysis* analysis() const;
     AnalysisViewState* viewState() const;
@@ -187,6 +211,8 @@ private:
     bool m_active {false};
     bool m_widgetVisible {true};
     bool m_removed {false};
+    /// Set while our own write to the view state is being echoed back to us
+    bool m_applying {false};
     /// Half size of the plane indicator, the base of the automatic step
     double m_indicatorHalfSize {0.0};
 

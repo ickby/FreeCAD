@@ -50,12 +50,15 @@
 #include <Gui/BitmapFactory.h>
 #include <Gui/Selection/Selection.h>
 #include <Gui/Selection/SoFCUnifiedSelection.h>
+#include <Gui/Utilities.h>
 #include <Gui/Window.h>
 #include <Mod/Fem/App/FemAnalysis.h>
 #include <Mod/Fem/App/FemGeometry.h>
 #include <Mod/Part/Gui/SoBrepEdgeSet.h>
 #include <Mod/Part/Gui/SoBrepFaceSet.h>
 #include <Mod/Part/Gui/SoBrepPointSet.h>
+#include <Mod/Part/Gui/ViewProviderExt.h>
+#include <Mod/Part/Gui/ViewProviderPreviewExtension.h>
 
 #include <IVtk_Types.hxx>
 #include <IVtkVTK_ShapeData.hxx>
@@ -293,6 +296,13 @@ ViewProviderFemGeometry::ViewProviderFemGeometry()
     m_highlightoverlaypoints = new SoIndexedPointSet();
     m_highlightoverlaypoints->ref();
 
+    // Unpickable translucent cutting tool; empty until setToolPreview fills it.
+    m_toolPreview = new PartGui::SoPreviewShape();
+    m_toolPreview->ref();
+    const Base::Color toolColor = defaultToolPreviewColor();
+    m_toolPreview->color.setValue(toolColor.r, toolColor.g, toolColor.b);
+    m_toolPreview->transparency.setValue(0.55f);
+
     float transparency = 0.0f;
     ParameterGrp::handle hGrp = Gui::WindowParameter::getDefaultParameter()->GetGroup("View");
     SbColor highlightColor(1.0f, 0.6f, 0.0f);
@@ -344,6 +354,7 @@ ViewProviderFemGeometry::~ViewProviderFemGeometry()
     m_highlightoverlaystyle->unref();
     m_highlightoverlaylines->unref();
     m_highlightoverlaypoints->unref();
+    m_toolPreview->unref();
 }
 
 AnalysisViewState* ViewProviderFemGeometry::viewState() const
@@ -704,6 +715,7 @@ void ViewProviderFemGeometry::attach(App::DocumentObject* pcObj)
     m_highlightoverlay->addChild(m_highlightoverlaypointmaterial);
     m_highlightoverlay->addChild(m_highlightoverlaypoints);
     m_separator->addChild(m_highlightoverlay);
+    m_separator->addChild(m_toolPreview);
 
     addDisplayMaskMode(m_separator, "Default");
     addDisplayMaskMode(m_hidden, "Hidden");
@@ -794,6 +806,46 @@ Base::Color ViewProviderFemGeometry::defaultElementHighlightColor()
     // Apart from the green of a selection and the orange of a hover, so a mark
     // is never mistaken for either.
     return Base::Color(0.85f, 0.15f, 0.85f);
+}
+
+Base::Color ViewProviderFemGeometry::defaultToolPreviewColor()
+{
+    // Matches the partition panel's MARK_TOOL colour.
+    return Base::Color(0.15f, 0.4f, 1.0f);
+}
+
+void ViewProviderFemGeometry::setToolPreview(
+    const Part::TopoShape& shape,
+    const Base::Color& color,
+    float transparency
+)
+{
+    if (!m_toolPreview) {
+        return;
+    }
+    m_toolPreview->color.setValue(color.r, color.g, color.b);
+    m_toolPreview->transparency.setValue(std::clamp(transparency, 0.0f, 1.0f));
+    try {
+        PartGui::ViewProviderPartExt::setupCoinGeometry(
+            shape.getShape(),
+            m_toolPreview,
+            0.2,
+            0.35
+        );
+        m_toolPreview->transform.setValue(Base::convertTo<SbMatrix>(shape.getTransform()));
+    }
+    catch (const Standard_Failure&) {
+        clearToolPreview();
+    }
+}
+
+void ViewProviderFemGeometry::clearToolPreview()
+{
+    if (!m_toolPreview) {
+        return;
+    }
+    PartGui::ViewProviderPartExt::setupCoinGeometry(TopoDS_Shape(), m_toolPreview, 0.2, 0.35);
+    m_toolPreview->transform.setValue(SbMatrix::identity());
 }
 
 const Base::Color* ViewProviderFemGeometry::elementHighlightColor(const std::string& element) const

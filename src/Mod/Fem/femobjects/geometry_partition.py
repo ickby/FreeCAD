@@ -25,6 +25,8 @@ __title__ = "FreeCAD FEM geometry partition"
 __author__ = "Stefan Tröger"
 __url__ = "https://www.freecad.org"
 
+import collections
+
 import FreeCAD
 import Part
 
@@ -48,6 +50,16 @@ PARTITION_METHODS = (
     METHOD_EDGE_PARAM,
     METHOD_SHORTEST_PATH,
 )
+
+# How a cutting tool is shown while a partition step is edited. Mode is kept
+# separate from the Part shape so later methods can draw differently without
+# changing the panel wiring.
+PartitionToolPreview = collections.namedtuple("PartitionToolPreview", "mode shape")
+
+TOOL_MODE_PLANE = "plane"
+TOOL_MODE_EXTENDED_FACE = "extended_face"
+TOOL_MODE_PATH = "path"
+TOOL_MODE_EDGE_PLANE = "edge_plane"
 
 
 def _sub_shape_type(subname):
@@ -576,6 +588,67 @@ def _unconfigured(obj, method):
     return False
 
 
+def _tool_shape(obj, base_obj, base_shape, method, elements):
+    """
+    The cutting tool for method, or raise if the configuration is wrong.
+
+    Shared by execute() and the edit preview so what the user sees is what the
+    step will cut with.
+    """
+    if method == METHOD_EDGE_PARAM:
+        element_shapes = _resolve_elements(base_obj, elements)
+        if not element_shapes:
+            element_shapes = _default_targets(base_shape)
+        edges = [s for s in element_shapes if s.ShapeType == "Edge"]
+        if len(edges) != len(element_shapes):
+            raise ValueError("Edge parameter needs edge targets only")
+        if not edges:
+            raise ValueError("Edge parameter needs at least one edge target")
+        tools = [_edge_parameter_tool(edge, obj.Parameter) for edge in edges]
+        if len(tools) == 1:
+            return TOOL_MODE_EDGE_PLANE, tools[0]
+        return TOOL_MODE_EDGE_PLANE, Part.makeCompound(tools)
+
+    bbox = base_shape.BoundBox
+    if method == METHOD_PLANE_3P:
+        return TOOL_MODE_PLANE, _tool_plane_from_points(base_obj, obj.Points, bbox)
+    if method == METHOD_PLANE_REF:
+        return TOOL_MODE_PLANE, _tool_plane_from_reference(obj.Tool, bbox)
+    if method == METHOD_EXTEND_FACE:
+        return TOOL_MODE_EXTENDED_FACE, _extended_face_tool(base_obj, obj.Tool, bbox)
+    if method == METHOD_SHORTEST_PATH:
+        if target_count(elements) != 1:
+            raise ValueError("Shortest path needs exactly one face target")
+        return TOOL_MODE_PATH, _shortest_path_tool(base_obj, obj.Points, elements[0])
+    raise ValueError(f"Unknown partition method '{method}'")
+
+
+def build_tool_preview(obj):
+    """
+    Cutting tool to show while the partition panel is open, or None.
+
+    Returns None when the method is still unfinished or the picks are invalid,
+    so the panel can drop the overlay without reporting an error on every
+    keystroke of an incomplete selection.
+    """
+    base_obj = getattr(obj, "Base", None)
+    if base_obj is None or base_obj.Shape.isNull():
+        return None
+    method = obj.Method
+    elements = obj.Elements
+    if not method_available(method, elements):
+        return None
+    if _unconfigured(obj, method):
+        return None
+    try:
+        mode, shape = _tool_shape(obj, base_obj, base_obj.Shape, method, elements)
+    except ValueError:
+        return None
+    if shape is None or shape.isNull():
+        return None
+    return PartitionToolPreview(mode, shape)
+
+
 def _checked(base_shape, result):
     """
     Guard the one invariant every partition has: it only adds cuts.
@@ -672,19 +745,7 @@ class GeometryPartition(GeometryBase):
             obj.Shape = _checked(base_shape, _split_edges(base_shape, edges, obj.Parameter))
             return
 
-        bbox = base_shape.BoundBox
-        if method == METHOD_PLANE_3P:
-            tool_shape = _tool_plane_from_points(base_obj, obj.Points, bbox)
-        elif method == METHOD_PLANE_REF:
-            tool_shape = _tool_plane_from_reference(obj.Tool, bbox)
-        elif method == METHOD_EXTEND_FACE:
-            tool_shape = _extended_face_tool(base_obj, obj.Tool, bbox)
-        elif method == METHOD_SHORTEST_PATH:
-            if target_count(elements) != 1:
-                raise ValueError("Shortest path needs exactly one face target")
-            tool_shape = _shortest_path_tool(base_obj, obj.Points, elements[0])
-        else:
-            raise ValueError(f"Unknown partition method '{method}'")
+        _, tool_shape = _tool_shape(obj, base_obj, base_shape, method, elements)
 
         solids = [shape for shape in element_shapes if shape.ShapeType == "Solid"]
         sub_elements = [shape for shape in element_shapes if shape.ShapeType != "Solid"]

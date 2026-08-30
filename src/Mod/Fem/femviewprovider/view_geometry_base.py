@@ -97,6 +97,29 @@ def clear_input_marks(obj, *roles):
         base.ViewObject.clearElementHighlight(role)
 
 
+def set_tool_preview(obj, preview):
+    """
+    Show the cutting tool of a chain step on the input shape it edits.
+
+    preview is a PartitionToolPreview, or None to clear. Mode is kept on the
+    Python side for later display variants; the VP tessellates the shape only.
+    """
+    base = obj.Base
+    if base is None or base.ViewObject is None:
+        return
+    if preview is None:
+        base.ViewObject.clearToolPreview()
+        return
+    base.ViewObject.setToolPreview(preview.shape)
+
+
+def clear_tool_preview(obj):
+    """Drop the cutting-tool overlay from the input shape of a chain step."""
+    base = obj.Base
+    if base is not None and base.ViewObject is not None:
+        base.ViewObject.clearToolPreview()
+
+
 class VPGeometryGroup(view_base_femobject.VPBaseFemObject):
     """
     View provider for GeometryGroup. Adds the geo-feature-group extension
@@ -196,6 +219,7 @@ class VPGeometryPartition(VPGeometryStep):
 
     def unsetEdit(self, vobj, mode=0):
         set_input_preview(vobj.Object, False)
+        clear_tool_preview(vobj.Object)
         return super().unsetEdit(vobj, mode)
 
     def dumps(self):

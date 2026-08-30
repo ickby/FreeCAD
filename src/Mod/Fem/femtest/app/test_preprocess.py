@@ -466,6 +466,49 @@ class TestGeometryPartition(unittest.TestCase):
             self.assertGreater(diagonal, bbox.DiagonalLength)
             self.assertLess(diagonal, bbox.DiagonalLength * 100)
 
+    def test_build_tool_preview_returns_none_while_unconfigured(self):
+        from femobjects import geometry_partition as gp
+
+        _, _, part = self._chain(Part.makeBox(20, 10, 10))
+        part.Method = gp.METHOD_PLANE_REF
+        part.Tool = None
+        self.assertIsNone(gp.build_tool_preview(part))
+
+    def test_build_tool_preview_for_plane_by_reference(self):
+        from femobjects import geometry_partition as gp
+
+        _, imp, part = self._chain(Part.makeBox(20, 10, 10))
+        part.Method = gp.METHOD_PLANE_REF
+        part.Tool = (self._datum(FreeCAD.Vector(10, 0, 0), FreeCAD.Vector(1, 0, 0)), "")
+        preview = gp.build_tool_preview(part)
+        self.assertIsNotNone(preview)
+        self.assertEqual(preview.mode, gp.TOOL_MODE_PLANE)
+        self.assertFalse(preview.shape.isNull())
+        self.assertGreater(preview.shape.BoundBox.DiagonalLength, imp.Shape.BoundBox.DiagonalLength)
+
+    def test_build_tool_preview_for_plane_by_three_points(self):
+        from femobjects import geometry_partition as gp
+
+        _, imp, part = self._chain(Part.makeBox(20, 10, 10))
+        vertexes = _sub_names(imp.Shape, "Vertex")
+        picks = [name for name, v in vertexes.items() if abs(v.Point.x) < 1e-6][:2]
+        picks += [
+            name
+            for name, v in vertexes.items()
+            if abs(v.Point.x - 20) < 1e-6 and abs(v.Point.y - 10) < 1e-6
+        ][:1]
+        self.assertEqual(len(picks), 3)
+
+        part.Method = gp.METHOD_PLANE_3P
+        part.Points = [(imp, ("Vertex1", "Vertex2"))]
+        self.assertIsNone(gp.build_tool_preview(part), "two picks is unfinished")
+
+        part.Points = [(imp, tuple(picks))]
+        preview = gp.build_tool_preview(part)
+        self.assertIsNotNone(preview)
+        self.assertEqual(preview.mode, gp.TOOL_MODE_PLANE)
+        self.assertFalse(preview.shape.isNull())
+
     # -- plane by reference -------------------------------------------------
 
     def test_plane_reference_splits_a_solid(self):

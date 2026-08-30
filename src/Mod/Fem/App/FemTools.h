@@ -31,6 +31,8 @@
 #include <gp_XYZ.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include <string>
+#include <utility>
 #include <vector>
 
 class TopoDS_Edge;
@@ -142,6 +144,17 @@ public:
      left out: it is not part of the analysis, so nothing may name it.
     */
     static std::vector<std::string> importedToplevelElements(const Fem::FemAnalysis* analysis);
+    /*!
+     The same elements as importedToplevelElements(), each under the component
+     it belongs to.
+
+     Both are dotted paths read from the analysis: "Import1.Component2" names
+     the component, "Import1.Face7" an element of it. Colouring per component
+     needs the grouping that the flat list throws away.
+    */
+    static std::vector<std::pair<std::string, std::vector<std::string>>> importedComponents(
+        const Fem::FemAnalysis* analysis
+    );
     /*!
      Whether *member* is switched off for the instance chain leading to it.
 

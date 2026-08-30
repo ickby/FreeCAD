@@ -84,9 +84,9 @@ class TestPaletteGui(unittest.TestCase):
         self.assertFalse(hasattr(self.group.ViewObject, "Colors"))
 
         state = FemGui.getAnalysisViewState(self.analysis)
-        state.setColorMode("Toplevel")
+        state.setColorMode("Component")
         cats = sorted(state.getCategories(), key=lambda cat: cat["key"])
-        self.assertEqual([cat["key"] for cat in cats], ["Solid1", "Solid2"])
+        self.assertEqual([cat["key"] for cat in cats], ["Component1", "Component2"])
         first = _rgb(cats[0]["color"])
         second = _rgb(cats[1]["color"])
         self.assertNotEqual(first, second)
@@ -95,12 +95,12 @@ class TestPaletteGui(unittest.TestCase):
 
     def test_the_two_solids_are_drawn_in_the_first_two_palette_colours(self):
         """
-        Toplevel colouring hands out the palette in the order of sorted names,
-        so Solid1 is red and Solid2 is deep cyan. That is what a later
+        Component colouring hands out the palette in component order, so the
+        first box is red and the second deep cyan. That is what a later
         setting would recolour by replacing the palette.
         """
         state = FemGui.getAnalysisViewState(self.analysis)
-        state.setColorMode("Toplevel")
+        state.setColorMode("Component")
         self.group.ViewObject.Visibility = True
         FreeCADGui.updateGui()
 
@@ -109,13 +109,41 @@ class TestPaletteGui(unittest.TestCase):
         self.assertIn((0.949, 0.459, 0.442), drawn)
         self.assertIn((0.090, 0.515, 0.649), drawn)
 
+    def test_a_component_of_many_faces_is_drawn_in_one_colour(self):
+        """
+        What separates colouring by component from colouring by element: a
+        shell is one component made of as many toplevel faces as it has faces,
+        and the point of the mode is that the user sees the one part it is.
+        """
+        self.box.Shape = Part.makeShell(Part.makeBox(10, 10, 10).Faces)
+        self.document.recompute()
+        state = FemGui.getAnalysisViewState(self.analysis)
+        self.group.ViewObject.Visibility = True
+
+        state.setColorMode("Subelement")
+        FreeCADGui.updateGui()
+        per_element = {_rgb(c) for c in node_colors(face_material(self.group.ViewObject))}
+
+        state.setColorMode("Component")
+        FreeCADGui.updateGui()
+        cats = state.getCategories()
+        self.assertEqual([cat["key"] for cat in cats], ["Component1"])
+        per_component = {_rgb(c) for c in node_colors(face_material(self.group.ViewObject))}
+
+        self.assertEqual(per_component, {_rgb(cats[0]["color"])})
+        self.assertGreater(
+            len(per_element),
+            1,
+            "colouring by element still tells the faces of the shell apart",
+        )
+
     def test_colours_are_not_stored_in_the_document(self):
         """
         A palette change later has to recolour existing documents, so nothing
         of the palette may be written into the file.
         """
         state = FemGui.getAnalysisViewState(self.analysis)
-        state.setColorMode("Toplevel")
+        state.setColorMode("Component")
         self.document.recompute()
 
         with tempfile.TemporaryDirectory() as tmp:

@@ -2125,19 +2125,19 @@ class TestAnalysisImport(unittest.TestCase):
         self.document.recompute()
 
         state = FemGui.getAnalysisViewState(table)
-        state.setColorMode("Toplevel")
+        state.setColorMode("Component")
         by_key = {
             c["key"]: tuple(round(v, 3) for v in c["color"][:3]) for c in state.getCategories()
         }
-        self.assertIn("Leg1.Solid1", by_key)
-        self.assertIn("Leg1.Solid2", by_key)
+        self.assertIn("Leg1.Component1", by_key)
+        self.assertIn("Leg1.Component2", by_key)
 
         colours = self._geometry_face_colours(imp.ViewObject)
         self.assertTrue(colours, "the instance draws its source geometry")
         self.assertEqual(
             set(colours),
-            {by_key["Leg1.Solid1"], by_key["Leg1.Solid2"]},
-            "each solid of the instance wears its own category colour",
+            {by_key["Leg1.Component1"], by_key["Leg1.Component2"]},
+            "each solid of the instance wears the colour of the component it is",
         )
 
     def test_imported_geometry_follows_a_colour_mode_switch(self):
@@ -2158,11 +2158,11 @@ class TestAnalysisImport(unittest.TestCase):
         self.document.recompute()
 
         state = FemGui.getAnalysisViewState(table)
-        state.setColorMode("Toplevel")
+        state.setColorMode("Component")
         self.assertEqual(
             len(set(self._geometry_face_colours(imp.ViewObject))),
             2,
-            "one colour per solid while the colour follows the elements",
+            "one colour per component while the colour follows the geometry",
         )
 
         # Both solids share a material, so the instance turns into one colour
@@ -2782,11 +2782,11 @@ class TestAnalysisImport(unittest.TestCase):
 
         state = FemGui.getAnalysisViewState(table)
         state.setActiveStage("Mesh")
-        state.setColorMode("Toplevel")
+        state.setColorMode("Component")
 
         keys = [c["key"] for c in state.getCategories()]
-        self.assertIn("Leg1.Solid1", keys)
-        self.assertIn("Leg2.Solid1", keys)
+        self.assertIn("Leg1.Component1", keys)
+        self.assertIn("Leg2.Component1", keys)
         self.assertEqual(
             len(keys),
             len(set(keys)),
@@ -2803,10 +2803,10 @@ class TestAnalysisImport(unittest.TestCase):
         )
         self.assertEqual(
             drawn_first,
-            {by_key["Leg1.Solid1"], by_key["Leg1.Solid2"]},
-            "a solid of an instance is coloured by the category of its path",
+            {by_key["Leg1.Component1"], by_key["Leg1.Component2"]},
+            "a component of an instance is coloured by the category of its path",
         )
-        self.assertEqual(drawn_second, {by_key["Leg2.Solid1"], by_key["Leg2.Solid2"]})
+        self.assertEqual(drawn_second, {by_key["Leg2.Component1"], by_key["Leg2.Component2"]})
 
     def test_hiding_an_imported_element_reaches_the_view(self):
         """Switching a solid of an instance off has to take it off the screen."""

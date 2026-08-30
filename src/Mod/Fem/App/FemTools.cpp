@@ -481,11 +481,11 @@ std::vector<Fem::FemAnalysisImport*> Fem::Tools::analysisImports(const Fem::FemA
 namespace
 {
 
-void collectImportedToplevels(
+void collectImportedComponents(
     const Fem::FemAnalysis* analysis,
     const std::string& prefix,
     std::vector<const Fem::FemAnalysisImport*>& chain,
-    std::vector<std::string>& out
+    std::vector<std::pair<std::string, std::vector<std::string>>>& out
 )
 {
     for (auto* imp : Fem::Tools::analysisImports(analysis)) {
@@ -505,15 +505,20 @@ void collectImportedToplevels(
                 if (suppressed.contains(static_cast<long>(componentId))) {
                     continue;
                 }
+                std::vector<std::string> elements;
                 for (const auto& element : geom->getToplevelElements(component)) {
-                    out.push_back(path + "." + element);
+                    elements.push_back(path + "." + element);
                 }
+                out.emplace_back(
+                    path + ".Component" + std::to_string(componentId),
+                    std::move(elements)
+                );
             }
         }
 
         if (auto* src = Base::freecad_cast<Fem::FemAnalysis*>(imp->Analysis.getValue())) {
             chain.push_back(imp);
-            collectImportedToplevels(src, path, chain, out);
+            collectImportedComponents(src, path, chain, out);
             chain.pop_back();
         }
     }
@@ -521,11 +526,22 @@ void collectImportedToplevels(
 
 }  // namespace
 
+std::vector<std::pair<std::string, std::vector<std::string>>> Fem::Tools::importedComponents(
+    const Fem::FemAnalysis* analysis
+)
+{
+    std::vector<std::pair<std::string, std::vector<std::string>>> out;
+    std::vector<const Fem::FemAnalysisImport*> chain;
+    collectImportedComponents(analysis, {}, chain, out);
+    return out;
+}
+
 std::vector<std::string> Fem::Tools::importedToplevelElements(const Fem::FemAnalysis* analysis)
 {
     std::vector<std::string> out;
-    std::vector<const Fem::FemAnalysisImport*> chain;
-    collectImportedToplevels(analysis, {}, chain, out);
+    for (const auto& [component, elements] : importedComponents(analysis)) {
+        out.insert(out.end(), elements.begin(), elements.end());
+    }
     return out;
 }
 

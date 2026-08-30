@@ -323,8 +323,8 @@ std::unique_ptr<Classification> Classification::create(
     FEM_PERF_SCOPE("classification.build");
 
     switch (mode) {
-        case ColorMode::Toplevel:
-            return std::make_unique<ToplevelClassification>(
+        case ColorMode::Component:
+            return std::make_unique<ComponentClassification>(
                 analysis,
                 geometry,
                 meshGrid,
@@ -454,10 +454,10 @@ int SubelementClassification::categoryOfCell(vtkIdType cell) const
 }
 
 // ---------------------------------------------------------------------------
-// ToplevelClassification
+// ComponentClassification
 // ---------------------------------------------------------------------------
 
-ToplevelClassification::ToplevelClassification(
+ComponentClassification::ComponentClassification(
     Fem::FemAnalysis* analysis,
     Fem::FemGeometry* geometry,
     vtkUnstructuredGrid* meshGrid,
@@ -468,7 +468,7 @@ ToplevelClassification::ToplevelClassification(
     build(analysis, geometry, meshGrid, gridSource);
 }
 
-void ToplevelClassification::build(
+void ComponentClassification::build(
     Fem::FemAnalysis* analysis,
     Fem::FemGeometry* geometry,
     vtkUnstructuredGrid* meshGrid,
@@ -477,36 +477,28 @@ void ToplevelClassification::build(
 {
     m_categories.clear();
     m_keyToIndex.clear();
+    m_elementCategory.clear();
     m_cellCategory.clear();
 
-    std::set<std::string> toplevels;
+    auto addComponent = [this](const std::string& key, const std::vector<std::string>& elements) {
+        const int index = ensureCategory(m_categories, m_keyToIndex, key, key);
+        for (const auto& element : elements) {
+            m_elementCategory[element] = index;
+        }
+    };
+
+    // In component order rather than sorted by name, which is also the order
+    // the panel tree lists them in: Component10 sorts before Component2, and
+    // the colours would then run in an order nothing else in the UI follows.
     if (geometry) {
         const auto n = geometry->getComponents().size();
         for (Fem::componentIdType i = 0; i < n; ++i) {
-            for (const auto& name : geometry->getToplevelElements(i)) {
-                toplevels.insert(name);
-            }
+            addComponent("Component" + std::to_string(i + 1), geometry->getToplevelElements(i));
         }
     }
 
-    for (const auto& path : Fem::Tools::importedToplevelElements(analysis)) {
-        toplevels.insert(path);
-    }
-
-    if (meshGrid) {
-        const vtkIdType n = meshGrid->GetNumberOfCells();
-        for (vtkIdType i = 0; i < n; ++i) {
-            const auto keys = cellKeyCandidates(meshGrid, i, geometry, gridSource);
-            if (!keys.empty()) {
-                toplevels.insert(keys.front());
-            }
-        }
-    }
-
-    std::vector<std::string> sorted(toplevels.begin(), toplevels.end());
-    std::sort(sorted.begin(), sorted.end());
-    for (const auto& key : sorted) {
-        ensureCategory(m_categories, m_keyToIndex, key, key);
+    for (const auto& [component, elements] : Fem::Tools::importedComponents(analysis)) {
+        addComponent(component, elements);
     }
 
     if (meshGrid) {
@@ -514,8 +506,8 @@ void ToplevelClassification::build(
         m_cellCategory.assign(static_cast<size_t>(n), 0);
         for (vtkIdType i = 0; i < n; ++i) {
             for (const auto& key : cellKeyCandidates(meshGrid, i, geometry, gridSource)) {
-                auto it = m_keyToIndex.find(key);
-                if (it != m_keyToIndex.end()) {
+                auto it = m_elementCategory.find(key);
+                if (it != m_elementCategory.end()) {
                     m_cellCategory[static_cast<size_t>(i)] = it->second;
                     break;
                 }
@@ -524,29 +516,34 @@ void ToplevelClassification::build(
     }
 }
 
-std::vector<Category> ToplevelClassification::categories() const
+std::vector<Category> ComponentClassification::categories() const
 {
     return m_categories;
 }
 
-int ToplevelClassification::categoryOfElement(const std::string& element) const
+int ComponentClassification::categoryOfElement(const std::string& element) const
 {
-    auto it = m_keyToIndex.find(element);
-    if (it != m_keyToIndex.end()) {
+    // A component is asked about by name where the panel tree colours its row
+    auto known = m_keyToIndex.find(element);
+    if (known != m_keyToIndex.end()) {
+        return known->second;
+    }
+    auto it = m_elementCategory.find(element);
+    if (it != m_elementCategory.end()) {
         return it->second;
     }
-    // Sub-entity (Face7): resolve to owning toplevel (Solid3)
+    // Sub-entity (Face7): resolve to owning toplevel (Solid3), then its component
     const auto top = toplevelOfEntity(m_geometry, element);
     if (top != element) {
-        it = m_keyToIndex.find(top);
-        if (it != m_keyToIndex.end()) {
+        it = m_elementCategory.find(top);
+        if (it != m_elementCategory.end()) {
             return it->second;
         }
     }
     return 0;
 }
 
-int ToplevelClassification::categoryOfCell(vtkIdType cell) const
+int ComponentClassification::categoryOfCell(vtkIdType cell) const
 {
     if (cell < 0 || static_cast<size_t>(cell) >= m_cellCategory.size()) {
         return 0;

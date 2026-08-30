@@ -53,7 +53,7 @@ __dock = None
 # of a solid to the next, whereas 2D is 2D.
 _DIM_MODES = {"All": None, "3D": 3, "2D": 2, "1D": 1, "0D": 0}
 _ALL_DIMENSIONS = "All"
-_COLOR_MODES = ["Subelement", "Toplevel", "Material", "CellType"]
+_COLOR_MODES = ["Subelement", "Component", "Material", "CellType"]
 # Colour modes that describe mesh elements and mean nothing to the geometry.
 _MESH_COLOR_MODES = {"CellType"}
 _TREE_ICON_SIZE = 16
@@ -262,41 +262,6 @@ class _AppDocObserver:
         self.owner._app_changed_object(obj, prop)
 
 
-def _child_entity_names(geom_obj, toplevel):
-    """
-    One level of sub-entities under a toplevel name for the view tree.
-
-    Solids are shown as a single row (no Face children). Faces list Edges,
-    Edges list Vertices — using the global FemGeometry Shape numbering.
-    """
-    shape = geom_obj.Shape
-    if shape.isNull():
-        return []
-    try:
-        parent = shape.getElement(toplevel)
-    except Exception:
-        return []
-    if parent.isNull():
-        return []
-
-    def _match(children, all_of_type, prefix):
-        names = []
-        for i, candidate in enumerate(all_of_type, start=1):
-            if any(candidate.isSame(child) for child in children):
-                names.append(f"{prefix}{i}")
-        return names
-
-    st = parent.ShapeType
-    # 3D solids: hide face clutter in the tree (colouring stays per-toplevel).
-    if st == "Solid":
-        return []
-    if st == "Face":
-        return _match(parent.Edges, shape.Edges, "Edge")
-    if st == "Edge":
-        return _match(parent.Vertexes, shape.Vertexes, "Vertex")
-    return []
-
-
 class ElementNode:
     """Tree node: geometry hierarchy or classification category/member."""
 
@@ -477,7 +442,7 @@ class GeometryModel(QAbstractItemModel):
         if color_mode in ("Material", "CellType") and not self.geometry_only:
             self.root = self._build_category_tree(color_mode, under)
         else:
-            self.root = self._build_geometry_tree(under)
+            self.root = self._build_geometry_tree(color_mode, under)
 
         if self.root:
             self._attach_state(self.root)
@@ -539,12 +504,12 @@ class GeometryModel(QAbstractItemModel):
         owner = self.geom_obj if self.geom_obj is not None else self.analysis
         return ElementNode(owner.Label, target_obj=self.geom_obj)
 
-    def _build_geometry_tree(self, under):
+    def _build_geometry_tree(self, color_mode, under):
         root = self._root_node()
         categories = {c["key"]: c for c in (self.view_state.getCategories() or [])}
         if self.geom_obj is not None:
             self._append_geometry_components(
-                self.geom_obj, root, "", self.geom_obj, "", categories, under
+                self.geom_obj, root, "", self.geom_obj, "", categories, color_mode, under
             )
         if self.analysis and not self.geometry_only:
             nodes = {"": root}
@@ -562,20 +527,41 @@ class GeometryModel(QAbstractItemModel):
                     place.outer,
                     place.sub_prefix,
                     categories,
+                    color_mode,
                     under,
                     suppressed=set(place.suppressed),
                 )
         return root
 
     def _append_geometry_components(
-        self, geom_obj, root, path_prefix, target, sub_prefix, categories, under, suppressed=()
+        self,
+        geom_obj,
+        root,
+        path_prefix,
+        target,
+        sub_prefix,
+        categories,
+        color_mode,
+        under,
+        suppressed=(),
     ):
+        # Which row carries the swatch is the colour mode itself. Colouring by
+        # component makes one statement about the whole component, and painting
+        # it again on every element under it repeats that statement without
+        # adding to it — worse, it reads as if the elements had been told apart.
+        per_component = color_mode == "Component"
         for i in range(geom_obj.getComponentCount()):
             # A component an instance leaves out is neither drawn nor solved
             # with, so it has nothing to say in the tree either.
             if (i + 1) in suppressed:
                 continue
-            geometry_node = ElementNode(f"Component{i + 1}", root, target_obj=target)
+            component_cat = categories.get(f"{path_prefix}Component{i + 1}")
+            geometry_node = ElementNode(
+                f"Component{i + 1}",
+                root,
+                target_obj=target,
+                color=_color_tuple(component_cat["color"]) if component_cat else None,
+            )
             root.children.append(geometry_node)
             for sub in geom_obj.getToplevelElements(i):
                 dim = None
@@ -584,33 +570,18 @@ class GeometryModel(QAbstractItemModel):
                 except Exception:
                     pass
                 element_path = f"{path_prefix}{sub}"
-                cat = categories.get(element_path)
-                color = _color_tuple(cat["color"]) if cat else None
+                cat = None if per_component else categories.get(element_path)
                 node = ElementNode(
                     sub,
                     geometry_node,
                     element=element_path,
                     target_obj=target,
                     sub_name=f"{sub_prefix}{sub}",
-                    color=color,
+                    color=_color_tuple(cat["color"]) if cat else None,
                     dim_badge=dim if dim is not None and dim >= 0 else None,
                     mesh_achieved=under.get(element_path),
                 )
                 geometry_node.children.append(node)
-                for child_name in _child_entity_names(geom_obj, sub):
-                    child_path = f"{path_prefix}{child_name}"
-                    child_cat = categories.get(child_path)
-                    child_color = _color_tuple(child_cat["color"]) if child_cat else None
-                    child = ElementNode(
-                        child_name,
-                        node,
-                        element=child_path,
-                        target_obj=target,
-                        sub_name=f"{sub_prefix}{child_name}",
-                        color=child_color,
-                        mesh_achieved=under.get(child_path),
-                    )
-                    node.children.append(child)
 
     def _build_category_tree(self, color_mode, under):
         root = self._root_node()
@@ -663,6 +634,8 @@ class GeometryModel(QAbstractItemModel):
                     dim = geom.getAnalysisDimension(e)
                 except Exception:
                     pass
+                # No swatch: the colour is the category's, and the row is under
+                # it precisely because it has nothing of its own to say.
                 member = ElementNode(
                     e,
                     cat_node,
@@ -670,7 +643,6 @@ class GeometryModel(QAbstractItemModel):
                     target_obj=target,
                     sub_name=sub_name,
                     category_key=key,
-                    color=color,
                     dim_badge=dim if dim is not None and dim >= 0 else None,
                     mesh_achieved=under.get(element_path),
                 )
@@ -2444,14 +2416,68 @@ class Panel(QtGui.QDockWidget):
         # Docking and floating a panel that is only being put back where it
         # came from must not be mistaken for the user moving it.
         self.restoring = False
-        # Owned by the panel, so a pending retry dies with it
+        self._settle_to = None
+        # All owned by the panel, so a pending one dies with it
         self._stay_above_timer = QtCore.QTimer(self)
         self._stay_above_timer.setSingleShot(True)
         self._stay_above_timer.timeout.connect(self._deferred_stay_above)
+        self._save_timer = QtCore.QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self._save_placement)
+        self._settle_timer = QtCore.QTimer(self)
+        self._settle_timer.setSingleShot(True)
+        self._settle_timer.timeout.connect(self._settle)
         self.topLevelChanged.connect(self._top_level_changed)
         self.dockLocationChanged.connect(self._dock_location_changed)
 
     def _dock_location_changed(self, area):
+        save_panel_placement(self)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        self._placement_changed()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._placement_changed()
+
+    def _placement_changed(self):
+        """
+        Note where the panel has got to, once it stops getting there.
+
+        Dragging a floating panel around is the ordinary way of placing it, and
+        Qt says nothing about it beyond the move itself: there is no signal for
+        the panel having been put somewhere, so the moves are watched and the
+        last one of a run wins. A drag is a move per pixel, which is why the
+        record is not written on the spot.
+        """
+        if self.restoring:
+            return
+        self._save_timer.start(_PLACEMENT_QUIET_MS)
+
+    def _save_placement(self):
+        save_panel_placement(self)
+
+    def settle_at(self, pos, size):
+        """
+        Insist on a placement once the window is up, then start listening again.
+
+        A window is placed by the window manager as it is mapped, and plenty of
+        them put a new one where they think best rather than where it was asked
+        to go, which is how a panel that was left at the edge of the screen
+        opens in the middle of it. Asking again afterwards is the ask that
+        sticks. *pos* is None for a docked panel, which the main window places.
+        """
+        self._settle_to = (pos, size)
+        self._settle_timer.start(0)
+
+    def _settle(self):
+        pos, size = self._settle_to or (None, None)
+        self._settle_to = None
+        if pos is not None and self.isFloating():
+            self.resize(size)
+            self.move(pos)
+        self.restoring = False
         save_panel_placement(self)
 
     def _top_level_changed(self, floating):
@@ -2469,8 +2495,12 @@ class Panel(QtGui.QDockWidget):
         if QtGui.QApplication.mouseButtons() != QtCore.Qt.MouseButton.NoButton:
             self._stay_above_timer.start(100)
             return
+        # Where the user dropped it, kept across the window being rebuilt under
+        # the new flags and put up again.
+        pos, size = self.pos(), self.size()
+        self.restoring = True
         self.stay_above_main_window()
-        save_panel_placement(self)
+        self.settle_at(pos, size)
 
     def stay_above_main_window(self):
         """
@@ -2516,6 +2546,9 @@ _DEFAULT_PANEL_SIZE = (360, 620)
 # Gap the panel starts out at from the main window edges, a toolbar or so, to
 # keep it clear of the toolbars and of whatever sits in the right dock area.
 _DEFAULT_PANEL_MARGIN = 40
+# How long a floating panel has to hold still before where it is counts as
+# where the user put it.
+_PLACEMENT_QUIET_MS = 200
 
 
 def _enum_int(value):
@@ -2549,44 +2582,54 @@ def save_panel_placement(dock):
     pref.SetInt("ViewPanelWidth", dock.width())
     pref.SetInt("ViewPanelHeight", dock.height())
     if floating:
-        pref.SetInt("ViewPanelPosX", dock.x())
-        pref.SetInt("ViewPanelPosY", dock.y())
+        # pos() counts the window decoration in, and move() puts the panel back
+        # measured the same way. geometry() measures from inside the title bar,
+        # so pairing the two would walk the panel up the screen a title bar at
+        # a time, once per workbench switch.
+        pref.SetInt("ViewPanelPosX", dock.pos().x())
+        pref.SetInt("ViewPanelPosY", dock.pos().y())
         return
     mw = FreeCADGui.getMainWindow()
     if mw is not None:
         pref.SetInt("ViewPanelArea", _enum_int(mw.dockWidgetArea(dock)))
 
 
-def restore_panel_placement(dock):
+def restore_panel_placement(dock, visible):
     """
-    Put the panel back where it was left. The panel is destroyed on every
-    workbench switch, so without this it would fall back into the dock area on
-    each return to the FEM workbench.
+    Put the panel back where it was left, showing it if that is how it was left.
+
+    The panel is destroyed on every workbench switch, so without this it would
+    fall back into the dock area on each return to the FEM workbench. Showing
+    belongs here rather than to the caller because a window is placed as it
+    goes up, and only a placement applied after that is the one it keeps.
     """
     pref = _panel_pref()
     default = _default_panel_geometry()
     area = _DOCK_AREAS.get(pref.GetInt("ViewPanelArea", 2))
     floating = pref.GetBool("ViewPanelFloating", True)
-    geometry = QtCore.QRect(
-        pref.GetInt("ViewPanelPosX", default.x()),
-        pref.GetInt("ViewPanelPosY", default.y()),
+    size = QtCore.QSize(
         pref.GetInt("ViewPanelWidth", default.width()),
         pref.GetInt("ViewPanelHeight", default.height()),
     )
+    pos = QtCore.QPoint(
+        pref.GetInt("ViewPanelPosX", default.x()),
+        pref.GetInt("ViewPanelPosY", default.y()),
+    )
 
     dock.restoring = True
-    try:
-        mw = FreeCADGui.getMainWindow()
+    mw = FreeCADGui.getMainWindow()
+    if mw is not None:
         mw.addDockWidget(area or QtCore.Qt.DockWidgetArea.RightDockWidgetArea, dock)
-        if floating:
-            dock.setFloating(True)
-            # Straight away rather than over the deferred route: nothing is
-            # being dragged here, and the panel is still to be shown, so the
-            # rebuilt window costs no flicker.
-            dock.stay_above_main_window()
-            dock.setGeometry(geometry)
-    finally:
-        dock.restoring = False
+    if floating:
+        dock.setFloating(True)
+        # Straight away rather than over the deferred route: nothing is being
+        # dragged here, and the panel is still to be shown, so the rebuilt
+        # window costs no flicker.
+        dock.stay_above_main_window()
+        dock.resize(size)
+        dock.move(pos)
+    dock.setVisible(visible)
+    dock.settle_at(pos if floating else None, size)
 
 
 def setup_visualization_panel():
@@ -2601,8 +2644,7 @@ def setup_visualization_panel():
 
     mw = FreeCADGui.getMainWindow()
     __dock = Panel(mw)
-    restore_panel_placement(__dock)
-    __dock.setVisible(_panel_pref().GetBool("ShowViewPanel", True))
+    restore_panel_placement(__dock, _panel_pref().GetBool("ShowViewPanel", True))
 
 
 def unsetup_visualization_panel():
@@ -2628,9 +2670,13 @@ def toggle_visualization_panel():
         return
 
     visible = not __dock.isVisible()
-    if not visible:
-        save_panel_placement(__dock)
-    __dock.setVisible(visible)
     if visible:
+        # Showing puts the window up afresh, which is another chance for the
+        # window manager to place it somewhere of its own choosing, so it goes
+        # up the same way it does on a workbench switch.
+        restore_panel_placement(__dock, True)
         __dock.raise_()
+    else:
+        save_panel_placement(__dock)
+        __dock.setVisible(False)
     _panel_pref().SetBool("ShowViewPanel", visible)

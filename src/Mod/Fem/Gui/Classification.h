@@ -68,7 +68,7 @@ struct FemGuiExport Category
 /**
  * Abstraction driving smart colouring and the grouped view-panel tree.
  *
- * Concrete modes: Subelement, Toplevel, Material, CellType.
+ * Concrete modes: Subelement, Component, Material, CellType.
  * Instances are computed once per analysis and shared by geometry and mesh VPs.
  */
 class FemGuiExport Classification
@@ -142,11 +142,18 @@ private:
     std::vector<int> m_cellCategory;  ///< per input-grid cell
 };
 
-/** One colour per toplevel element (owner of the entity). */
-class FemGuiExport ToplevelClassification: public Classification
+/**
+ * One colour per component, shared by everything the component is made of.
+ *
+ * A component is the piece of geometry that hangs together, and it is the
+ * unit the user assembles an analysis from, so its faces and edges are the
+ * one thing that must not be told apart here: a shell of forty faces is one
+ * colour, and the next component is the next colour.
+ */
+class FemGuiExport ComponentClassification: public Classification
 {
 public:
-    ToplevelClassification(
+    ComponentClassification(
         Fem::FemAnalysis* analysis,
         Fem::FemGeometry* geometry,
         vtkUnstructuredGrid* meshGrid,
@@ -168,6 +175,8 @@ private:
     Fem::FemGeometry* m_geometry {nullptr};
     std::vector<Category> m_categories;
     std::map<std::string, int> m_keyToIndex;
+    /// Toplevel element path -> the component it sits in
+    std::map<std::string, int> m_elementCategory;
     std::vector<int> m_cellCategory;
 };
 

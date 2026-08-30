@@ -36,7 +36,7 @@ from PySide import QtCore
 import FreeCAD
 import FreeCADGui
 
-from femguiutils import selection_widgets
+from femguiutils import selection_slots
 from femobjects import element_geometry1D
 from . import base_femtaskpanel
 
@@ -132,11 +132,12 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
         self.update_parameter_widget()
 
         # geometry selection widget
-        self.selection_widget = selection_widgets.GeometryElementsSelection(
-            obj.References, ["Edge"], False, True
+        self.selection_widget = selection_slots.for_references(
+            obj,
+            ["Edge"],
+            homogeneous=True,
+            empty_means_all=True,
         )
-
-        # form made from param and selection widget
         self.form = [self.parameter_widget, self.selection_widget]
 
     def accept(self):

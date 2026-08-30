@@ -29,7 +29,7 @@
 
 #include <Mod/Fem/App/FemSolverObject.h>
 
-#include "TaskFemConstraintOnBoundary.h"
+#include "TaskFemConstraint.h"
 #include "ViewProviderFemConstraintFluidBoundary.h"
 
 
@@ -48,7 +48,7 @@ class ViewProvider;
 namespace FemGui
 {
 
-class TaskFemConstraintFluidBoundary: public TaskFemConstraintOnBoundary
+class TaskFemConstraintFluidBoundary: public TaskFemConstraint
 {
     Q_OBJECT
 
@@ -75,10 +75,6 @@ public:
     double getTemperatureValue() const;
     double getHeatFluxValue() const;
     double getHTCoeffValue() const;
-
-    const std::string getReferences() const override;
-    const std::string getDirectionName() const;
-    const std::string getDirectionObject() const;
     bool getReverse() const;
 
 private Q_SLOTS:
@@ -87,22 +83,17 @@ private Q_SLOTS:
     void onBoundaryValueChanged(double);
     void onTurbulenceSpecificationChanged();
     void onThermalBoundaryTypeChanged();
-    void onReferenceDeleted();
-    void onButtonDirection(const bool pressed = true);
     void onCheckReverse(bool);  // consider removing this slot as the UI is hidden
-    void addToSelection() override;
-    void removeFromSelection() override;
 
 protected:
     void changeEvent(QEvent* e) override;
-    void clearButtons(const SelectionChangeModes notThis) override;
 
 private:
+    void showDirectionSlot(bool visible);
     void updateBoundaryTypeUI();
     void updateSubtypeUI();
     void updateThermalBoundaryUI();
     void updateTurbulenceUI();
-    void updateUI();
 
 private:
     std::unique_ptr<Ui_TaskFemConstraintFluidBoundary> ui;

@@ -30,7 +30,7 @@
 #include <QObject>
 #include <memory>
 
-#include "TaskFemConstraintOnBoundary.h"
+#include "TaskFemConstraint.h"
 #include "ViewProviderFemConstraintPressure.h"
 
 
@@ -38,7 +38,7 @@ class Ui_TaskFemConstraintPressure;
 
 namespace FemGui
 {
-class TaskFemConstraintPressure: public TaskFemConstraintOnBoundary
+class TaskFemConstraintPressure: public TaskFemConstraint
 {
     Q_OBJECT
 
@@ -48,22 +48,16 @@ public:
         QWidget* parent = nullptr
     );
     ~TaskFemConstraintPressure() override;
-    const std::string getReferences() const override;
     std::string getPressure() const;
     bool getReverse() const;
 
 private Q_SLOTS:
-    void onReferenceDeleted();
     void onCheckReverse(bool);
-    void addToSelection() override;
-    void removeFromSelection() override;
 
 protected:
     void changeEvent(QEvent* e) override;
-    void clearButtons(const SelectionChangeModes notThis) override;
 
 private:
-    void updateUI();
     std::unique_ptr<Ui_TaskFemConstraintPressure> ui;
 };
 

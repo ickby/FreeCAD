@@ -48,6 +48,7 @@ from femtest.app.test_preprocess import TestViewStatePersistence as FemTest20
 from femtest.app.test_preprocess import TestGeometryPartition as FemTest21
 from femtest.app.test_preprocess import TestGeometryReferences as FemTest22
 from femtest.app.test_preprocess import TestAnalysisImport as FemTest23
+from femtest.app.test_selection_rules import TestSelectionRules as FemTest26
 from femtest.app.test_gmsh import TestGMSHEntityOrder as FemTest24
 from femtest.app.test_netgen import TestNetgenEntityOrder as FemTest25
 
@@ -76,3 +77,4 @@ False if FemTest22.__name__ else True
 False if FemTest23.__name__ else True
 False if FemTest24.__name__ else True
 False if FemTest25.__name__ else True
+False if FemTest26.__name__ else True

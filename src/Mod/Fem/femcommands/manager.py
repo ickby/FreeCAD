@@ -331,6 +331,18 @@ class CommandManager:
     # ****************************************************************************************
     # methods to add the objects to the document in FreeCADGui mode
 
+    # Panels with no obvious primary slot omit the prefill snapshot. An absent
+    # stash is already the edit case, so the widget needs no special path.
+    _NO_REFERENCE_HANDOFF = {
+        "ConstraintTie",  # master and slave; no obvious primary
+    }
+
+    def _stash_reference_handoff(self, objtype, name_expr="FreeCAD.ActiveDocument.ActiveObject.Name"):
+        if objtype in self._NO_REFERENCE_HANDOFF:
+            return
+        FreeCADGui.addModule("femguiutils.selection_handoff")
+        FreeCADGui.doCommand(f"femguiutils.selection_handoff.stash_for({name_expr})")
+
     def add_obj_on_gui_set_edit(self, objtype):
         FreeCAD.ActiveDocument.openTransaction(f"Create Fem{objtype}")
         FreeCADGui.addModule("ObjectsFem")
@@ -339,6 +351,7 @@ class CommandManager:
             "FemGui.getActiveAnalysis().addObject(ObjectsFem."
             "make{}(FreeCAD.ActiveDocument))".format(objtype)
         )
+        self._stash_reference_handoff(objtype)
         # no other obj should be selected if we go in task panel
         FreeCADGui.Selection.clearSelection()
         FreeCADGui.doCommand(
@@ -382,6 +395,7 @@ class CommandManager:
             "ObjectsFem.make{}("
             "FreeCAD.ActiveDocument, FreeCAD.ActiveDocument.{})".format(objtype, self.selobj.Name)
         )
+        self._stash_reference_handoff(objtype)
         FreeCADGui.Selection.clearSelection()
         FreeCADGui.doCommand(
             "FreeCADGui.ActiveDocument.setEdit(FreeCAD.ActiveDocument.ActiveObject.Name)"
@@ -501,6 +515,7 @@ class CommandManager:
             )
             FreeCADGui.doCommand("_group.Group = _steps")
 
+        self._stash_reference_handoff(geometrytype, "geometry_obj.Name")
         FreeCADGui.Selection.clearSelection()
         FreeCADGui.doCommand("FreeCADGui.ActiveDocument.setEdit(geometry_obj.Name)")
 

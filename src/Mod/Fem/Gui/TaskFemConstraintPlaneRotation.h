@@ -48,18 +48,13 @@ public:
         QWidget* parent = nullptr
     );
     ~TaskFemConstraintPlaneRotation() override;
-    const std::string getReferences() const override;
 
 private Q_SLOTS:
-    void onReferenceDeleted();
-    void addToSelection();
-    void removeFromSelection();
 
 protected:
     void changeEvent(QEvent* e) override;
 
 private:
-    void updateUI();
     std::unique_ptr<Ui_TaskFemConstraintPlaneRotation> ui;
 };
 

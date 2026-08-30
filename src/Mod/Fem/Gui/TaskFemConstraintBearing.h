@@ -60,20 +60,14 @@ public:
     ~TaskFemConstraintBearing() override;
 
     double getDistance() const;
-    const std::string getReferences() const override;
-    const std::string getLocationName() const;
-    const std::string getLocationObject() const;
     bool getAxial() const;
 
 private Q_SLOTS:
-    void onReferenceDeleted();
     void onDistanceChanged(double l);
-    void onButtonLocation(const bool pressed = true);
     void onCheckAxial(bool);
 
 protected:
     void changeEvent(QEvent* e) override;
-    void onSelectionChanged(const Gui::SelectionChanges& msg) override;
 
 protected:
     std::unique_ptr<Ui_TaskFemConstraintBearing> ui;

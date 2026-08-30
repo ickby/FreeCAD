@@ -34,7 +34,6 @@
 #include <Gui/TaskView/TaskView.h>
 
 #include "TaskFemConstraint.h"
-#include "TaskFemConstraintOnBoundary.h"
 #include "ViewProviderFemConstraintDisplacement.h"
 
 
@@ -42,7 +41,7 @@ class Ui_TaskFemConstraintDisplacement;
 
 namespace FemGui
 {
-class TaskFemConstraintDisplacement: public TaskFemConstraintOnBoundary
+class TaskFemConstraintDisplacement: public TaskFemConstraint
 {
     Q_OBJECT
 
@@ -52,8 +51,6 @@ public:
         QWidget* parent = nullptr
     );
     ~TaskFemConstraintDisplacement() override;
-
-    const std::string getReferences() const override;
     std::string get_spinxDisplacement() const;
     std::string get_spinyDisplacement() const;
     std::string get_spinzDisplacement() const;
@@ -75,7 +72,6 @@ public:
     bool get_useFlowSurfaceForce() const;
 
 private Q_SLOTS:
-    void onReferenceDeleted();
     void formulaX(bool);
     void formulaY(bool);
     void formulaZ(bool);
@@ -84,15 +80,10 @@ private Q_SLOTS:
     void formulaRoty(bool);
     void formulaRotz(bool);
 
-    void addToSelection() override;
-    void removeFromSelection() override;
-
 protected:
     void changeEvent(QEvent* e) override;
-    void clearButtons(const SelectionChangeModes notThis) override;
 
 private:
-    void updateUI();
     std::unique_ptr<Ui_TaskFemConstraintDisplacement> ui;
 };
 

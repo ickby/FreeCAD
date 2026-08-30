@@ -36,7 +36,7 @@ from femtools import membertools
 
 if App.GuiUp:
     import FreeCADGui as Gui
-    from femguiutils import selection_widgets
+    from femguiutils import selection_slots
 
 
 class Proxy(equationbase.BaseProxy):
@@ -59,8 +59,12 @@ class Proxy(equationbase.BaseProxy):
 class ViewProxy(equationbase.BaseViewProxy):
 
     def setEdit(self, vobj, mode=0):
+        document = vobj.Object.Document
+        if not document.HasPendingTransaction:
+            document.openTransaction(f"Edit {vobj.Object.Label}")
         task = _TaskPanel(vobj.Object)
         Gui.Control.showDialog(task)
+        return True
 
     def unsetEdit(self, vobj, mode=0):
         Gui.Control.closeDialog()
@@ -79,11 +83,13 @@ class _TaskPanel:
 
     def __init__(self, obj):
         self._obj = obj
-        self._selectionWidget = selection_widgets.GeometryElementsSelection(
-            obj.References, ["Solid", "Face"], False, True
+        self._selectionWidget = selection_slots.for_references(
+            obj,
+            ["Solid", "Face"],
+            homogeneous=True,
+            empty_means_all=True,
+            promotion_latched=True,
         )
-        # start in solid selection mode
-        self._selectionWidget.rb_solid.setChecked(True)
         propWidget = obj.ViewObject.Proxy.getTaskWidget(obj.ViewObject)
         if propWidget is None:
             self.form = self._selectionWidget
@@ -105,20 +111,20 @@ class _TaskPanel:
     def reject(self):
         self._selectionWidget.finish_selection()
         self._recomputeAndRestore()
+        Gui.getDocument(self._obj.Document).Document.abortTransaction()
         return True
 
     def accept(self):
-        if self._obj.References != self._selectionWidget.references:
-            self._obj.References = self._selectionWidget.references
         self._selectionWidget.finish_selection()
         self._recomputeAndRestore()
+        Gui.getDocument(self._obj.Document).Document.commitTransaction()
         return True
 
     def activate(self):
-        self._selectionWidget.attachSelection()
+        pass
 
     def deactivate(self):
-        self._selectionWidget.detachSelection()
+        pass
 
     def _restoreVisibility(self):
         if self._mesh is not None and self._part is not None:

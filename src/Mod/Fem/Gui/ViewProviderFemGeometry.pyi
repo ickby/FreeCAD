@@ -62,6 +62,16 @@ class ViewProviderFemGeometry(ViewProviderDocumentObject):
         """True while a chain step preview hides this group's render."""
         ...
 
+    def setPreselectPromotion(self, on: bool, /) -> None:
+        """
+        While true, hovering a Face/Edge/Vertex lights the solid(s) that own it.
+
+        Used while a promoting reference slot is armed. The solid becomes the
+        preselected element, so the existing volume-preselect path colours
+        every face of it.
+        """
+        ...
+
     def setElementHighlight(
         self, role: str, elements: object, color: object = None, /
     ) -> None:

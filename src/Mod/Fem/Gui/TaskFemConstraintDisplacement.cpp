@@ -50,31 +50,24 @@ TaskFemConstraintDisplacement::TaskFemConstraintDisplacement(
     ViewProviderFemConstraintDisplacement* ConstraintView,
     QWidget* parent
 )
-    : TaskFemConstraintOnBoundary(ConstraintView, parent, "FEM_ConstraintDisplacement")
+    : TaskFemConstraint(ConstraintView, parent, "FEM_ConstraintDisplacement")
     , ui(new Ui_TaskFemConstraintDisplacement)
 {
     proxy = new QWidget(this);
     ui->setupUi(proxy);
     QMetaObject::connectSlotsByName(this);
 
-    // create a context menu for the listview of the references
-    createActions(ui->lw_references);
-    connect(deleteAction, &QAction::triggered, this, &TaskFemConstraintDisplacement::onReferenceDeleted);
-
-    connect(
-        ui->lw_references,
-        &QListWidget::currentItemChanged,
-        this,
-        &TaskFemConstraintDisplacement::setSelection
-    );
-    connect(
-        ui->lw_references,
-        &QListWidget::itemClicked,
-        this,
-        &TaskFemConstraintDisplacement::setSelection
-    );
 
     this->groupLayout()->addWidget(proxy);
+    {
+        ReferenceSlotSpec spec;
+        spec.property = "References";
+        spec.title = tr("References").toStdString();
+        spec.types = {"Vertex", "Edge", "Face"};
+        spec.homogeneous = false;
+        spec.armed = true;
+        addReferenceSelection({spec}, proxy);
+    }
 
     // setup ranges
     constexpr float max = std::numeric_limits<float>::max();
@@ -117,16 +110,6 @@ TaskFemConstraintDisplacement::TaskFemConstraintDisplacement(
     bStates[8] = pcConstraint->hasZFormula.getValue();
     bStates[9] = pcConstraint->useFlowSurfaceForce.getValue();
 
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-
-    ui->lw_references->clear();
-    for (std::size_t i = 0; i < Objects.size(); i++) {
-        ui->lw_references->addItem(makeRefText(Objects[i], SubElements[i]));
-    }
-    if (!Objects.empty()) {
-        ui->lw_references->setCurrentRow(0, QItemSelectionModel::ClearAndSelect);
-    }
 
     // Connect check box values displacements
     connect(ui->DisplacementXFormulaCB, &QCheckBox::toggled, this, &TaskFemConstraintDisplacement::formulaX);
@@ -156,13 +139,6 @@ TaskFemConstraintDisplacement::TaskFemConstraintDisplacement(
     ui->DisplacementZFormulaCB->setChecked(bStates[8]);
     ui->FlowForceCB->setChecked(bStates[9]);
 
-    ui->lbl_info->setText(
-        tr("Select geometry of type: ") + QString::fromUtf8("<b>%1</b>").arg(tr("Vertex, Edge, Face"))
-    );
-
-    // Selection buttons
-    buttonGroup->addButton(ui->btnAdd, static_cast<int>(SelectionChangeModes::refAdd));
-    buttonGroup->addButton(ui->btnRemove, static_cast<int>(SelectionChangeModes::refRemove));
 
     // Bind input fields to properties
     ui->spinxDisplacement->bind(pcConstraint->xDisplacement);
@@ -171,20 +147,10 @@ TaskFemConstraintDisplacement::TaskFemConstraintDisplacement(
     ui->spinxRotation->bind(pcConstraint->xRotation);
     ui->spinyRotation->bind(pcConstraint->yRotation);
     ui->spinzRotation->bind(pcConstraint->zRotation);
-
-    updateUI();
 }
 
 TaskFemConstraintDisplacement::~TaskFemConstraintDisplacement() = default;
 
-void TaskFemConstraintDisplacement::updateUI()
-{
-    if (ui->lw_references->model()->rowCount() == 0) {
-        // Go into reference selection mode if no reference has been selected yet
-        onButtonReference(true);
-        return;
-    }
-}
 
 void TaskFemConstraintDisplacement::formulaX(bool state)
 {
@@ -231,164 +197,6 @@ void TaskFemConstraintDisplacement::formulaRotz(bool state)
     ui->spinzRotation->setEnabled(!state);
 }
 
-void TaskFemConstraintDisplacement::addToSelection()
-{
-    std::vector<Gui::SelectionObject> selection
-        = Gui::Selection().getSelectionEx();  // gets vector of selected objects of active document
-    if (selection.empty()) {
-        QMessageBox::warning(this, tr("Selection Error"), tr("Nothing selected!"));
-        return;
-    }
-    Fem::ConstraintDisplacement* pcConstraint
-        = ConstraintView->getObject<Fem::ConstraintDisplacement>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-
-    for (auto& it : selection) {  // for every selected object
-        if (!checkReference(it.getObject())) {
-            return;
-        }
-
-        App::DocumentObject* obj = it.getObject();
-        if (obj->getDocument() != pcConstraint->getDocument()) {
-            QMessageBox::warning(
-                this,
-                tr("Selection Error"),
-                tr("External object selection is not supported")
-            );
-            return;
-        }
-
-        const std::vector<std::string>& subNames = it.getSubNames();
-        for (const auto& subName : subNames) {  // for every selected sub element
-
-            App::DocumentObject* refObj = obj;
-            std::string refSub = subName;
-            normalizeReference(refObj, refSub);
-            bool addMe = true;
-            for (auto itr = std::ranges::find(SubElements.begin(), SubElements.end(), subName);
-                 itr != SubElements.end();
-                 itr = std::find(
-                     ++itr,
-                     SubElements.end(),
-                     subName
-                 )) {  // for every sub element in selection that
-                       // matches one in old list
-                if (refObj
-                    == Objects[std::distance(
-                        SubElements.begin(),
-                        itr
-                    )]) {  // if selected sub element's object equals the one in old list
-                           // then it was added before so don't add
-                    addMe = false;
-                }
-            }
-            // limit constraint such that only vertexes or faces or edges can be used depending on
-            // what was selected first
-            std::string searchStr;
-            if (refSub.find("Vertex") != std::string::npos) {
-                searchStr = "Vertex";
-            }
-            else if (refSub.find("Edge") != std::string::npos) {
-                searchStr = "Edge";
-            }
-            else {
-                searchStr = "Face";
-            }
-            for (const auto& SubElement : SubElements) {
-                if (SubElement.find(searchStr) == std::string::npos) {
-                    QString msg = tr(
-                        "Only one type of selection (vertex, face or edge) per "
-                        "analysis feature allowed!"
-                    );
-                    QMessageBox::warning(this, tr("Selection Error"), msg);
-                    addMe = false;
-                    break;
-                }
-            }
-            if (addMe) {
-                QSignalBlocker block(ui->lw_references);
-                Objects.push_back(refObj);
-                SubElements.push_back(refSub);
-                ui->lw_references->addItem(makeRefText(refObj, refSub));
-            }
-        }
-    }
-    // Update UI
-    pcConstraint->References.setValues(Objects, SubElements);
-    updateUI();
-}
-
-void TaskFemConstraintDisplacement::removeFromSelection()
-{
-    std::vector<Gui::SelectionObject> selection
-        = Gui::Selection().getSelectionEx();  // gets vector of selected objects of active document
-    if (selection.empty()) {
-        QMessageBox::warning(this, tr("Selection Error"), tr("Nothing selected!"));
-        return;
-    }
-    Fem::ConstraintDisplacement* pcConstraint
-        = ConstraintView->getObject<Fem::ConstraintDisplacement>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-    std::vector<size_t> itemsToDel;
-    for (const auto& it : selection) {  // for every selected object
-        if (!checkReference(it.getObject())) {
-            return;
-        }
-        const std::vector<std::string>& subNames = it.getSubNames();
-        const App::DocumentObject* obj = it.getObject();
-
-        for (const auto& subName : subNames) {  // for every selected sub element
-            for (auto itr = std::ranges::find(SubElements, subName); itr != SubElements.end(); itr
-                 = std::find(++itr,
-                             SubElements.end(),
-                             subName)) {  // for every sub element in selection that
-                                          // matches one in old list
-                if (obj
-                    == Objects[std::distance(
-                        SubElements.begin(),
-                        itr
-                    )]) {  // if selected sub element's object equals the one in old list
-                           // then it was added before so mark for deletion
-                    itemsToDel.push_back(std::distance(SubElements.begin(), itr));
-                }
-            }
-        }
-    }
-    std::sort(itemsToDel.begin(), itemsToDel.end());
-    while (!itemsToDel.empty()) {
-        Objects.erase(Objects.begin() + itemsToDel.back());
-        SubElements.erase(SubElements.begin() + itemsToDel.back());
-        itemsToDel.pop_back();
-    }
-    // Update UI
-    {
-        QSignalBlocker block(ui->lw_references);
-        ui->lw_references->clear();
-        for (unsigned int j = 0; j < Objects.size(); j++) {
-            ui->lw_references->addItem(makeRefText(Objects[j], SubElements[j]));
-        }
-    }
-    pcConstraint->References.setValues(Objects, SubElements);
-    updateUI();
-}
-
-void TaskFemConstraintDisplacement::onReferenceDeleted()
-{
-    TaskFemConstraintDisplacement::removeFromSelection();  // OvG: On right-click face is
-                                                           // automatically selected, so just remove
-}
-
-const std::string TaskFemConstraintDisplacement::getReferences() const
-{
-    int rows = ui->lw_references->model()->rowCount();
-    std::vector<std::string> items;
-    for (int r = 0; r < rows; r++) {
-        items.push_back(ui->lw_references->item(r)->text().toStdString());
-    }
-    return TaskFemConstraint::getReferences(items);
-}
 
 std::string TaskFemConstraintDisplacement::get_spinxDisplacement() const
 {
@@ -495,15 +303,6 @@ void TaskFemConstraintDisplacement::changeEvent(QEvent*)
     //    }
 }
 
-void TaskFemConstraintDisplacement::clearButtons(const SelectionChangeModes notThis)
-{
-    if (notThis != SelectionChangeModes::refAdd) {
-        ui->btnAdd->setChecked(false);
-    }
-    if (notThis != SelectionChangeModes::refRemove) {
-        ui->btnRemove->setChecked(false);
-    }
-}
 
 //**************************************************************************
 // TaskDialog

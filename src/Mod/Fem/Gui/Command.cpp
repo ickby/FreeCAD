@@ -102,6 +102,16 @@ static std::string gethideMeshShowPartStr(std::string showConstr = "")
         amesh.ViewObject.Visibility = False\n";
 }
 
+static void stashReferencesFor(const std::string& featName)
+{
+    Gui::Command::doCommand(
+        Gui::Command::Gui,
+        "from femguiutils import selection_handoff as _fem_handoff\n"
+        "_fem_handoff.stash_for('%s')",
+        featName.c_str()
+    );
+}
+
 static std::string getSelectedNodes(Gui::View3DInventorViewer* view)
 {
     Gui::SelectionRole role;
@@ -260,6 +270,8 @@ void CmdFemConstraintBearing::activated(int)
 
     std::string FeatName = getUniqueObjectName("ConstraintBearing");
 
+    stashReferencesFor(FeatName);
+
     openCommand(QT_TRANSLATE_NOOP("Command", "Make bearing constraint"));
     doCommand(Doc, "App.activeDocument().addObject(\"Fem::ConstraintBearing\",\"%s\")", FeatName.c_str());
     doCommand(
@@ -307,6 +319,7 @@ void CmdFemConstraintContact::activated(int)
     }
 
     std::string FeatName = getUniqueObjectName("Contact");
+    // Contact's master and slave slots have no obvious primary; do not prefill.
 
     openCommand(QT_TRANSLATE_NOOP("Command", "Make contact constraint on a face"));
     doCommand(Doc, "App.activeDocument().addObject(\"Fem::ConstraintContact\",\"%s\")", FeatName.c_str());
@@ -386,6 +399,8 @@ void CmdFemConstraintDisplacement::activated(int)
 
     std::string FeatName = getUniqueObjectName("Displacement");
 
+    stashReferencesFor(FeatName);
+
     openCommand(QT_TRANSLATE_NOOP("Command", "Make displacement boundary condition on face"));
     doCommand(
         Doc,
@@ -440,6 +455,8 @@ void CmdFemConstraintFixed::activated(int)
 
     std::string FeatName = getUniqueObjectName("Fixed");
 
+    stashReferencesFor(FeatName);
+
     openCommand(QT_TRANSLATE_NOOP("Command", "Make fixed boundary condition for geometry"));
     doCommand(Doc, "App.activeDocument().addObject(\"Fem::ConstraintFixed\",\"%s\")", FeatName.c_str());
     // OvG: set initial scale to 1
@@ -489,6 +506,8 @@ void CmdFemConstraintRigidBody::activated(int)
     }
 
     std::string FeatName = getUniqueObjectName("RigidBody");
+
+    stashReferencesFor(FeatName);
 
     openCommand(QT_TRANSLATE_NOOP("Command", "Make rigid body constraint"));
     doCommand(
@@ -552,6 +571,8 @@ void CmdFemConstraintFluidBoundary::activated(int)
 
     std::string FeatName = getUniqueObjectName("ConstraintFluidBoundary");
 
+    stashReferencesFor(FeatName);
+
     openCommand(QT_TRANSLATE_NOOP("Command", "Create fluid boundary condition"));
     doCommand(
         Doc,
@@ -608,6 +629,8 @@ void CmdFemConstraintForce::activated(int)
     }
 
     std::string FeatName = getUniqueObjectName("Force");
+
+    stashReferencesFor(FeatName);
 
     openCommand(QT_TRANSLATE_NOOP("Command", "Make force load on geometry"));
     doCommand(Doc, "App.activeDocument().addObject(\"Fem::ConstraintForce\",\"%s\")", FeatName.c_str());
@@ -671,6 +694,8 @@ void CmdFemConstraintGear::activated(int)
     }
     std::string FeatName = getUniqueObjectName("ConstraintGear");
 
+    stashReferencesFor(FeatName);
+
     openCommand(QT_TRANSLATE_NOOP("Command", "Make gear constraint"));
     doCommand(Doc, "App.activeDocument().addObject(\"Fem::ConstraintGear\",\"%s\")", FeatName.c_str());
     doCommand(Doc, "App.activeDocument().%s.Diameter = 100.0", FeatName.c_str());
@@ -719,6 +744,8 @@ void CmdFemConstraintHeatflux::activated(int)
     }
 
     std::string FeatName = getUniqueObjectName("HeatFlux");
+
+    stashReferencesFor(FeatName);
 
     openCommand(QT_TRANSLATE_NOOP("Command", "Make heat flux load on face"));
     doCommand(
@@ -850,6 +877,8 @@ void CmdFemConstraintPlaneRotation::activated(int)
 
     std::string FeatName = getUniqueObjectName("PlaneRotation");
 
+    stashReferencesFor(FeatName);
+
     openCommand(QT_TRANSLATE_NOOP("Command", "Make plane multi-point constraint on face"));
     doCommand(
         Doc,
@@ -906,6 +935,8 @@ void CmdFemConstraintPressure::activated(int)
     }
 
     std::string FeatName = getUniqueObjectName("Pressure");
+
+    stashReferencesFor(FeatName);
 
     openCommand(QT_TRANSLATE_NOOP("Command", "Make pressure load on face"));
     doCommand(
@@ -971,6 +1002,8 @@ void CmdFemConstraintSpring::activated(int)
 
     std::string FeatName = getUniqueObjectName("Spring");
 
+    stashReferencesFor(FeatName);
+
     openCommand(QT_TRANSLATE_NOOP("Command", "Make Spring Constraint"));
     doCommand(Doc, "App.activeDocument().addObject(\"Fem::ConstraintSpring\",\"%s\")", FeatName.c_str());
     doCommand(
@@ -1030,6 +1063,8 @@ void CmdFemConstraintPulley::activated(int)
 
     std::string FeatName = getUniqueObjectName("ConstraintPulley");
 
+    stashReferencesFor(FeatName);
+
     openCommand(QT_TRANSLATE_NOOP("Command", "Make pulley constraint"));
     doCommand(Doc, "App.activeDocument().addObject(\"Fem::ConstraintPulley\",\"%s\")", FeatName.c_str());
     doCommand(Doc, "App.activeDocument().%s.Diameter = 300.0", FeatName.c_str());
@@ -1082,6 +1117,8 @@ void CmdFemConstraintTemperature::activated(int)
     }
 
     std::string FeatName = getUniqueObjectName("Temperature");
+
+    stashReferencesFor(FeatName);
 
     openCommand(QT_TRANSLATE_NOOP("Command", "Make temperature boundary condition on face"));
     doCommand(
@@ -1139,6 +1176,8 @@ void CmdFemConstraintTransform::activated(int)
     }
 
     std::string FeatName = getUniqueObjectName("Transform");
+
+    stashReferencesFor(FeatName);
 
     openCommand(QT_TRANSLATE_NOOP("Command", "Make local coordinate system on face"));
     doCommand(

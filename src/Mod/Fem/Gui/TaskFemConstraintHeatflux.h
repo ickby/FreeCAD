@@ -30,7 +30,7 @@
 #include <QObject>
 #include <memory>
 
-#include "TaskFemConstraintOnBoundary.h"
+#include "TaskFemConstraint.h"
 #include "ViewProviderFemConstraintHeatflux.h"
 
 
@@ -38,7 +38,7 @@ class Ui_TaskFemConstraintHeatflux;
 
 namespace FemGui
 {
-class TaskFemConstraintHeatflux: public TaskFemConstraintOnBoundary
+class TaskFemConstraintHeatflux: public TaskFemConstraint
 {
     Q_OBJECT
 
@@ -54,10 +54,8 @@ public:
     std::string getDFlux() const;
     double getEmissivity() const;
     std::string getConstraintType() const;
-    const std::string getReferences() const override;
 
 private Q_SLOTS:
-    void onReferenceDeleted();
     void onAmbientTempChanged(double val);
     /*void onFaceTempChanged(double val);*/
     void onFilmCoefChanged(double val);
@@ -67,15 +65,11 @@ private Q_SLOTS:
     void Conv();
     void Rad();
     void Flux();
-    void addToSelection() override;
-    void removeFromSelection() override;
 
 protected:
     void changeEvent(QEvent* e) override;
-    void clearButtons(const SelectionChangeModes notThis) override;
 
 private:
-    void updateUI();
     std::unique_ptr<Ui_TaskFemConstraintHeatflux> ui;
 };
 

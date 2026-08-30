@@ -36,7 +36,7 @@ from PySide import QtCore, QtGui
 import FreeCAD
 import FreeCADGui
 
-from femguiutils import selection_widgets
+from femguiutils import selection_slots
 from . import base_femtaskpanel
 
 
@@ -57,8 +57,11 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
 
         # geometry selection widget
         # only allow valid distance objects!
-        self.selection_widget = selection_widgets.GeometryElementsSelection(
-            obj.References, ["Edge"], True, False
+        self.selection_widget = selection_slots.for_references(
+            obj,
+            ["Edge"],
+            homogeneous=False,
+            empty_means_all=False,
         )
         self.selection_widget.setWindowTitle("Reference Geometries")
         self.selection_widget.setWindowIcon(FreeCADGui.getIcon(":icons/FEM_MeshDistance.svg"))

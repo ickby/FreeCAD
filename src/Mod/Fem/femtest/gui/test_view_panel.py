@@ -44,7 +44,6 @@ import ObjectsFem
 from pivy import coin  # noqa: F401
 
 from femguiutils import view_panel
-from femtaskpanels import task_geometry_partition
 from femviewprovider import view_geometry_base
 
 from femtest.app.support_utils import fcc_print
@@ -413,7 +412,10 @@ class TestViewPanelGui(unittest.TestCase):
             self.explorer.selectionModel().select(
                 index, QtCore.QItemSelectionModel.SelectionFlag.Select
             )
-            picks = [(obj.Name, sub) for obj, sub in task_geometry_partition._current_picks()]
+            picks = []
+            for sel in FreeCADGui.Selection.getSelectionEx("", 1):
+                for sub in sel.SubElementNames or ("",):
+                    picks.append((sel.Object.Name, sub))
             self.assertIn((self.imp.Name, "Solid2"), picks)
         finally:
             self._leave_edit()

@@ -26,17 +26,14 @@
 #pragma once
 
 #include <QObject>
-#include <memory>
 
-#include "TaskFemConstraintOnBoundary.h"
+#include "TaskFemConstraint.h"
 #include "ViewProviderFemConstraintFixed.h"
 
 
-class Ui_TaskFemConstraintFixed;
-
 namespace FemGui
 {
-class TaskFemConstraintFixed: public TaskFemConstraintOnBoundary
+class TaskFemConstraintFixed: public TaskFemConstraint
 {
     Q_OBJECT
 
@@ -45,21 +42,6 @@ public:
         ViewProviderFemConstraintFixed* ConstraintView,
         QWidget* parent = nullptr
     );
-    ~TaskFemConstraintFixed() override;
-    const std::string getReferences() const override;
-
-private Q_SLOTS:
-    void onReferenceDeleted();
-    void addToSelection() override;
-    void removeFromSelection() override;
-
-protected:
-    void changeEvent(QEvent* e) override;
-    void clearButtons(const SelectionChangeModes notThis) override;
-
-private:
-    void updateUI();
-    std::unique_ptr<Ui_TaskFemConstraintFixed> ui;
 };
 
 class TaskDlgFemConstraintFixed: public TaskDlgFemConstraint

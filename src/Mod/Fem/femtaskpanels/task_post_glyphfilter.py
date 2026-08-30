@@ -36,7 +36,6 @@ from PySide import QtCore, QtGui
 import FreeCAD
 import FreeCADGui
 
-from femguiutils import selection_widgets
 from . import base_fempostpanel
 
 

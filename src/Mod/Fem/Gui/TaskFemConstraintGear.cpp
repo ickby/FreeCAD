@@ -52,6 +52,9 @@ TaskFemConstraintGear::TaskFemConstraintGear(
 )
     : TaskFemConstraintBearing(ConstraintView, parent, pixmapname)
 {
+    if (m_references) {
+        m_references->setSlotVisible("Direction", true);
+    }
     connect(
         ui->spinDiameter,
         qOverload<double>(&QDoubleSpinBox::valueChanged),
@@ -70,7 +73,6 @@ TaskFemConstraintGear::TaskFemConstraintGear(
         this,
         &TaskFemConstraintGear::onForceAngleChanged
     );
-    connect(ui->buttonDirection, &QPushButton::pressed, this, [this] { onButtonDirection(true); });
     connect(ui->checkReversed, &QCheckBox::toggled, this, &TaskFemConstraintGear::onCheckReversed);
 
     // Temporarily prevent unnecessary feature recomputes
@@ -84,11 +86,6 @@ TaskFemConstraintGear::TaskFemConstraintGear(
     double dia = pcConstraint->Diameter.getValue();
     double force = pcConstraint->Force.getValue();
     double angle = pcConstraint->ForceAngle.getValue();
-    std::vector<std::string> dirStrings = pcConstraint->Direction.getSubValues();
-    QString dir;
-    if (!dirStrings.empty()) {
-        dir = makeRefText(pcConstraint->Direction.getValue(), dirStrings.front());
-    }
     bool reversed = pcConstraint->Reversed.getValue();
 
     // Fill data into dialog elements
@@ -101,7 +98,6 @@ TaskFemConstraintGear::TaskFemConstraintGear(
     ui->spinForceAngle->setMinimum(-360);
     ui->spinForceAngle->setMaximum(360);
     ui->spinForceAngle->setValue(angle);
-    ui->lineDirection->setText(dir);
     ui->checkReversed->setChecked(reversed);
 
     // Adjust ui
@@ -111,8 +107,6 @@ TaskFemConstraintGear::TaskFemConstraintGear(
     ui->spinForce->setVisible(true);
     ui->labelForceAngle->setVisible(true);
     ui->spinForceAngle->setVisible(true);
-    ui->buttonDirection->setVisible(true);
-    ui->lineDirection->setVisible(true);
     ui->checkReversed->setVisible(true);
     ui->checkAxial->setVisible(false);
 
@@ -122,75 +116,6 @@ TaskFemConstraintGear::TaskFemConstraintGear(
     ui->checkReversed->blockSignals(false);
 }
 
-void TaskFemConstraintGear::onSelectionChanged(const Gui::SelectionChanges& msg)
-{
-    TaskFemConstraintBearing::onSelectionChanged(msg);
-
-    if (msg.Type == Gui::SelectionChanges::AddSelection) {
-        // Don't allow selection in other document
-        if (strcmp(msg.pDocName, ConstraintView->getObject()->getDocument()->getName()) != 0) {
-            return;
-        }
-
-        if (!msg.pSubName || msg.pSubName[0] == '\0') {
-            return;
-        }
-        std::string subName(msg.pSubName);
-
-        if (selectionMode == selnone) {
-            return;
-        }
-
-        std::vector<std::string> references(1, subName);
-        Fem::ConstraintGear* pcConstraint = ConstraintView->getObject<Fem::ConstraintGear>();
-        App::DocumentObject* obj = ConstraintView->getObject()->getDocument()->getObject(
-            msg.pObjectName
-        );
-        const Part::TopoShape* shape = Fem::Tools::getFeatureShape(obj);
-        TopoDS_Shape ref = shape ? shape->getSubShape(subName.c_str(), true) : TopoDS_Shape();
-        if (ref.IsNull()) {
-            return;
-        }
-
-        if (selectionMode == seldir) {
-            if (subName.substr(0, 4) == "Face") {
-                if (!Fem::Tools::isPlanar(TopoDS::Face(ref))) {
-                    QMessageBox::warning(
-                        this,
-                        tr("Selection Error"),
-                        tr("Only planar faces can be picked")
-                    );
-                    return;
-                }
-            }
-            else if (subName.substr(0, 4) == "Edge") {
-                if (!Fem::Tools::isLinear(TopoDS::Edge(ref))) {
-                    QMessageBox::warning(
-                        this,
-                        tr("Selection Error"),
-                        tr("Only linear edges can be picked")
-                    );
-                    return;
-                }
-            }
-            else {
-                QMessageBox::warning(
-                    this,
-                    tr("Selection Error"),
-                    tr("Only faces and edges can be picked")
-                );
-                return;
-            }
-            pcConstraint->Direction.setValue(obj, references);
-            ui->lineDirection->setText(makeRefText(obj, subName));
-
-            // Turn off direction selection mode
-            onButtonDirection(false);
-        }
-
-        Gui::Selection().clearSelection();
-    }
-}
 
 void TaskFemConstraintGear::onDiameterChanged(double l)
 {
@@ -210,17 +135,6 @@ void TaskFemConstraintGear::onForceAngleChanged(double a)
     pcConstraint->ForceAngle.setValue(a);
 }
 
-void TaskFemConstraintGear::onButtonDirection(const bool pressed)
-{
-    if (pressed) {
-        selectionMode = seldir;
-    }
-    else {
-        selectionMode = selnone;
-    }
-    ui->buttonDirection->setChecked(pressed);
-    Gui::Selection().clearSelection();
-}
 
 void TaskFemConstraintGear::onCheckReversed(const bool pressed)
 {
@@ -238,27 +152,6 @@ double TaskFemConstraintGear::getForceAngle() const
     return ui->spinForceAngle->value();
 }
 
-const std::string TaskFemConstraintGear::getDirectionName() const
-{
-    std::string dir = ui->lineDirection->text().toStdString();
-    if (dir.empty()) {
-        return "";
-    }
-
-    int pos = dir.find_last_of(":");
-    return dir.substr(0, pos).c_str();
-}
-
-const std::string TaskFemConstraintGear::getDirectionObject() const
-{
-    std::string dir = ui->lineDirection->text().toStdString();
-    if (dir.empty()) {
-        return "";
-    }
-
-    int pos = dir.find_last_of(":");
-    return dir.substr(pos + 1).c_str();
-}
 
 bool TaskFemConstraintGear::getReverse() const
 {
@@ -309,27 +202,6 @@ bool TaskDlgFemConstraintGear::accept()
 
     try {
         // Gui::Command::openCommand(QT_TRANSLATE_NOOP("Command", "FEM force constraint changed"));
-        std::string dirname = parameterGear->getDirectionName().data();
-        std::string dirobj = parameterGear->getDirectionObject().data();
-
-        if (!dirname.empty()) {
-            QString buf = QStringLiteral("(App.ActiveDocument.%1,[\"%2\"])");
-            buf = buf.arg(QString::fromStdString(dirname));
-            buf = buf.arg(QString::fromStdString(dirobj));
-            Gui::Command::doCommand(
-                Gui::Command::Doc,
-                "App.ActiveDocument.%s.Direction = %s",
-                name.c_str(),
-                buf.toStdString().c_str()
-            );
-        }
-        else {
-            Gui::Command::doCommand(
-                Gui::Command::Doc,
-                "App.ActiveDocument.%s.Direction = None",
-                name.c_str()
-            );
-        }
 
         Gui::Command::doCommand(
             Gui::Command::Doc,

@@ -37,7 +37,7 @@ from PySide import QtCore
 import FreeCAD
 import FreeCADGui
 
-from femguiutils import selection_widgets
+from femguiutils import selection_slots
 
 from femtools import membertools
 from . import base_femtaskpanel
@@ -54,11 +54,12 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
 
         # geometry selection widget
         # start with Solid in list!
-        self._selectionWidget = selection_widgets.GeometryElementsSelection(
-            obj.References, ["Solid", "Face"], True, False
+        self._selectionWidget = selection_slots.for_references(
+            obj,
+            ["Solid", "Face"],
+            homogeneous=False,
+            empty_means_all=False,
         )
-
-        # form made from param and selection widget
         self.form = [self.parameter_widget, self._selectionWidget]
 
         analysis = obj.getParentGroup()

@@ -40,7 +40,7 @@ import FreeCAD
 import FreeCADGui
 from FreeCAD import Units
 
-from femguiutils import selection_widgets
+from femguiutils import selection_slots
 from femobjects import element_fluid1D
 from . import base_femtaskpanel
 
@@ -234,11 +234,12 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
         self.updateParameterWidget()
 
         # geometry selection widget
-        self.selectionWidget = selection_widgets.GeometryElementsSelection(
-            obj.References, ["Edge"], False, True
+        self.selectionWidget = selection_slots.for_references(
+            obj,
+            ["Edge"],
+            homogeneous=True,
+            empty_means_all=True,
         )
-
-        # form made from param and selection widget
         self.form = [self.parameterWidget, self.selectionWidget]
 
     def accept(self):

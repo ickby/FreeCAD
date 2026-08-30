@@ -54,7 +54,7 @@ TaskFemConstraintForce::TaskFemConstraintForce(
     ViewProviderFemConstraintForce* ConstraintView,
     QWidget* parent
 )
-    : TaskFemConstraintOnBoundary(ConstraintView, parent, "FEM_ConstraintForce")
+    : TaskFemConstraint(ConstraintView, parent, "FEM_ConstraintForce")
     , ui(new Ui_TaskFemConstraintForce)
 {
     // we need a separate container widget to add all controls to
@@ -63,281 +63,39 @@ TaskFemConstraintForce::TaskFemConstraintForce(
     QMetaObject::connectSlotsByName(this);
 
     this->groupLayout()->addWidget(proxy);
+    {
+        ReferenceSlotSpec spec;
+        spec.property = "References";
+        spec.title = tr("References").toStdString();
+        spec.types = {"Vertex", "Edge", "Face"};
+        spec.homogeneous = false;
+        spec.armed = true;
+        ReferenceSlotSpec direction;
+        direction.property = "Direction";
+        direction.title = tr("Direction").toStdString();
+        direction.types = {"Edge", "Face"};
+        direction.maxCount = 1;
+        direction.homogeneous = false;
+        direction.id = "Direction";
+        addReferenceSelection({spec, direction}, proxy);
+    }
 
     // Get the feature data
     Fem::ConstraintForce* pcConstraint = ConstraintView->getObject<Fem::ConstraintForce>();
     auto force = pcConstraint->Force.getQuantityValue();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-    std::vector<std::string> dirStrings = pcConstraint->Direction.getSubValues();
-    QString dir;
-    if (!dirStrings.empty()) {
-        dir = makeRefText(pcConstraint->Direction.getValue(), dirStrings.front());
-    }
-    bool reversed = pcConstraint->Reversed.getValue();
 
     // Fill data into dialog elements
     ui->spinForce->setUnit(pcConstraint->Force.getUnit());
     ui->spinForce->setMinimum(0);
     ui->spinForce->setMaximum(std::numeric_limits<float>::max());
     ui->spinForce->setValue(force);
-    ui->listReferences->clear();
-    for (std::size_t i = 0; i < Objects.size(); i++) {
-        ui->listReferences->addItem(makeRefText(Objects[i], SubElements[i]));
-    }
-    if (!Objects.empty()) {
-        ui->listReferences->setCurrentRow(0, QItemSelectionModel::ClearAndSelect);
-    }
-    ui->lineDirection->setText(dir.isEmpty() ? QString() : dir);
-    ui->checkReverse->setChecked(reversed);
+    ui->checkReverse->setChecked(pcConstraint->Reversed.getValue());
 
-    ui->lbl_info->setText(
-        tr("Select geometry of type: ") + QString::fromUtf8("<b>%1</b>").arg(tr("Vertex, Edge, Face"))
-    );
-
-    // create a context menu for the listview of the references
-    createActions(ui->listReferences);
-    connect(deleteAction, &QAction::triggered, this, &TaskFemConstraintForce::onReferenceDeleted);
-    connect(ui->buttonDirection, &QToolButton::clicked, this, &TaskFemConstraintForce::onButtonDirection);
     connect(ui->checkReverse, &QCheckBox::toggled, this, &TaskFemConstraintForce::onCheckReverse);
-    connect(ui->listReferences, &QListWidget::itemClicked, this, &TaskFemConstraintForce::setSelection);
-
-    // Selection buttons
-    buttonGroup->addButton(ui->btnAdd, (int)SelectionChangeModes::refAdd);
-    buttonGroup->addButton(ui->btnRemove, (int)SelectionChangeModes::refRemove);
 
     ui->spinForce->bind(pcConstraint->Force);
-
-    updateUI();
 }
 
-void TaskFemConstraintForce::updateUI()
-{
-    if (ui->listReferences->model()->rowCount() == 0) {
-        // Go into reference selection mode if no reference has been selected yet
-        onButtonReference(true);
-        return;
-    }
-}
-
-void TaskFemConstraintForce::addToSelection()
-{
-    std::vector<Gui::SelectionObject> selection
-        = Gui::Selection().getSelectionEx();  // gets vector of selected objects of active document
-    if (selection.empty()) {
-        QMessageBox::warning(this, tr("Selection Error"), tr("Nothing selected!"));
-        return;
-    }
-    Fem::ConstraintForce* pcConstraint = ConstraintView->getObject<Fem::ConstraintForce>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-
-    for (auto& it : selection) {  // for every selected object
-        if (!checkReference(it.getObject())) {
-            return;
-        }
-
-        App::DocumentObject* obj = it.getObject();
-        if (obj->getDocument() != pcConstraint->getDocument()) {
-            QMessageBox::warning(
-                this,
-                tr("Selection Error"),
-                tr("External object selection is not supported")
-            );
-            return;
-        }
-
-        const std::vector<std::string>& subNames = it.getSubNames();
-        for (const auto& subName : subNames) {  // for every selected sub element
-
-            App::DocumentObject* refObj = obj;
-            std::string refSub = subName;
-            normalizeReference(refObj, refSub);
-            bool addMe = true;
-            for (auto itr = std::ranges::find(SubElements, refSub); itr != SubElements.end(); itr
-                 = std::find(++itr,
-                             SubElements.end(),
-                             refSub)) {  // for every sub element in selection that
-                                          // matches one in old list
-                if (refObj
-                    == Objects[std::distance(
-                        SubElements.begin(),
-                        itr
-                    )]) {  // if selected sub element's object equals the one in old list
-                           // then it was added before so don't add
-                    addMe = false;
-                }
-            }
-            // limit constraint such that only vertexes or faces or edges can be used depending on
-            // what was selected first
-            std::string searchStr;
-            if (refSub.find("Vertex") != std::string::npos) {
-                searchStr = "Vertex";
-            }
-            else if (refSub.find("Edge") != std::string::npos) {
-                searchStr = "Edge";
-            }
-            else {
-                searchStr = "Face";
-            }
-
-            for (const auto& SubElement : SubElements) {
-                if (SubElement.find(searchStr) == std::string::npos) {
-                    QString msg = tr(
-                        "Only one type of selection (vertex, face or edge) per "
-                        "analysis feature allowed!"
-                    );
-                    QMessageBox::warning(this, tr("Selection Error"), msg);
-                    addMe = false;
-                    break;
-                }
-            }
-            if (addMe) {
-                QSignalBlocker block(ui->listReferences);
-                Objects.push_back(refObj);
-                SubElements.push_back(refSub);
-                ui->listReferences->addItem(makeRefText(refObj, refSub));
-            }
-        }
-    }
-    // Update UI
-    pcConstraint->References.setValues(Objects, SubElements);
-    updateUI();
-}
-
-void TaskFemConstraintForce::removeFromSelection()
-{
-    std::vector<Gui::SelectionObject> selection
-        = Gui::Selection().getSelectionEx();  // gets vector of selected objects of active document
-    if (selection.empty()) {
-        QMessageBox::warning(this, tr("Selection Error"), tr("Nothing selected!"));
-        return;
-    }
-    Fem::ConstraintForce* pcConstraint = ConstraintView->getObject<Fem::ConstraintForce>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-    std::vector<size_t> itemsToDel;
-    for (const auto& it : selection) {  // for every selected object
-        if (!checkReference(it.getObject())) {
-            return;
-        }
-        const std::vector<std::string>& subNames = it.getSubNames();
-        const App::DocumentObject* obj = it.getObject();
-
-        for (const auto& subName : subNames) {  // for every selected sub element
-            for (auto itr = std::ranges::find(SubElements, subName); itr != SubElements.end(); itr
-                 = std::find(++itr,
-                             SubElements.end(),
-                             subName)) {  // for every sub element in selection that
-                                          // matches one in old list
-                if (obj
-                    == Objects[std::distance(
-                        SubElements.begin(),
-                        itr
-                    )]) {  // if selected sub element's object equals the one in old list
-                           // then it was added before so mark for deletion
-                    itemsToDel.push_back(std::distance(SubElements.begin(), itr));
-                }
-            }
-        }
-    }
-    std::sort(itemsToDel.begin(), itemsToDel.end());
-    while (!itemsToDel.empty()) {
-        Objects.erase(Objects.begin() + itemsToDel.back());
-        SubElements.erase(SubElements.begin() + itemsToDel.back());
-        itemsToDel.pop_back();
-    }
-    // Update UI
-    {
-        QSignalBlocker block(ui->listReferences);
-        ui->listReferences->clear();
-        for (unsigned int j = 0; j < Objects.size(); j++) {
-            ui->listReferences->addItem(makeRefText(Objects[j], SubElements[j]));
-        }
-    }
-    pcConstraint->References.setValues(Objects, SubElements);
-    updateUI();
-}
-
-void TaskFemConstraintForce::onReferenceDeleted()
-{
-    TaskFemConstraintForce::removeFromSelection();  // OvG: On right-click face is automatically
-                                                    // selected, so just remove
-}
-
-std::pair<App::DocumentObject*, std::string> TaskFemConstraintForce::getDirection(
-    const std::vector<Gui::SelectionObject>& selection
-) const
-{
-    std::pair<App::DocumentObject*, std::string> link;
-    if (selection.empty()) {
-        return link;
-    }
-
-    // we only handle the first selected object
-    Gui::SelectionObject selectionElement = selection.at(0);
-
-    // Line or Plane
-    const auto selObj = selectionElement.getObject();
-    if (selObj->isDerivedFrom<App::DatumElement>() || selObj->isDerivedFrom<Part::Datum>()) {
-        link = std::make_pair(selObj, std::string());
-    }
-    // Sub-element of an object carrying a shape
-    else if (const Part::TopoShape* shape = Fem::Tools::getFeatureShape(selObj)) {
-        const std::vector<std::string>& subNames = selectionElement.getSubNames();
-        if (subNames.size() != 1) {
-            return link;
-        }
-
-        std::string subNamesElement = subNames[0];
-
-        TopoDS_Shape ref = shape->getSubShape(subNamesElement.c_str(), true);
-        if (ref.IsNull()) {
-            return link;
-        }
-
-        if (ref.ShapeType() == TopAbs_EDGE) {
-            if (Fem::Tools::isLinear(TopoDS::Edge(ref))) {
-                link = std::make_pair(selectionElement.getObject(), subNamesElement);
-            }
-        }
-        else if (ref.ShapeType() == TopAbs_FACE) {
-            if (Fem::Tools::isPlanar(TopoDS::Face(ref))) {
-                link = std::make_pair(selectionElement.getObject(), subNamesElement);
-            }
-        }
-    }
-
-    return link;
-}
-
-void TaskFemConstraintForce::onButtonDirection(const bool pressed)
-{
-    // sets the normal vector of the currently selecteed planar face as direction
-    Q_UNUSED(pressed);
-
-    clearButtons(SelectionChangeModes::none);
-
-    auto link = getDirection(Gui::Selection().getSelectionEx());
-    if (!link.first) {
-        QMessageBox::warning(this, tr("Wrong Selection"), tr("Select an edge or a face."));
-        return;
-    }
-
-    try {
-        std::vector<std::string> direction(1, link.second);
-        Fem::ConstraintForce* pcConstraint = ConstraintView->getObject<Fem::ConstraintForce>();
-
-        // update the direction
-        pcConstraint->Direction.setValue(link.first, direction);
-        ui->lineDirection->setText(makeRefText(link.first, link.second));
-
-        updateUI();
-    }
-    catch (const Base::Exception& e) {
-        QMessageBox::warning(this, tr("Wrong Selection"), QString::fromLatin1(e.what()));
-    }
-}
 
 void TaskFemConstraintForce::onCheckReverse(const bool pressed)
 {
@@ -350,38 +108,6 @@ const std::string TaskFemConstraintForce::getForce() const
     return ui->spinForce->value().getSafeUserString();
 }
 
-const std::string TaskFemConstraintForce::getReferences() const
-{
-    int rows = ui->listReferences->model()->rowCount();
-
-    std::vector<std::string> items;
-    for (int r = 0; r < rows; r++) {
-        items.push_back(ui->listReferences->item(r)->text().toStdString());
-    }
-    return TaskFemConstraint::getReferences(items);
-}
-
-const std::string TaskFemConstraintForce::getDirectionName() const
-{
-    std::string dir = ui->lineDirection->text().toStdString();
-    if (dir.empty()) {
-        return "";
-    }
-
-    int pos = dir.find_last_of(":");
-    return dir.substr(0, pos).c_str();
-}
-
-const std::string TaskFemConstraintForce::getDirectionObject() const
-{
-    std::string dir = ui->lineDirection->text().toStdString();
-    if (dir.empty()) {
-        return "";
-    }
-
-    int pos = dir.find_last_of(":");
-    return dir.substr(pos + 1).c_str();
-}
 
 bool TaskFemConstraintForce::getReverse() const
 {
@@ -400,15 +126,6 @@ void TaskFemConstraintForce::changeEvent(QEvent* e)
     }
 }
 
-void TaskFemConstraintForce::clearButtons(const SelectionChangeModes notThis)
-{
-    if (notThis != SelectionChangeModes::refAdd) {
-        ui->btnAdd->setChecked(false);
-    }
-    if (notThis != SelectionChangeModes::refRemove) {
-        ui->btnRemove->setChecked(false);
-    }
-}
 
 //**************************************************************************
 //**************************************************************************
@@ -440,29 +157,6 @@ bool TaskDlgFemConstraintForce::accept()
             name.c_str(),
             parameterForce->getForce().c_str()
         );
-
-        std::string dirname = parameterForce->getDirectionName().data();
-        std::string dirobj = parameterForce->getDirectionObject().data();
-        std::string scale = "1";
-
-        if (!dirname.empty()) {
-            QString buf = QStringLiteral("(App.ActiveDocument.%1,[\"%2\"])");
-            buf = buf.arg(QString::fromStdString(dirname));
-            buf = buf.arg(QString::fromStdString(dirobj));
-            Gui::Command::doCommand(
-                Gui::Command::Doc,
-                "App.ActiveDocument.%s.Direction = %s",
-                name.c_str(),
-                buf.toStdString().c_str()
-            );
-        }
-        else {
-            Gui::Command::doCommand(
-                Gui::Command::Doc,
-                "App.ActiveDocument.%s.Direction = None",
-                name.c_str()
-            );
-        }
 
         Gui::Command::doCommand(
             Gui::Command::Doc,

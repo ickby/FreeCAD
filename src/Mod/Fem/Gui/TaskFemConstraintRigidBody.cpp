@@ -48,7 +48,7 @@ TaskFemConstraintRigidBody::TaskFemConstraintRigidBody(
     ViewProviderFemConstraintRigidBody* ConstraintView,
     QWidget* parent
 )
-    : TaskFemConstraintOnBoundary(ConstraintView, parent, "FEM_ConstraintRigidBody")
+    : TaskFemConstraint(ConstraintView, parent, "FEM_ConstraintRigidBody")
     , ui(new Ui_TaskFemConstraintRigidBody())
 {  // Note change "RigidBody" in line above to new constraint name
     constexpr float floatMax = std::numeric_limits<float>::max();
@@ -56,22 +56,7 @@ TaskFemConstraintRigidBody::TaskFemConstraintRigidBody(
     ui->setupUi(proxy);
     QMetaObject::connectSlotsByName(this);
 
-    // create a context menu for the listview of the references
-    createActions(ui->lw_references);
-    deleteAction->connect(
-        deleteAction,
-        &QAction::triggered,
-        this,
-        &TaskFemConstraintRigidBody::onReferenceDeleted
-    );
 
-    connect(
-        ui->lw_references,
-        &QListWidget::currentItemChanged,
-        this,
-        &TaskFemConstraintRigidBody::setSelection
-    );
-    connect(ui->lw_references, &QListWidget::itemClicked, this, &TaskFemConstraintRigidBody::setSelection);
     connect(
         ui->cb_x_trans_mode,
         qOverload<int>(&QComboBox::activated),
@@ -128,6 +113,15 @@ TaskFemConstraintRigidBody::TaskFemConstraintRigidBody(
     );
 
     this->groupLayout()->addWidget(proxy);
+    {
+        ReferenceSlotSpec spec;
+        spec.property = "References";
+        spec.title = tr("References").toStdString();
+        spec.types = {"Vertex", "Edge", "Face"};
+        spec.homogeneous = false;
+        spec.armed = true;
+        addReferenceSelection({spec}, proxy);
+    }
 
     /* Note: */
     // Get the feature data
@@ -145,9 +139,6 @@ TaskFemConstraintRigidBody::TaskFemConstraintRigidBody(
     Base::Quantity momentX = pcConstraint->MomentX.getQuantityValue();
     Base::Quantity momentY = pcConstraint->MomentY.getQuantityValue();
     Base::Quantity momentZ = pcConstraint->MomentZ.getQuantityValue();
-
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
 
     // Fill data into dialog elements
     ui->qsb_ref_node_x->setValue(refNode.x);
@@ -262,24 +253,6 @@ TaskFemConstraintRigidBody::TaskFemConstraintRigidBody(
     onRotModeXChanged(pcConstraint->RotationalModeX.getValue());
     onRotModeYChanged(pcConstraint->RotationalModeY.getValue());
     onRotModeZChanged(pcConstraint->RotationalModeZ.getValue());
-
-    ui->lw_references->clear();
-    for (std::size_t i = 0; i < Objects.size(); i++) {
-        ui->lw_references->addItem(makeRefText(Objects[i], SubElements[i]));
-    }
-    if (!Objects.empty()) {
-        ui->lw_references->setCurrentRow(0, QItemSelectionModel::ClearAndSelect);
-    }
-
-    // Selection buttons
-    buttonGroup->addButton(ui->btnAdd, (int)SelectionChangeModes::refAdd);
-    buttonGroup->addButton(ui->btnRemove, (int)SelectionChangeModes::refRemove);
-
-    ui->lbl_info->setText(
-        tr("Select geometry of type: ") + QString::fromUtf8("<b>%1</b>").arg(tr("Vertex, Edge, Face"))
-    );
-
-    updateUI();
 }
 
 TaskFemConstraintRigidBody::~TaskFemConstraintRigidBody()
@@ -287,159 +260,6 @@ TaskFemConstraintRigidBody::~TaskFemConstraintRigidBody()
     delete ui;
 }
 
-void TaskFemConstraintRigidBody::updateUI()
-{
-    if (ui->lw_references->model()->rowCount() == 0) {
-        // Go into reference selection mode if no reference has been selected yet
-        onButtonReference(true);
-        return;
-    }
-}
-
-void TaskFemConstraintRigidBody::addToSelection()
-{
-    std::vector<Gui::SelectionObject> selection
-        = Gui::Selection().getSelectionEx();  // gets vector of selected objects of active document
-    if (selection.empty()) {
-        QMessageBox::warning(this, tr("Selection Error"), tr("Nothing selected!"));
-        return;
-    }
-    Fem::ConstraintRigidBody* pcConstraint = ConstraintView->getObject<Fem::ConstraintRigidBody>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-
-    for (auto& it : selection) {  // for every selected object
-        if (!checkReference(it.getObject())) {
-            return;
-        }
-
-        App::DocumentObject* obj = it.getObject();
-        if (obj->getDocument() != pcConstraint->getDocument()) {
-            QMessageBox::warning(
-                this,
-                tr("Selection Error"),
-                tr("External object selection is not supported")
-            );
-            return;
-        }
-
-        const std::vector<std::string>& subNames = it.getSubNames();
-        for (size_t subIt = 0; subIt < (subNames.size());
-             ++subIt) {  // for every selected sub element
-            App::DocumentObject* refObj = obj;
-            std::string refSub = subNames[subIt];
-            normalizeReference(refObj, refSub);
-            bool addMe = true;
-            for (auto itr = std::ranges::find(SubElements, refSub); itr != SubElements.end(); itr
-                 = std::find(++itr,
-                             SubElements.end(),
-                             refSub)) {  // for every sub element in selection that
-                                                  // matches one in old list
-                if (refObj
-                    == Objects[std::distance(
-                        SubElements.begin(),
-                        itr
-                    )]) {  // if selected sub element's object equals the one in old list
-                           // then it was added before so don't add
-                    addMe = false;
-                }
-            }
-            // limit constraint such that only vertexes or faces or edges can be used depending on
-            // what was selected first
-            std::string searchStr;
-            if (refSub.find("Vertex") != std::string::npos) {
-                searchStr = "Vertex";
-            }
-            else if (refSub.find("Edge") != std::string::npos) {
-                searchStr = "Edge";
-            }
-            else {
-                searchStr = "Face";
-            }
-            for (size_t iStr = 0; iStr < (SubElements.size()); ++iStr) {
-                if (SubElements[iStr].find(searchStr) == std::string::npos) {
-                    QString msg = tr(
-                        "Only one type of selection (vertex, face or edge) per "
-                        "constraint allowed!"
-                    );
-                    QMessageBox::warning(this, tr("Selection Error"), msg);
-                    addMe = false;
-                    break;
-                }
-            }
-            if (addMe) {
-                QSignalBlocker block(ui->lw_references);
-                Objects.push_back(refObj);
-                SubElements.push_back(refSub);
-                ui->lw_references->addItem(makeRefText(refObj, refSub));
-            }
-        }
-    }
-    // Update UI
-    pcConstraint->References.setValues(Objects, SubElements);
-    updateUI();
-}
-
-void TaskFemConstraintRigidBody::removeFromSelection()
-{
-    std::vector<Gui::SelectionObject> selection
-        = Gui::Selection().getSelectionEx();  // gets vector of selected objects of active document
-    if (selection.empty()) {
-        QMessageBox::warning(this, tr("Selection Error"), tr("Nothing selected!"));
-        return;
-    }
-    Fem::ConstraintRigidBody* pcConstraint = ConstraintView->getObject<Fem::ConstraintRigidBody>();
-    std::vector<App::DocumentObject*> Objects = pcConstraint->References.getValues();
-    std::vector<std::string> SubElements = pcConstraint->References.getSubValues();
-    std::vector<size_t> itemsToDel;
-    for (std::vector<Gui::SelectionObject>::iterator it = selection.begin(); it != selection.end();
-         ++it) {  // for every selected object
-        if (!checkReference(it->getObject())) {
-            return;
-        }
-        const std::vector<std::string>& subNames = it->getSubNames();
-        App::DocumentObject* obj = it->getObject();
-
-        for (size_t subIt = 0; subIt < (subNames.size());
-             ++subIt) {  // for every selected sub element
-            for (auto itr = std::ranges::find(SubElements, subNames[subIt]); itr != SubElements.end(); itr
-                 = std::find(++itr,
-                             SubElements.end(),
-                             subNames[subIt])) {  // for every sub element in selection that
-                                                  // matches one in old list
-                if (obj
-                    == Objects[std::distance(
-                        SubElements.begin(),
-                        itr
-                    )]) {  // if selected sub element's object equals the one in old list
-                           // then it was added before so mark for deletion
-                    itemsToDel.push_back(std::distance(SubElements.begin(), itr));
-                }
-            }
-        }
-    }
-    std::sort(itemsToDel.begin(), itemsToDel.end());
-    while (!itemsToDel.empty()) {
-        Objects.erase(Objects.begin() + itemsToDel.back());
-        SubElements.erase(SubElements.begin() + itemsToDel.back());
-        itemsToDel.pop_back();
-    }
-    // Update UI
-    {
-        QSignalBlocker block(ui->lw_references);
-        ui->lw_references->clear();
-        for (unsigned int j = 0; j < Objects.size(); j++) {
-            ui->lw_references->addItem(makeRefText(Objects[j], SubElements[j]));
-        }
-    }
-    pcConstraint->References.setValues(Objects, SubElements);
-    updateUI();
-}
-
-void TaskFemConstraintRigidBody::onReferenceDeleted()
-{
-    TaskFemConstraintRigidBody::removeFromSelection();
-}
 
 void TaskFemConstraintRigidBody::onRotModeXChanged(int item)
 {
@@ -581,15 +401,6 @@ void TaskFemConstraintRigidBody::onRefNodeZChanged(double value)
     obj->ReferenceNode.setValue(refNode);
 }
 
-const std::string TaskFemConstraintRigidBody::getReferences() const
-{
-    int rows = ui->lw_references->model()->rowCount();
-    std::vector<std::string> items;
-    for (int r = 0; r < rows; r++) {
-        items.push_back(ui->lw_references->item(r)->text().toStdString());
-    }
-    return TaskFemConstraint::getReferences(items);
-}
 
 Base::Vector3d TaskFemConstraintRigidBody::getReferenceNode() const
 {
@@ -660,15 +471,6 @@ std::vector<std::string> TaskFemConstraintRigidBody::getRotationalMode() const
 void TaskFemConstraintRigidBody::changeEvent(QEvent*)
 {}
 
-void TaskFemConstraintRigidBody::clearButtons(const SelectionChangeModes notThis)
-{
-    if (notThis != SelectionChangeModes::refAdd) {
-        ui->btnAdd->setChecked(false);
-    }
-    if (notThis != SelectionChangeModes::refRemove) {
-        ui->btnRemove->setChecked(false);
-    }
-}
 
 //**************************************************************************
 // TaskDialog

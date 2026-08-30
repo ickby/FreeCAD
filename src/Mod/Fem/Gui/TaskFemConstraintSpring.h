@@ -28,7 +28,7 @@
 #include <QObject>
 #include <memory>
 
-#include "TaskFemConstraintOnBoundary.h"
+#include "TaskFemConstraint.h"
 #include "ViewProviderFemConstraintSpring.h"
 
 
@@ -36,7 +36,7 @@ class Ui_TaskFemConstraintSpring;
 
 namespace FemGui
 {
-class TaskFemConstraintSpring: public TaskFemConstraintOnBoundary
+class TaskFemConstraintSpring: public TaskFemConstraint
 {
     Q_OBJECT
 
@@ -46,22 +46,16 @@ public:
         QWidget* parent = nullptr
     );
     ~TaskFemConstraintSpring() override;
-    const std::string getReferences() const override;
     std::string getNormalStiffness() const;
     std::string getTangentialStiffness() const;
     std::string getElmerStiffness() const;
 
 private Q_SLOTS:
-    void onReferenceDeleted();
-    void addToSelection() override;
-    void removeFromSelection() override;
 
 protected:
     void changeEvent(QEvent* e) override;
-    void clearButtons(const SelectionChangeModes notThis) override;
 
 private:
-    void updateUI();
     std::unique_ptr<Ui_TaskFemConstraintSpring> ui;
 };
 

@@ -140,6 +140,12 @@ class VPBaseFemObject:
             return False
         if hide_mesh:
             self.hidden_while_editing = hide_while_editing(vobj)
+        # The slots write their property as they are picked, so Cancel needs a
+        # transaction to roll back to. A create command has one open already,
+        # and nesting a second would split its undo step in two.
+        document = vobj.Object.Document
+        if not document.HasPendingTransaction:
+            document.openTransaction(f"Edit {vobj.Object.Label}")
         # show task panel
         task = TaskPanel(vobj.Object)
         FreeCADGui.Control.showDialog(task)

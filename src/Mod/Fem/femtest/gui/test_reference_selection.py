@@ -35,11 +35,14 @@ import FreeCADGui
 import FemGui
 import Part
 
+from PySide import QtCore
 from PySide import QtGui
 
 import ObjectsFem
 
-from femguiutils import selection_widgets
+from femguiutils import selection_coordinator
+from femguiutils import selection_handoff
+from femguiutils import selection_slots
 
 from femtest.app.support_utils import fcc_print
 
@@ -87,6 +90,7 @@ class TestReferenceSelectionGui(unittest.TestCase):
         for widget in self.widgets:
             widget.finish_selection()
         self.widgets = []
+        selection_handoff.clear()
         FreeCADGui.Selection.clearSelection()
         if FreeCADGui.ActiveDocument and FreeCADGui.ActiveDocument.getInEdit():
             FreeCADGui.ActiveDocument.resetEdit()
@@ -96,11 +100,16 @@ class TestReferenceSelectionGui(unittest.TestCase):
 
     def _picker(self, types, solid=False):
         """A reference picker listening to the 3D view, as a panel puts it up."""
-        widget = selection_widgets.GeometryElementsSelection([], types, False, True)
+        widget = selection_slots.for_references(
+            None,
+            types,
+            homogeneous=True,
+            promotion_latched=solid,
+            property=None,
+        )
         self.widgets.append(widget)
-        if solid:
-            widget.rb_solid.setChecked(True)
-        widget.add_references()
+        widget.coordinator.install()
+        widget.arm("References")
         return widget
 
     def _pick(self, obj, sub):
@@ -113,9 +122,15 @@ class TestReferenceSelectionGui(unittest.TestCase):
     def _open_constraint(self, constraint):
         """Open the panel of a constraint and press its reference add button."""
         FreeCADGui.ActiveDocument.setEdit(constraint.Name)
-        buttons = FreeCADGui.getMainWindow().findChildren(QtGui.QToolButton, "btnAdd")
-        self.assertTrue(buttons, "the constraint panel offers a button to add references")
-        buttons[-1].setChecked(True)
+        buttons = [
+            button
+            for button in FreeCADGui.getMainWindow().findChildren(
+                QtGui.QToolButton, "FemReferenceArm"
+            )
+            if button.isVisible()
+        ]
+        self.assertTrue(buttons, "the constraint panel offers a button to arm a slot")
+        buttons[0].setChecked(True)
 
     # -- picking with the Python widget --------------------------------------
 
@@ -137,11 +152,9 @@ class TestReferenceSelectionGui(unittest.TestCase):
         is made of, so a reference on it would land somewhere else.
         """
         widget = self._picker(["Face"])
-        with _NoMessageBox() as boxes:
-            self._pick(self.source, "Face1")
-            self.assertEqual(widget.references, [])
-            self.assertTrue(boxes.messages, "the refusal has to be told")
-            self.assertIn(self.group.Label, boxes.messages[0])
+        self._pick(self.source, "Face1")
+        self.assertEqual(widget.references, [])
+        self.assertIn(self.group.Label, widget.slot("References").status.text())
 
     def test_without_a_geometry_a_part_feature_is_taken(self):
         """Analyses of older documents reference their part features directly."""
@@ -179,7 +192,7 @@ class TestReferenceSelectionGui(unittest.TestCase):
         self.analysis.addObject(constraint)
         constraint.References = [(self.group, "Face3")]
         self.document.recompute()
-        role = f"constraint:{constraint.Name}"
+        role = f"selection:{constraint.Name}:References"
 
         self.assertEqual(self.group.ViewObject.getElementHighlight(role), [])
         FreeCADGui.ActiveDocument.setEdit(constraint.Name)
@@ -224,3 +237,821 @@ class TestReferenceSelectionGui(unittest.TestCase):
         finally:
             settings.slotResetEdit(material.ViewObject)
         self.assertEqual(state.getActiveStage(), "Mesh")
+
+    # -- the unified slot widget --------------------------------------------
+
+    def test_two_slots_keep_their_own_rules_and_the_arm_does_not_move(self):
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        widget = selection_slots.from_slot_specs(
+            constraint,
+            [
+                {
+                    "id": "faces",
+                    "property": "References",
+                    "title": "Faces",
+                    "types": ["Face"],
+                    "armed": True,
+                },
+                {
+                    "id": "axis",
+                    "title": "Axis",
+                    "types": ["Edge"],
+                    "max_count": 1,
+                },
+            ],
+        )
+        self.widgets.append(widget)
+        widget.coordinator.install()
+        widget.arm("faces")
+
+        self._pick(self.group, "Face3")
+        self.assertEqual(self._references(widget), [(self.group.Name, "Face3")])
+        self.assertTrue(widget.slot("faces").arm_btn.isChecked())
+        self.assertFalse(widget.slot("axis").arm_btn.isChecked())
+        self.assertEqual(widget.slot("axis").picks, [])
+
+        widget.arm("axis")
+        self._pick(self.group, "Edge1")
+        self.assertEqual(
+            [(obj.Name, sub) for obj, sub in widget.slot("axis").picks],
+            [(self.group.Name, "Edge1")],
+        )
+        self.assertEqual(self._references(widget), [(self.group.Name, "Face3")])
+        self.assertFalse(widget.slot("faces").arm_btn.isChecked())
+        self.assertTrue(widget.slot("axis").arm_btn.isChecked())
+
+    def test_a_refused_pick_reaches_the_status_line_not_a_message_box(self):
+        widget = self._picker(["Edge"])
+        with _NoMessageBox() as boxes:
+            self._pick(self.group, "Face3")
+            self.assertEqual(widget.references, [])
+            self.assertEqual(boxes.messages, [])
+            status = widget.slot("References").status.text()
+            self.assertTrue(status)
+            self.assertIn("Face3", status)
+
+    def test_marks_are_per_slot_and_teardown_clears_them(self):
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        widget = selection_slots.from_slot_specs(
+            constraint,
+            [
+                {
+                    "id": "faces",
+                    "property": "References",
+                    "title": "Faces",
+                    "types": ["Face"],
+                    "armed": True,
+                },
+                {
+                    "id": "edges",
+                    "title": "Edges",
+                    "types": ["Edge"],
+                    "max_count": 1,
+                },
+            ],
+        )
+        self.widgets.append(widget)
+        widget.coordinator.install()
+        widget.arm("faces")
+        self._pick(self.group, "Face3")
+        widget.arm("edges")
+        self._pick(self.group, "Edge1")
+
+        face_role = widget.slot("faces").mark_role()
+        edge_role = widget.slot("edges").mark_role()
+        self.assertNotEqual(face_role, edge_role)
+        self.assertEqual(self.group.ViewObject.getElementHighlight(face_role), ["Face3"])
+        self.assertEqual(self.group.ViewObject.getElementHighlight(edge_role), ["Edge1"])
+
+        widget.finish_selection()
+        self.widgets.remove(widget)
+        self.assertEqual(self.group.ViewObject.getElementHighlight(face_role), [])
+        self.assertEqual(self.group.ViewObject.getElementHighlight(edge_role), [])
+        self.assertFalse(widget.coordinator._installed)
+
+    # -- pre-selection handoff ----------------------------------------------
+
+    def test_creation_with_a_valid_selection_fills_the_armed_slot(self):
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.document.Name, self.group.Name, "Face3")
+        selection_handoff.stash_for(constraint.Name)
+
+        widget = selection_slots.for_references(constraint, ["Face"])
+        self.widgets.append(widget)
+
+        self.assertEqual(self._references(widget), [(self.group.Name, "Face3")])
+        self.assertEqual(FreeCADGui.Selection.getSelection(), [])
+
+    def test_creation_with_a_partly_invalid_selection_keeps_the_valid_picks(self):
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.document.Name, self.group.Name, "Face3")
+        FreeCADGui.Selection.addSelection(self.document.Name, self.source.Name, "Face1")
+        selection_handoff.stash_for(constraint.Name)
+
+        widget = selection_slots.for_references(constraint, ["Face"])
+        self.widgets.append(widget)
+
+        self.assertEqual(self._references(widget), [(self.group.Name, "Face3")])
+        status = widget.slot("References").status.text()
+        self.assertIn("1 of 2", status)
+
+    def test_editing_while_an_unrelated_selection_is_live_shows_only_stored_marks(self):
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        constraint.References = [(self.group, "Face3")]
+        self.document.recompute()
+
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.document.Name, self.source.Name, "Face1")
+
+        widget = selection_slots.for_references(constraint, ["Face"])
+        self.widgets.append(widget)
+        widget.coordinator.install()
+        for slot in widget.slots:
+            slot._update_marks()
+
+        self.assertEqual(self._references(widget), [(self.group.Name, "Face3")])
+        self.assertEqual(FreeCADGui.Selection.getSelection(), [])
+        role = widget.slot("References").mark_role()
+        self.assertEqual(self.group.ViewObject.getElementHighlight(role), ["Face3"])
+
+    def test_a_stash_is_consumed_once(self):
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.document.Name, self.group.Name, "Face3")
+        selection_handoff.stash_for(constraint.Name)
+
+        first = selection_slots.for_references(constraint, ["Face"])
+        self.widgets.append(first)
+        self.assertEqual(self._references(first), [(self.group.Name, "Face3")])
+        first.finish_selection()
+        self.widgets.remove(first)
+
+        constraint.References = []
+        second = selection_slots.for_references(constraint, ["Face"])
+        self.widgets.append(second)
+        self.assertEqual(second.references, [])
+
+    def test_an_opted_out_command_prefills_nothing(self):
+        """Tie has no obvious primary slot, so its command never stashes."""
+        constraint = ObjectsFem.makeConstraintTie(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(self.document.Name, self.group.Name, "Face3")
+
+        widget = selection_slots.from_slot_specs(
+            constraint,
+            [
+                {
+                    "id": "slave",
+                    "property": "References",
+                    "role": "slave",
+                    "title": "Slave",
+                    "types": ["Face"],
+                    "armed": True,
+                },
+                {
+                    "id": "master",
+                    "property": "References",
+                    "role": "master",
+                    "title": "Master",
+                    "types": ["Face"],
+                    "max_count": 1,
+                },
+            ],
+        )
+        self.widgets.append(widget)
+
+        self.assertEqual(widget.slot("slave").picks, [])
+        self.assertEqual(widget.slot("master").picks, [])
+        self.assertEqual(FreeCADGui.Selection.getSelection(), [])
+
+    def test_a_hosted_panel_hides_the_old_chrome_and_keeps_its_own(self):
+        """
+        The .ui files still carry the Add / Remove / list chrome, which the
+        host hides by object name. The names the new widget uses have to stay
+        clear of that list, or a panel loses the button that arms its slots.
+        """
+        for maker in (ObjectsFem.makeConstraintContact, ObjectsFem.makeConstraintForce):
+            constraint = maker(self.document)
+            self.analysis.addObject(constraint)
+            self.document.recompute()
+            window = FreeCADGui.getMainWindow()
+            FreeCADGui.ActiveDocument.setEdit(constraint.Name)
+            try:
+                arms = window.findChildren(QtGui.QToolButton, "FemReferenceArm")
+                self.assertTrue(arms, f"{constraint.Name} puts up no arm button")
+                self.assertTrue(
+                    all(button.isVisible() for button in arms),
+                    f"{constraint.Name} hid its own arm button",
+                )
+                for name in ("btnAdd", "btnAddMaster", "btnAddSlave", "listReferences"):
+                    for legacy in window.findChildren(QtGui.QWidget, name):
+                        self.assertFalse(
+                            legacy.isVisible(), f"{name} is left over on {constraint.Name}"
+                        )
+            finally:
+                FreeCADGui.Control.closeDialog()
+                FreeCADGui.ActiveDocument.abortCommand()
+                FreeCADGui.ActiveDocument.resetEdit()
+
+    # -- two slots sharing one property --------------------------------------
+
+    def _tie_widget(self, constraint):
+        widget = selection_slots.from_slot_specs(
+            constraint,
+            [
+                {
+                    "id": "slave",
+                    "property": "References",
+                    "role": "slave",
+                    "title": "Slave",
+                    "types": ["Face"],
+                    "armed": True,
+                },
+                {
+                    "id": "master",
+                    "property": "References",
+                    "role": "master",
+                    "title": "Master",
+                    "types": ["Face"],
+                    "max_count": 1,
+                },
+            ],
+        )
+        self.widgets.append(widget)
+        widget.coordinator.install()
+        return widget
+
+    def test_master_and_slave_share_one_property_and_survive_a_reopen(self):
+        """
+        Tie and Contact store both roles in one References list, slaves first
+        and the master last. The split has to come back the way it went in.
+        """
+        constraint = ObjectsFem.makeConstraintTie(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        widget = self._tie_widget(constraint)
+        widget.arm("slave")
+        self._pick(self.group, "Face3")
+        self._pick(self.group, "Face5")
+        widget.arm("master")
+        self._pick(self.group, "Face7")
+
+        stored = [
+            (obj.Name, sub) for obj, sub in selection_slots.flatten_links(constraint.References)
+        ]
+        self.assertEqual(
+            stored,
+            [(self.group.Name, "Face3"), (self.group.Name, "Face5"), (self.group.Name, "Face7")],
+        )
+
+        widget.finish_selection()
+        self.widgets.remove(widget)
+        reopened = self._tie_widget(constraint)
+        self.assertEqual([sub for _obj, sub in reopened.slot("slave").picks], ["Face3", "Face5"])
+        self.assertEqual([sub for _obj, sub in reopened.slot("master").picks], ["Face7"])
+
+    def test_a_lone_slave_pick_is_not_read_back_as_the_master(self):
+        """
+        The stored order alone cannot tell them apart while only one pick
+        exists, so the write has to come from the slots, not from re-slicing.
+        """
+        constraint = ObjectsFem.makeConstraintTie(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        widget = self._tie_widget(constraint)
+        widget.arm("slave")
+        self._pick(self.group, "Face3")
+
+        self.assertEqual([sub for _obj, sub in widget.slot("slave").picks], ["Face3"])
+        self.assertEqual(widget.slot("master").picks, [])
+
+        widget.arm("master")
+        self._pick(self.group, "Face7")
+        self.assertEqual([sub for _obj, sub in widget.slot("slave").picks], ["Face3"])
+        self.assertEqual([sub for _obj, sub in widget.slot("master").picks], ["Face7"])
+
+    def test_a_pick_for_another_slot_says_so(self):
+        """
+        The arm never moves on its own, so the refusal is what has to name the
+        slot that would have taken the pick.
+        """
+        constraint = ObjectsFem.makeConstraintForce(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        widget = selection_slots.from_slot_specs(
+            constraint,
+            [
+                {
+                    "id": "references",
+                    "property": "References",
+                    "title": "Loaded geometry",
+                    "types": ["Face"],
+                    "armed": True,
+                },
+                {
+                    "id": "direction",
+                    "title": "Direction",
+                    "types": ["Edge"],
+                    "max_count": 1,
+                },
+            ],
+        )
+        self.widgets.append(widget)
+        widget.coordinator.install()
+        widget.arm("references")
+
+        self.assertFalse(widget.coordinator.allow(self.document.Name, self.group, "Edge1"))
+        status = widget.slot("references").status.text()
+        self.assertIn("Direction", status)
+
+    def test_a_duplicate_says_so_rather_than_naming_another_slot(self):
+        constraint = ObjectsFem.makeConstraintForce(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        widget = selection_slots.from_slot_specs(
+            constraint,
+            [
+                {
+                    "id": "references",
+                    "property": "References",
+                    "title": "Loaded geometry",
+                    "types": ["Face"],
+                    "armed": True,
+                },
+                {
+                    "id": "direction",
+                    "title": "Direction",
+                    "types": ["Face"],
+                    "max_count": 1,
+                },
+            ],
+        )
+        self.widgets.append(widget)
+        widget.coordinator.install()
+        widget.arm("references")
+        self._pick(self.group, "Face3")
+
+        self.assertFalse(widget.coordinator.allow(self.document.Name, self.group, "Face3"))
+        status = widget.slot("references").status.text()
+        self.assertIn("already", status)
+        self.assertNotIn("Direction", status)
+
+    # -- what the slot puts on screen ----------------------------------------
+
+    def test_the_list_counts_against_a_fixed_maximum_and_offers_the_rest(self):
+        widget = selection_slots.for_references(None, ["Vertex"], max_count=3, property=None)
+        self.widgets.append(widget)
+        widget.coordinator.install()
+        widget.arm("References")
+        slot = widget.slot("References")
+
+        self.assertEqual(slot.count_label.text(), "0 of 3")
+        self.assertFalse(slot.clear_btn.isEnabled())
+        self.assertEqual(slot.list.topLevelItemCount(), 3, "three outstanding placeholder rows")
+
+        self._pick(self.group, "Vertex1")
+        self._pick(self.group, "Vertex2")
+        self.assertEqual(slot.count_label.text(), "2 of 3")
+        self.assertTrue(slot.clear_btn.isEnabled())
+        self.assertEqual(slot.list.topLevelItemCount(), 3, "two picks and one still to go")
+
+    def test_a_row_can_be_dropped_from_the_list_alone(self):
+        widget = self._picker(["Face"])
+        slot = widget.slot("References")
+        self._pick(self.group, "Face3")
+        self._pick(self.group, "Face5")
+        self.assertEqual(len(slot.picks), 2)
+
+        slot._remove_row(0)
+        self.assertEqual([sub for _obj, sub in slot.picks], ["Face5"])
+
+        slot.list.selectAll()
+        slot._remove_selected()
+        self.assertEqual(slot.picks, [])
+        self.assertFalse(slot.clear_btn.isEnabled())
+
+    def test_a_single_pick_slot_is_a_field_and_the_next_pick_replaces(self):
+        widget = selection_slots.for_references(None, ["Edge"], max_count=1, property=None)
+        self.widgets.append(widget)
+        widget.coordinator.install()
+        widget.arm("References")
+        slot = widget.slot("References")
+
+        self.assertIsNone(slot.list, "one pick is a line edit, not a list")
+        self.assertFalse(slot.field.text())
+        self.assertTrue(slot.field.placeholderText())
+
+        self._pick(self.group, "Edge1")
+        self.assertIn("Edge1", slot.field.text())
+        self._pick(self.group, "Edge2")
+        self.assertEqual([sub for _obj, sub in slot.picks], ["Edge2"])
+        self.assertIn("Edge2", slot.field.text())
+
+    def test_an_unarmed_slot_says_nothing(self):
+        widget = self._picker(["Face"])
+        slot = widget.slot("References")
+        self.assertTrue(slot.status.text(), "an armed slot names what it takes")
+        widget.coordinator.disarm()
+        self.assertEqual(slot.status.text(), "")
+
+    def test_disarming_hands_the_3d_view_back(self):
+        """
+        A gate left standing while nothing is armed refuses every pick, so the
+        view stays dead for the rest of the panel's life.
+        """
+        widget = self._picker(["Face"])
+        self._pick(self.group, "Edge1")
+        self.assertFalse(
+            FreeCADGui.Selection.getSelection(), "an armed Face slot gates an edge out"
+        )
+
+        widget.coordinator.disarm()
+        self._pick(self.group, "Edge1")
+        self.assertTrue(
+            FreeCADGui.Selection.getSelection(),
+            "with no slot armed the view has to take a plain selection again",
+        )
+
+    def test_rearming_puts_the_gate_back(self):
+        widget = self._picker(["Face"])
+        widget.coordinator.disarm()
+        widget.arm("References")
+        self._pick(self.group, "Edge1")
+        self.assertFalse(
+            FreeCADGui.Selection.getSelection(), "arming again has to gate the view again"
+        )
+
+    # -- how long a refusal stays up ------------------------------------------
+
+    def _with_blocked_pointer(self, blocked):
+        """Stand in for the forbidden cursor the viewer puts up on a refusal."""
+        original = selection_coordinator.pointer_is_blocked
+        selection_coordinator.pointer_is_blocked = lambda: blocked
+        self.addCleanup(setattr, selection_coordinator, "pointer_is_blocked", original)
+
+    def test_a_refusal_goes_once_the_pointer_is_off_it(self):
+        """
+        The refusal path clears the preselection before it reports, so no
+        RmvPreselect follows and nothing else would ever take the message down.
+        """
+        widget = self._picker(["Face"])
+        slot = widget.slot("References")
+        coordinator = widget.coordinator
+
+        coordinator.allow(self.document, self.group, "Edge1")
+        refusal = slot.status.text()
+        self.assertTrue(refusal)
+
+        self._with_blocked_pointer(False)
+        coordinator._sweep_refusal()
+        self.assertNotEqual(slot.status.text(), refusal, "the refusal outlived the hover")
+
+    def test_a_refusal_stays_while_the_pointer_rests_on_it(self):
+        """
+        A still pointer sends no events at all, so nothing but the cursor can
+        say the hover is still going on.
+        """
+        widget = self._picker(["Face"])
+        slot = widget.slot("References")
+        coordinator = widget.coordinator
+
+        coordinator.allow(self.document, self.group, "Edge1")
+        refusal = slot.status.text()
+
+        self._with_blocked_pointer(True)
+        for _ in range(5):
+            coordinator._sweep_refusal()
+        self.assertEqual(slot.status.text(), refusal, "the message left before the symbol did")
+
+    def test_the_poll_stops_with_the_refusal(self):
+        widget = self._picker(["Face"])
+        coordinator = widget.coordinator
+
+        self._with_blocked_pointer(True)
+        coordinator.allow(self.document, self.group, "Edge1")
+        self.assertTrue(coordinator._sweep.isActive(), "a refusal has to be watched")
+
+        self._with_blocked_pointer(False)
+        coordinator._sweep_refusal()
+        self.assertFalse(coordinator._sweep.isActive(), "nothing left to watch")
+
+    def test_an_allowed_hover_clears_the_last_refusal(self):
+        widget = self._picker(["Face"])
+        slot = widget.slot("References")
+        coordinator = widget.coordinator
+
+        coordinator.allow(self.document, self.group, "Edge1")
+        self.assertIsNotNone(coordinator._refused_slot)
+        coordinator.allow(self.document, self.group, "Face1")
+        self.assertIsNone(coordinator._refused_slot, "an accepted hover ends the refusal")
+
+    # -- changing the pick mode under a standing hover ------------------------
+
+    def test_turning_on_promotion_rejudges_the_standing_hover(self):
+        """
+        setPreselect short-circuits on an element that is already preselected,
+        before the gate sees it. A hover accepted as a face therefore survived
+        Alt going down and kept looking pickable, under a plain pointer, until
+        the pointer crossed onto something else.
+        """
+        widget = self._picker(["Solid", "Face"])
+        slot = widget.slot("References")
+        slot.accept_picks([(self.group, "Face1")])
+
+        FreeCADGui.Selection.setPreselection(self.group, "Face3", 0.0, 0.0, 0.0, 0)
+        self.assertEqual(
+            FreeCADGui.Selection.getPreselection().SubElementNames,
+            ("Face3",),
+            "a face the slot takes is preselected",
+        )
+
+        slot.set_promotion_latched(True)
+        self.assertNotIn(
+            "Face3",
+            FreeCADGui.Selection.getPreselection().SubElementNames,
+            "the hover was judged as a face and has to be judged again as a solid",
+        )
+        self.assertIn("one kind", slot.status.text().lower())
+
+    def test_the_header_row_stands_as_tall_as_its_clear_button(self):
+        slot = self._picker(["Solid", "Face"]).slot("References")
+        side = slot.clear_btn.sizeHint().height()
+
+        for button in (slot.arm_btn, slot.solid_btn):
+            self.assertEqual(button.height(), side)
+            self.assertEqual(button.width(), side)
+        self.assertGreater(slot.swatch.height(), 9, "the colour chip was hard to see")
+        self.assertLess(slot.swatch.height(), side, "the chip is a mark, not a button")
+
+    def _with_alt(self, held):
+        """Alt is read live from the keyboard, in two module namespaces."""
+        for module in (selection_coordinator, selection_slots):
+            original = module.alt_held
+            module.alt_held = lambda: held
+            self.addCleanup(setattr, module, "alt_held", original)
+
+    def test_the_alt_key_lands_without_waiting_for_the_poll(self):
+        """
+        The key press carries Alt on a platform whose query cannot.
+
+        Wayland has no live modifier query, so Qt answers one out of the last
+        input event it saw. Alt pressed over a resting pointer produces no
+        such event, and the poll goes on reading the old state until the
+        pointer twitches — which is the move the user should not have to make.
+        """
+        widget = self._picker(["Solid", "Face"])
+        widget._watch_modifier(True)
+        self.addCleanup(widget._watch_modifier, False)
+        slot = widget.slot("References")
+        slot.accept_picks([(self.group, "Face1")])
+        FreeCADGui.Selection.setPreselection(self.group, "Face3", 0.0, 0.0, 0.0, 0)
+
+        # Only the live read sees Alt; the poll is left as blind as Wayland's.
+        original = selection_coordinator.alt_held
+        selection_coordinator.alt_held = lambda: True
+        self.addCleanup(setattr, selection_coordinator, "alt_held", original)
+        QtGui.QApplication.sendEvent(
+            slot,
+            QtGui.QKeyEvent(QtCore.QEvent.KeyPress, QtCore.Qt.Key_Alt, QtCore.Qt.AltModifier),
+        )
+
+        self.assertNotIn(
+            "Face3",
+            FreeCADGui.Selection.getPreselection().SubElementNames,
+            "the key press has to rejudge the hover on its own",
+        )
+
+    def test_holding_alt_rejudges_the_standing_hover(self):
+        """The same as the toggle, but over the poll that watches the key."""
+        widget = self._picker(["Solid", "Face"])
+        slot = widget.slot("References")
+        slot.accept_picks([(self.group, "Face1")])
+        FreeCADGui.Selection.setPreselection(self.group, "Face3", 0.0, 0.0, 0.0, 0)
+        self.assertIn("Face3", FreeCADGui.Selection.getPreselection().SubElementNames)
+
+        self._with_alt(True)
+        widget._poll_modifier()
+
+        self.assertNotIn(
+            "Face3",
+            FreeCADGui.Selection.getPreselection().SubElementNames,
+            "Alt has to reach the standing hover without waiting for a move",
+        )
+        self.assertIn("one kind", slot.status.text().lower())
+
+    def test_turning_promotion_back_off_rejudges_it_again(self):
+        widget = self._picker(["Solid", "Face"], solid=True)
+        slot = widget.slot("References")
+        slot.accept_picks([(self.group, "Face1")])
+        FreeCADGui.Selection.clearPreselection()
+
+        slot.set_promotion_latched(False)
+        self.assertFalse(slot.status.text().lower().startswith("one kind"))
+
+    # -- the close glyph is the button, not the row ---------------------------
+
+    def test_only_the_glyph_answers_the_pointer(self):
+        widget = self._picker(["Face"])
+        slot = widget.slot("References")
+        self._pick(self.group, "Face1")
+        self._pick(self.group, "Face3")
+        slot.list.resize(240, 80)
+        slot.list.show()
+        try:
+            index = slot.list.model().index(0, 0)
+            row = slot.list.visualRect(index)
+            glyph = slot.delegate.glyph_rect(row)
+
+            slot.delegate.eventFilter(
+                slot.list.viewport(), self._move_to(QtCore.QPoint(row.left() + 4, row.center().y()))
+            )
+            self.assertEqual(slot.delegate._hovered, -1, "the label is not the delete button")
+
+            slot.delegate.eventFilter(slot.list.viewport(), self._move_to(glyph.center()))
+            self.assertEqual(slot.delegate._hovered, 0, "the glyph is")
+
+            slot.delegate.eventFilter(slot.list.viewport(), QtCore.QEvent(QtCore.QEvent.Leave))
+            self.assertEqual(slot.delegate._hovered, -1, "leaving the list drops the hover")
+        finally:
+            slot.list.hide()
+
+    def _move_to(self, point):
+        return QtGui.QMouseEvent(
+            QtCore.QEvent.MouseMove,
+            QtCore.QPointF(point),
+            QtCore.Qt.NoButton,
+            QtCore.Qt.NoButton,
+            QtCore.Qt.NoModifier,
+        )
+
+    # -- following the theme --------------------------------------------------
+
+    def _contrast(self, one, two):
+        """WCAG relative-luminance ratio; AA wants 4.5 for body text."""
+
+        def channel(value):
+            value /= 255.0
+            return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+        def luminance(color):
+            return (
+                0.2126 * channel(color.red())
+                + 0.7152 * channel(color.green())
+                + 0.0722 * channel(color.blue())
+            )
+
+        low, high = sorted((luminance(one), luminance(two)))
+        return (high + 0.05) / (low + 0.05)
+
+    def _palette(self, window, ink, base):
+        palette = QtGui.QPalette()
+        for role in (QtGui.QPalette.Window, QtGui.QPalette.Button):
+            palette.setColor(role, QtGui.QColor(window))
+        for role in (QtGui.QPalette.WindowText, QtGui.QPalette.Text, QtGui.QPalette.ButtonText):
+            palette.setColor(role, QtGui.QColor(ink))
+        palette.setColor(QtGui.QPalette.Base, QtGui.QColor(base))
+        return palette
+
+    def test_the_muted_text_stays_legible_on_a_dark_theme(self):
+        """
+        QPalette.Mid is derived from the button colour, so on FreeCAD's dark
+        theme it lands within a hair of the background. The status line and the
+        row glyph have to come off the text colour instead.
+        """
+        for name, window, ink, base in (
+            ("dark", "#202326", "#fcfcfc", "#141618"),
+            ("light", "#efefef", "#232629", "#ffffff"),
+        ):
+            palette = self._palette(window, ink, base)
+            muted = selection_slots.muted_color(palette)
+            glyph = selection_slots.muted_color(palette, on_base=True)
+            self.assertGreater(
+                self._contrast(muted, palette.color(QtGui.QPalette.Window)),
+                4.5,
+                f"the {name} status line is unreadable",
+            )
+            self.assertGreater(
+                self._contrast(glyph, palette.color(QtGui.QPalette.Base)),
+                4.5,
+                f"the {name} row glyph is unreadable",
+            )
+            self.assertGreater(
+                self._contrast(
+                    selection_slots.warn_color(palette), palette.color(QtGui.QPalette.Window)
+                ),
+                4.5,
+                f"the {name} refusal is unreadable",
+            )
+            self.assertGreater(
+                self._contrast(
+                    selection_slots.warn_color(palette, on_base=True),
+                    palette.color(QtGui.QPalette.Base),
+                ),
+                4.5,
+                f"the {name} stale row is unreadable",
+            )
+
+    def test_a_slot_restyles_itself_when_the_theme_changes(self):
+        widget = self._picker(["Face"])
+        slot = widget.slot("References")
+        slot.setPalette(self._palette("#202326", "#fcfcfc", "#141618"))
+        dark = slot.status.styleSheet()
+        slot.setPalette(self._palette("#efefef", "#232629", "#ffffff"))
+        self.assertNotEqual(
+            dark, slot.status.styleSheet(), "the status line kept the other theme's colour"
+        )
+
+    def test_the_drawn_glyphs_fill_the_size_they_are_asked_for(self):
+        """
+        QPainter maps a pixmap's device ratio itself; scaling on top of that
+        drew each glyph at twice the size and clipped away three quarters.
+        """
+        for name, pixmap in (
+            ("warning", selection_slots.warn_pixmap(QtGui.QColor("#d08326"), 12)),
+            ("close", selection_slots.close_icon(QtGui.QColor("#808080"), 14).pixmap(14, 14)),
+        ):
+            image = pixmap.toImage()
+            painted = [
+                (x, y)
+                for x in range(image.width())
+                for y in range(image.height())
+                if image.pixelColor(x, y).alpha() > 40
+            ]
+            self.assertTrue(painted, f"the {name} glyph drew nothing")
+            xs = [x for x, _y in painted]
+            ys = [y for _x, y in painted]
+            # Drawn oversized, the glyph runs off every side of the pixmap;
+            # drawn right, it stops short of all four.
+            self.assertGreater(min(xs), 0, f"the {name} glyph runs off the left")
+            self.assertLess(max(xs), image.width() - 1, f"the {name} glyph runs off the right")
+            self.assertGreater(min(ys), 0, f"the {name} glyph runs off the top")
+            self.assertLess(max(ys), image.height() - 1, f"the {name} glyph runs off the bottom")
+            self.assertGreater(
+                (max(xs) - min(xs) + 1) / image.width(),
+                0.4,
+                f"the {name} glyph is too small to hit",
+            )
+
+    # -- cancelling a panel ---------------------------------------------------
+
+    def test_cancel_rolls_back_what_the_slots_wrote(self):
+        """
+        A slot writes its property as it is picked, so the edit needs its own
+        transaction — otherwise Cancel leaves the picks behind.
+        """
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        constraint.References = [(self.group, "Face3")]
+        self.document.recompute()
+
+        FreeCADGui.ActiveDocument.setEdit(constraint.Name)
+        try:
+            widget = None
+            for candidate in FreeCADGui.getMainWindow().findChildren(
+                selection_slots.ReferenceSelection
+            ):
+                widget = candidate
+            self.assertIsNotNone(widget, "the panel puts up a reference widget")
+            widget.slots[0].accept_picks([(self.group, "Face5")])
+            self.assertEqual(len(selection_slots.flatten_links(constraint.References)), 2)
+            self.assertTrue(
+                self.document.HasPendingTransaction,
+                "an edit session that writes as it goes has to be undoable",
+            )
+        finally:
+            FreeCADGui.Control.closeDialog()
+            # What Cancel does: TaskDlgFemConstraint::reject() aborts the
+            # transaction the view provider opened for the edit.
+            FreeCADGui.ActiveDocument.abortCommand()
+            FreeCADGui.ActiveDocument.resetEdit()
+
+        self.assertEqual(
+            [sub for _obj, sub in selection_slots.flatten_links(constraint.References)],
+            ["Face3"],
+            "cancelling the panel must undo the pick",
+        )

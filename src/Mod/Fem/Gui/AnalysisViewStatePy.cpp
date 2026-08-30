@@ -105,8 +105,8 @@ const char* colorModeToString(ColorMode mode)
     switch (mode) {
         case ColorMode::Subelement:
             return "Subelement";
-        case ColorMode::Toplevel:
-            return "Toplevel";
+        case ColorMode::Component:
+            return "Component";
         case ColorMode::Material:
             return "Material";
         case ColorMode::CellType:
@@ -117,8 +117,8 @@ const char* colorModeToString(ColorMode mode)
 
 ColorMode colorModeFromString(const std::string& s)
 {
-    if (s == "Toplevel") {
-        return ColorMode::Toplevel;
+    if (s == "Component") {
+        return ColorMode::Component;
     }
     if (s == "Material") {
         return ColorMode::Material;

@@ -100,7 +100,7 @@ enum class ActiveStage
 enum class ColorMode
 {
     Subelement = 0,
-    Toplevel,
+    Component,
     Material,
     CellType
 };

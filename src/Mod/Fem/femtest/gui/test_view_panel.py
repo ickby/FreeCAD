@@ -32,6 +32,7 @@ import unittest
 
 import FreeCAD
 import FreeCADGui
+import Fem
 import FemGui
 import Part
 
@@ -89,6 +90,77 @@ def _category_rows(model, parent=None):
             labels.append(node.name)
         labels.extend(_category_rows(model, index))
     return labels
+
+
+def _two_solid_tet_mesh():
+    """
+    One tetrahedron per solid, each with its four skin triangles.
+
+    The volumes are what the analysis solves and the triangles are what the
+    mesher built them from, which is the whole distinction the panel is about:
+    two analysis elements out of ten.
+    """
+    mesh = Fem.FemMesh()
+    for solid, offset in ((1, 0.0), (2, 30.0)):
+        base = mesh.NodeCount
+        nodes = [base + 1, base + 2, base + 3, base + 4]
+        mesh.addNode(offset, 0, 0, nodes[0])
+        mesh.addNode(offset + 1, 0, 0, nodes[1])
+        mesh.addNode(offset, 1, 0, nodes[2])
+        mesh.addNode(offset, 0, 1, nodes[3])
+        volume = mesh.addVolume(nodes)
+        group = mesh.addGroup(f"Solid{solid}", "Volume")
+        mesh.addGroupElements(group, [volume])
+        faces = [
+            mesh.addFace([nodes[0], nodes[1], nodes[2]]),
+            mesh.addFace([nodes[0], nodes[1], nodes[3]]),
+            mesh.addFace([nodes[0], nodes[2], nodes[3]]),
+            mesh.addFace([nodes[1], nodes[2], nodes[3]]),
+        ]
+        for i, face in enumerate(faces, start=1 + (solid - 1) * 4):
+            group = mesh.addGroup(f"Face{i}", "Face")
+            mesh.addGroupElements(group, [face])
+    return mesh
+
+
+def _cell_type_groups(model):
+    """Element type rows under the head that says what they are for."""
+    groups = {}
+    root = view_panel.QModelIndex()
+    for row in range(model.rowCount(root)):
+        head = model.index(row, 0, root)
+        types = []
+        for child in range(model.rowCount(head)):
+            node = model.get_item(model.index(child, 0, head))
+            types.append((node.name, node.count_badge))
+        groups[model.get_item(head).name] = types
+    return groups
+
+
+def _group_index(model, name):
+    """Index of a top-level row by its label."""
+    root = view_panel.QModelIndex()
+    for row in range(model.rowCount(root)):
+        index = model.index(row, 0, root)
+        if model.get_item(index).name == name:
+            return index
+    return root
+
+
+def _cell_type_index(model, group, label):
+    """Index of an element type row under the named head."""
+    head = _group_index(model, group)
+    for row in range(model.rowCount(head)):
+        index = model.index(row, 0, head)
+        if model.get_item(index).name == label:
+            return index
+    return view_panel.QModelIndex()
+
+
+def _enabled_dimensions(combo):
+    """Texts of the dimension entries that can be picked."""
+    model = combo.model()
+    return [combo.itemText(i) for i in range(combo.count()) if model.item(i).isEnabled()]
 
 
 def _index_of(model, element, parent=None):
@@ -149,6 +221,17 @@ class TestViewPanelGui(unittest.TestCase):
         # The panel picks the mesh up from the analysis members
         self.settings.setup_analysis()
         return mesh
+
+    def _add_meshed_mesh(self):
+        """A mesh group with elements in it, in the mesh stage, ready to count."""
+        group = self._add_mesh()
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        child.FemMesh = _two_solid_tet_mesh()
+        group.Group = [child]
+        self.document.recompute()
+        FemGui.getAnalysisViewState(self.analysis).setActiveStage("Mesh")
+        self.settings.setup_analysis()
+        return group
 
     def _enter_edit(self):
         """Enter the partition step the way the view provider does, then hand the
@@ -321,6 +404,67 @@ class TestViewPanelGui(unittest.TestCase):
         finally:
             self._leave_edit()
 
+    # -- switching the stages on and off -------------------------------------
+
+    def test_pressing_the_lit_stage_button_switches_it_off(self):
+        """
+        Showing neither is what clears the view for the results, so the button
+        that is on turns itself off instead of handing over to the other stage.
+        """
+        self._add_mesh()
+        state = FemGui.getAnalysisViewState(self.analysis)
+        state.setActiveStage("Geometry")
+        self.settings.widget.GeometryButton.click()
+        self.assertEqual(state.getActiveStage(), view_panel._NO_STAGE)
+        self.assertFalse(self.settings.widget.GeometryButton.isChecked())
+        self.assertFalse(self.settings.widget.MeshButton.isChecked())
+
+    def test_the_geometry_switches_off_with_no_mesh_to_fall_back_to(self):
+        """An empty view is the point, so having nothing else is no obstacle."""
+        state = FemGui.getAnalysisViewState(self.analysis)
+        state.setActiveStage("Geometry")
+        self.assertFalse(self.settings.widget.MeshButton.isEnabled())
+        self.settings.widget.GeometryButton.click()
+        self.assertEqual(state.getActiveStage(), view_panel._NO_STAGE)
+        self.assertFalse(self.settings.widget.GeometryButton.isChecked())
+
+    def test_the_other_stage_button_still_switches_over(self):
+        self._add_mesh()
+        state = FemGui.getAnalysisViewState(self.analysis)
+        state.setActiveStage("Geometry")
+        self.settings.widget.MeshButton.click()
+        self.assertEqual(state.getActiveStage(), "Mesh")
+        self.assertFalse(self.settings.widget.GeometryButton.isChecked())
+
+    def test_a_stage_switched_off_comes_back_on(self):
+        state = FemGui.getAnalysisViewState(self.analysis)
+        state.setActiveStage("Geometry")
+        self.settings.widget.GeometryButton.click()
+        self.settings.widget.GeometryButton.click()
+        self.assertEqual(state.getActiveStage(), "Geometry")
+
+    def test_showing_neither_survives_a_rescan_of_the_analysis(self):
+        """
+        The panel re-reads the analysis on every geometry or mesh change, and
+        must not take a deliberately blank view for a stage to correct.
+        """
+        state = FemGui.getAnalysisViewState(self.analysis)
+        state.setActiveStage("Geometry")
+        self.settings.widget.GeometryButton.click()
+        self.settings.setup_analysis()
+        self.assertEqual(state.getActiveStage(), view_panel._NO_STAGE)
+
+    def test_a_mesh_that_goes_away_hands_the_stage_back_to_the_geometry(self):
+        """The mesh stage draws nothing once the mesh is gone, and the buttons
+        offer no way out of it either, so the panel has to leave it."""
+        mesh = self._add_mesh()
+        state = FemGui.getAnalysisViewState(self.analysis)
+        state.setActiveStage("Mesh")
+        self.document.removeObject(mesh.Name)
+        self.document.recompute()
+        self.settings.setup_analysis()
+        self.assertEqual(state.getActiveStage(), "Geometry")
+
     # -- the stage while a step is open --------------------------------------
 
     def test_editing_a_step_puts_the_view_into_the_geometry_stage(self):
@@ -346,6 +490,133 @@ class TestViewPanelGui(unittest.TestCase):
         self._enter_edit()
         self._leave_edit()
         self.assertEqual(state.getActiveStage(), "Geometry")
+
+    # -- analysis elements and the ones the mesher built them from -----------
+
+    def test_the_dimension_modes_are_dimensions(self):
+        """
+        Shapes are what a mesh is made of, dimensions are what an analysis is
+        about, and the panel filters by the latter.
+        """
+        combo = self.settings.widget.Dimension
+        offered = [combo.itemText(i) for i in range(combo.count())]
+        self.assertEqual(offered, ["All", "3D", "2D", "1D", "0D"])
+        state = FemGui.getAnalysisViewState(self.analysis)
+        self.assertEqual(state.getDimensionMode(), "All")
+        state.setDimensionMode("2D")
+        self.assertEqual(state.getDimensionMode(), "2D")
+
+    def test_only_the_dimensions_the_analysis_has_can_be_picked(self):
+        """
+        Two tetrahedra with their skin: the analysis solves the volumes and
+        nothing else, so 3D is the only dimension there is to pick out of it.
+        """
+        self._add_meshed_mesh()
+        self.assertEqual(_enabled_dimensions(self.settings.widget.Dimension), ["All", "3D"])
+
+    def test_the_construction_elements_open_up_the_other_dimensions(self):
+        """The skin triangles are 2D, and taking them in is what says so."""
+        self._add_meshed_mesh()
+        self.settings.widget.Construction.click()
+        self.assertTrue(FemGui.getAnalysisViewState(self.analysis).getShowConstruction())
+        self.assertEqual(_enabled_dimensions(self.settings.widget.Dimension), ["All", "3D", "2D"])
+
+    def test_the_count_says_how_much_of_the_mesh_the_analysis_solves(self):
+        """
+        The number nobody has to read anything to notice: two of ten, closing
+        to ten of ten the moment the construction elements are taken in.
+        """
+        self._add_meshed_mesh()
+        self.assertEqual(self.settings.widget.ElementCount.text(), "2 / 10")
+        self.settings.widget.Construction.click()
+        self.assertEqual(self.settings.widget.ElementCount.text(), "10 / 10")
+
+    def test_the_count_follows_the_dimension_that_is_picked(self):
+        self._add_meshed_mesh()
+        self.settings.widget.Construction.click()
+        FemGui.getAnalysisViewState(self.analysis).setDimensionMode("2D")
+        self.assertEqual(self.settings.widget.ElementCount.text(), "8 / 10")
+
+    def test_dropping_the_construction_elements_leaves_no_empty_view_behind(self):
+        """
+        2D is the construction elements here, and switching them off greys the
+        entry out, which is no way back out of an empty view. So the mode goes
+        back to showing everything the analysis has.
+        """
+        self._add_meshed_mesh()
+        state = FemGui.getAnalysisViewState(self.analysis)
+        self.settings.widget.Construction.click()
+        state.setDimensionMode("2D")
+        self.settings.widget.Construction.click()
+        self.assertFalse(state.getShowConstruction())
+        self.assertEqual(state.getDimensionMode(), "All")
+
+    def test_a_dimension_the_analysis_does_have_survives_the_switch(self):
+        self._add_meshed_mesh()
+        state = FemGui.getAnalysisViewState(self.analysis)
+        self.settings.widget.Construction.click()
+        state.setDimensionMode("3D")
+        self.settings.widget.Construction.click()
+        self.assertEqual(state.getDimensionMode(), "3D")
+
+    def test_only_a_mesh_has_construction_elements(self):
+        """The faces of a solid are the solid, not scaffolding around it."""
+        self._add_meshed_mesh()
+        state = FemGui.getAnalysisViewState(self.analysis)
+        self.assertTrue(self.settings.widget.Construction.isEnabled())
+        state.setActiveStage("Geometry")
+        self.assertFalse(self.settings.widget.Construction.isEnabled())
+        self.assertEqual(self.settings.widget.ElementCount.text(), "")
+
+    def test_nothing_drawn_means_nothing_to_describe(self):
+        """
+        With neither stage lit there is no content, so the controls that
+        describe it go with it. The scene settings stay, they still apply to
+        whatever results are on screen.
+        """
+        self._add_meshed_mesh()
+        FemGui.getAnalysisViewState(self.analysis).setActiveStage(view_panel._NO_STAGE)
+        self.assertFalse(self.settings.widget.Dimension.isEnabled())
+        self.assertFalse(self.settings.widget.Construction.isEnabled())
+        self.assertFalse(self.explorer._color_mode.isEnabled())
+        self.assertTrue(self.settings.widget.ViewMode.isEnabled())
+        self.assertTrue(self.settings.widget.Overlay.isEnabled())
+        self.assertTrue(self.settings.widget.ClipButton.isEnabled())
+
+    def test_a_toplevel_the_mesh_came_up_short_on_says_what_it_reached(self):
+        """
+        The mesher did not fail, it came up one dimension short, and the
+        analysis runs on what it did reach.
+        """
+        node = view_panel.ElementNode("Solid1", dim_badge=3, mesh_achieved=2)
+        self.assertEqual(node.display_name(), "Solid1 [3D, meshed 2D]")
+        self.assertEqual(
+            view_panel.ElementNode("Solid1", dim_badge=3).display_name(), "Solid1 [3D]"
+        )
+
+    def test_the_dimension_a_toplevel_reached_reaches_the_panel(self):
+        """The tree reads the achieved dimension off the view state by name."""
+        self._add_meshed_mesh()
+        under = FemGui.getAnalysisViewState(self.analysis).getUnderAchievedElements()
+        self.assertIsInstance(under, dict)
+        for achieved in under.values():
+            self.assertIsInstance(achieved, int)
+
+    def test_a_colouring_of_mesh_elements_is_greyed_out_off_the_mesh(self):
+        """
+        The view state pushes CellType back to Subelement outside the mesh
+        stage, and a combo that springs back when let go is a riddle.
+        """
+        self._add_mesh()
+        combo = self.explorer._color_mode
+        model = combo.model()
+        cell_type = combo.findText("CellType")
+        state = FemGui.getAnalysisViewState(self.analysis)
+
+        state.setActiveStage("Geometry")
+        self.assertFalse(model.item(cell_type).isEnabled())
+        state.setActiveStage("Mesh")
+        self.assertTrue(model.item(cell_type).isEnabled())
 
     # -- placed instances in the tree ---------------------------------------
 
@@ -430,6 +701,62 @@ class TestViewPanelGui(unittest.TestCase):
         self.assertTrue(self.settings.widget.MeshButton.isEnabled())
         self.assertTrue(self.settings.widget.GeometryButton.isEnabled())
 
+    # -- the clipping list ---------------------------------------------------
+
+    def test_the_empty_clipping_list_says_it_is_empty(self):
+        """
+        A frame around a lone button reads as a bug. One dimmed line turns it
+        into a list that happens to have nothing in it yet.
+        """
+        self.assertTrue(self.settings.widget.ClipHint.isVisible())
+        self.settings.widget.ClipButton.click()
+        self.assertEqual(len(self.settings.clip_widgets()), 1)
+        self.assertFalse(self.settings.widget.ClipHint.isVisible())
+
+    def test_the_hint_comes_back_when_the_last_plane_goes(self):
+        self.settings.widget.ClipButton.click()
+        row = self.settings.clip_widgets()[0]
+        row.widget.DeleteButton.click()
+        self.assertEqual(self.settings.clip_widgets(), [])
+        self.assertTrue(self.settings.widget.ClipHint.isVisible())
+
+    def test_a_clip_row_carries_what_it_cuts(self):
+        """
+        Planes are called 1, 2, 3, which tells the rows apart and nothing else.
+        What distinguishes them at a glance is how far they reach.
+        """
+        imp = self._import_another_analysis()
+        self.settings.widget.ClipButton.click()
+        row = self.settings.clip_widgets()[0]
+        self.assertEqual(row.widget.ClipButton.text(), row.name)
+
+        row.handle.setScope(imp.Name)
+        row.setup_label()
+        self.assertEqual(row.widget.ClipButton.text(), f"{row.name} · {imp.Name}")
+
+    def test_the_clip_normal_reaches_an_axis_without_being_typed(self):
+        """
+        Six of the directions a clipping plane is ever given are the axes, and
+        typing three numbers to reach one is three chances to miss.
+        """
+        self.settings.widget.ClipButton.click()
+        editor = self.settings.clip_widgets()[0].editor
+        handle = editor.handle
+        origin = handle.getOrigin()
+
+        # The normal comes back off the single precision dragger, so it is the
+        # direction that is asserted rather than the digits.
+        def assert_normal(expected):
+            for got, want in zip(handle.getNormal(), expected):
+                self.assertAlmostEqual(got, want, places=5)
+
+        editor.widget.NormalYButton.click()
+        assert_normal([0.0, 1.0, 0.0])
+        self.assertEqual(list(handle.getOrigin()), list(origin), "the plane stays where it is")
+
+        editor.widget.FlipButton.click()
+        assert_normal([0.0, -1.0, 0.0])
+
     # -- the entry point the user takes -------------------------------------
 
     def test_double_click_edit_moves_the_tree_and_the_stage(self):
@@ -448,3 +775,191 @@ class TestViewPanelGui(unittest.TestCase):
             FreeCADGui.ActiveDocument.resetEdit()
         self.assertIs(self.explorer._tree_object(), self.group)
         self.assertEqual(state.getActiveStage(), "Mesh")
+
+
+class _CellTypeState:
+    """
+    Stand-in for the view state, handing out cell-type categories.
+
+    The real ones come off the mesh grid a view provider registers, which needs
+    the whole VTK pipeline on screen; what is asked here is what the tree makes
+    of them, and that is answered without a mesh in sight.
+    """
+
+    def __init__(self, categories):
+        self._categories = categories
+        self.hidden_types = set()
+        self.show_construction = False
+
+    def getColorMode(self):
+        return "CellType"
+
+    def getCategories(self):
+        return self._categories
+
+    def getUnderAchievedElements(self):
+        return {}
+
+    def isCellTypeHidden(self, key):
+        return key in self.hidden_types
+
+    def setCellTypeHidden(self, key, hidden):
+        self.hidden_types.add(key) if hidden else self.hidden_types.discard(key)
+
+    def getShowConstruction(self):
+        return self.show_construction
+
+    def setShowConstruction(self, value):
+        self.show_construction = bool(value)
+
+    def isElementHidden(self, name):
+        return False
+
+    def beginUpdate(self):
+        pass
+
+    def endUpdate(self):
+        pass
+
+
+class _NamedObject:
+    def __init__(self, label):
+        self.Label = label
+
+
+def _cell_type(label, construction, count, key=None):
+    return {
+        "key": key or (f"{label}:construction" if construction else label),
+        "label": label,
+        "color": (0.5, 0.5, 0.5, 1.0),
+        "construction": construction,
+        "count": count,
+    }
+
+
+class TestCellTypeTreeGui(unittest.TestCase):
+    """The element types of a mesh, and which side of the analysis each is on."""
+
+    fcc_print("import TestCellTypeTreeGui")
+
+    def _tree(self, categories):
+        state = _CellTypeState(categories)
+        model = view_panel.GeometryModel()
+        model.set_context(_NamedObject("Mesh"), state)
+        return model, state
+
+    def _both_sides(self):
+        """
+        A solid meshed with tetrahedra and skinned with triangles, plus a shell
+        of triangles of its own: the one case where a type is on both sides.
+        """
+        return self._tree(
+            [
+                _cell_type("tetra4", False, 2),
+                _cell_type("tria3", False, 1),
+                _cell_type("tria3", True, 7),
+            ]
+        )
+
+    def test_the_element_types_say_which_side_of_the_analysis_they_are_on(self):
+        """
+        Two heads, and every type under the one that says what it is for. The
+        tetrahedra are the analysis, the triangles skinning them are what the
+        mesher needed to get there.
+        """
+        model, _ = self._tree([_cell_type("tetra4", False, 2), _cell_type("tria3", True, 8)])
+        self.assertEqual(
+            _cell_type_groups(model),
+            {"Analysis elements": [("tetra4", 2)], "Construction elements": [("tria3", 8)]},
+        )
+
+    def test_a_type_that_is_both_is_listed_on_both_sides(self):
+        """
+        The triangles of a shell and the triangles skinning a solid are all
+        tria3, and which of the two a row means is not something the type name
+        can say. So it is offered twice, once under each head.
+        """
+        model, _ = self._both_sides()
+        groups = _cell_type_groups(model)
+        self.assertEqual(groups["Analysis elements"], [("tetra4", 2), ("tria3", 1)])
+        self.assertEqual(groups["Construction elements"], [("tria3", 7)])
+
+    def test_hiding_the_skin_triangles_leaves_the_shell_triangles_alone(self):
+        """Two rows of one type are two rows, or splitting them was pointless."""
+        model, state = self._both_sides()
+        shell = model.get_item(_cell_type_index(model, "Analysis elements", "tria3"))
+        skin = model.get_item(_cell_type_index(model, "Construction elements", "tria3"))
+        self.assertNotEqual(shell.category_key, skin.category_key)
+
+        skin.set_visible(False)
+        self.assertFalse(skin.visible())
+        self.assertTrue(shell.visible())
+        self.assertEqual(state.hidden_types, {"tria3:construction"})
+
+    def test_the_construction_head_is_the_construction_setting(self):
+        """
+        One state, two ways in. The tree is otherwise no place to filter the
+        view from, and a head that only looked like the panel checkbox would be
+        a second switch to keep in step with the first.
+        """
+        model, state = self._both_sides()
+        head = _group_index(model, "Construction elements")
+        self.assertFalse(model.get_item(head).visible())
+
+        model.setData(
+            head.sibling(head.row(), 2), view_panel.Qt.Checked, view_panel.Qt.CheckStateRole
+        )
+        self.assertTrue(state.getShowConstruction())
+        self.assertTrue(model.get_item(head).visible())
+
+    def test_the_construction_head_leaves_the_hides_below_it_alone(self):
+        """Turning the group off and on again gives it back the way it was."""
+        model, state = self._both_sides()
+        skin = model.get_item(_cell_type_index(model, "Construction elements", "tria3"))
+        state.setShowConstruction(True)
+        skin.set_visible(False)
+
+        head = model.get_item(_group_index(model, "Construction elements"))
+        head.set_visible(False)
+        head.set_visible(True)
+        self.assertEqual(state.hidden_types, {"tria3:construction"})
+
+    def test_a_construction_type_cannot_be_ticked_while_the_group_is_off(self):
+        """
+        None of them is drawn while the head is off, whatever its own box says,
+        and a tick that changes nothing is worse than one that cannot be given.
+        """
+        model, state = self._both_sides()
+
+        def checkable():
+            index = _cell_type_index(model, "Construction elements", "tria3")
+            return bool(
+                model.flags(index.sibling(index.row(), 2)) & view_panel.Qt.ItemIsUserCheckable
+            )
+
+        self.assertFalse(checkable())
+        state.setShowConstruction(True)
+        self.assertTrue(checkable())
+
+    def test_an_analysis_type_is_never_greyed_out(self):
+        """The construction setting has no say over the elements that are solved."""
+        model, _ = self._both_sides()
+        index = _cell_type_index(model, "Analysis elements", "tria3")
+        self.assertTrue(model.get_item(index).enabled())
+
+    def test_the_types_stay_put_when_the_construction_elements_go(self):
+        """
+        The tree says what the mesh is made of, not what is on screen: no other
+        setting shortens it, and this one having done would have been the odd
+        one out.
+        """
+        model, state = self._both_sides()
+        before = _cell_type_groups(model)
+        state.setShowConstruction(True)
+        model.update_model()
+        self.assertEqual(_cell_type_groups(model), before)
+
+    def test_the_count_rides_behind_the_element_type(self):
+        """Same badge the dimension of a toplevel gets, for the same reason."""
+        node = view_panel.ElementNode("tetra4", count_badge=1234)
+        self.assertEqual(node.display_name(), "tetra4 [1\u202f234]")

@@ -56,6 +56,13 @@ struct FemGuiExport Category
     std::string key;    ///< Stable identity (material Name, VTKCellType, element name, ...)
     std::string label;  ///< Display label
     Base::Color color;
+    /// Cells the mesher built the mesh from rather than ones the analysis
+    /// solves on. Only CellType tells the two apart; the label stays the same
+    /// for both, the tree groups by this.
+    bool construction {false};
+    /// Cells in the category, where counting them is the classification's to
+    /// do; the tree counts its own children for the geometry-keyed modes.
+    int count {0};
 };
 
 /**
@@ -82,6 +89,15 @@ public:
      * the palette without anything in a document having to change.
      */
     static Base::Color colorForIndex(int index);
+
+    /**
+     * The washed-out twin of a category colour, for the construction elements.
+     *
+     * Skin triangles and shell triangles are the same VTK type, so the two
+     * keep the one hue their type was given and it is the tone that tells them
+     * apart: scaffolding reads as the pale one without a legend to consult.
+     */
+    static Base::Color constructionColor(const Base::Color& color);
 
     /**
      * Build the classification for the active colour mode.
@@ -183,18 +199,31 @@ private:
     std::vector<int> m_cellCategory;
 };
 
-/** Categories from the baked celltype array on the input grid. */
+/**
+ * Categories from the baked celltype array on the input grid, each VTK type
+ * split into the cells the analysis solves on and the cells the mesher built
+ * them from. A type that is only ever scaffolding therefore shows up once, a
+ * type that is both (tria3 skinning a solid, tria3 being a shell) twice.
+ */
 class FemGuiExport CellTypeClassification: public Classification
 {
 public:
-    explicit CellTypeClassification(vtkUnstructuredGrid* meshGrid);
+    CellTypeClassification(
+        vtkUnstructuredGrid* meshGrid,
+        Fem::FemGeometry* geometry,
+        const GridSource& gridSource = {}
+    );
 
     std::vector<Category> categories() const override;
     int categoryOfElement(const std::string& element) const override;
     int categoryOfCell(vtkIdType cell) const override;
 
 private:
-    void build(vtkUnstructuredGrid* meshGrid);
+    void build(
+        vtkUnstructuredGrid* meshGrid,
+        Fem::FemGeometry* geometry,
+        const GridSource& gridSource
+    );
 
     std::vector<Category> m_categories;
     std::map<std::string, int> m_keyToIndex;

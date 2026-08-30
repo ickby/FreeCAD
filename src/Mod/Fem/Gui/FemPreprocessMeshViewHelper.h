@@ -148,6 +148,7 @@ private:
 
     bool m_viewStateCacheValid {false};
     DimensionMode m_cachedDimMode {DimensionMode::Highest};
+    bool m_cachedShowConstruction {false};
     bool m_cachedWireframe {false};
     ColorMode m_cachedColorMode {ColorMode::Subelement};
     std::set<std::string> m_cachedHidden;
@@ -156,7 +157,7 @@ private:
     /// What the state above was last worked out to mean, cell by cell.
     std::vector<unsigned char> m_cachedVisibility;
     std::vector<unsigned char> m_cachedOverlay;
-    std::set<std::string> m_cachedUnderAchieved;
+    std::map<std::string, int> m_cachedUnderAchieved;
 };
 
 }  // namespace FemGui

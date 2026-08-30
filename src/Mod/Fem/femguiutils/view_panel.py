@@ -47,8 +47,22 @@ from PySide.QtCore import QModelIndex, Qt, QAbstractItemModel
 # store of current dock
 __dock = None
 
-_DIM_MODES = ["Highest", "Volume", "Surface", "Curve", "Point"]
+# The dimension the mode picks out, None standing for all of them. Shapes are
+# what the mesh is made of, dimensions are what the analysis is about, and the
+# panel filters by the latter: a "Surface" is a shell to one part and the skin
+# of a solid to the next, whereas 2D is 2D.
+_DIM_MODES = {"All": None, "3D": 3, "2D": 2, "1D": 1, "0D": 0}
+_ALL_DIMENSIONS = "All"
 _COLOR_MODES = ["Subelement", "Toplevel", "Material", "CellType"]
+# Colour modes that describe mesh elements and mean nothing to the geometry.
+_MESH_COLOR_MODES = {"CellType"}
+_TREE_ICON_SIZE = 16
+_COLOR_COLUMN_WIDTH = _TREE_ICON_SIZE + 12
+_VIS_COLUMN_WIDTH = 32
+# The stage where neither geometry nor mesh is drawn. Switching both off is
+# what clears the view for the results, so the result stage is where that
+# lands; every preprocessing view provider already hides outside its own stage.
+_NO_STAGE = "Result"
 _ELEMENT_NAME = re.compile(r"^(Component|CompSolid|Compound|Solid|Shell|Face|Wire|Edge|Vertex)\d+$")
 
 # One placed instance in the tree of an analysis:
@@ -66,6 +80,16 @@ _ImportPlace = collections.namedtuple(
 
 def _ui_path(name):
     return FreeCAD.getHomePath() + "Mod/Fem/Resources/ui/" + name
+
+
+def _thousands(number):
+    """Group an element count, thin space rather than comma or point.
+
+    Element counts run to six figures, where the eye needs the grouping, and
+    the thin space is the one separator that reads the same wherever the user
+    is from.
+    """
+    return f"{number:,}".replace(",", "\u202f")
 
 
 def _color_tuple(color):
@@ -275,9 +299,11 @@ class ElementNode:
         category_key=None,
         color=None,
         dim_badge=None,
-        mesh_failed=False,
+        mesh_achieved=None,
+        count_badge=None,
         is_category=False,
         cell_type=False,
+        construction_group=False,
     ):
         self.name = name
         self.children = []
@@ -290,9 +316,16 @@ class ElementNode:
         self.category_key = category_key
         self._color = color
         self.dim_badge = dim_badge
-        self.mesh_failed = mesh_failed
+        # Dimension the mesh reached where that is below the declared one, None
+        # where it met it.
+        self.mesh_achieved = mesh_achieved
+        # Elements the row stands for, where the tree cannot count them itself.
+        self.count_badge = count_badge
         self.is_category = is_category
         self.cell_type = cell_type  # hide via cell-type set
+        # Head of the construction elements: its tick is the construction
+        # setting itself, not a hide of its own.
+        self.construction_group = construction_group
         self.view_state = None
 
     def parent(self):
@@ -311,9 +344,24 @@ class ElementNode:
             return self._parent.children.index(self)
         return 0
 
+    def enabled(self):
+        """
+        False for a row whose tick cannot reach the 3D view: the construction
+        elements answer to their own setting first, and while that is off none
+        of them is drawn whatever their own box says.
+        """
+        if not self.view_state:
+            return True
+        parent = self._parent
+        if parent is not None and parent.construction_group:
+            return bool(self.view_state.getShowConstruction())
+        return True
+
     def visible(self):
         if not self.view_state:
             return True
+        if self.construction_group:
+            return bool(self.view_state.getShowConstruction())
         if self.cell_type and self.category_key:
             return not self.view_state.isCellTypeHidden(self.category_key)
         if self.element:
@@ -327,6 +375,12 @@ class ElementNode:
         if not self.view_state:
             return
         hidden = not value
+        if self.construction_group:
+            # One state, two ways in: the panel checkbox and this row. Leaving
+            # the per-type hides below untouched means the group comes back the
+            # way the user last had it.
+            self.view_state.setShowConstruction(bool(value))
+            return
         if self.cell_type and self.category_key:
             self.view_state.setCellTypeHidden(self.category_key, hidden)
             return
@@ -345,8 +399,17 @@ class ElementNode:
         extras = []
         if self.dim_badge is not None:
             extras.append(f"{self.dim_badge}D")
-        if self.mesh_failed:
-            extras.append("mesh failed")
+        if self.count_badge is not None:
+            extras.append(_thousands(self.count_badge))
+        if self.mesh_achieved is not None:
+            # The mesher did not fail, it came up one dimension short, and the
+            # analysis runs on what it did reach. Saying which one that is
+            # spares a trip to the mesh to find out.
+            extras.append(
+                QtCore.QCoreApplication.translate("FEM_ViewPanel", "meshed {}D").format(
+                    self.mesh_achieved
+                )
+            )
         if extras:
             return f"{label} [{', '.join(extras)}]"
         return label
@@ -397,7 +460,7 @@ class GeometryModel(QAbstractItemModel):
             return
 
         color_mode = self.view_state.getColorMode()
-        under = set(self.view_state.getUnderAchievedElements() or [])
+        under = self.view_state.getUnderAchievedElements() or {}
 
         if color_mode in ("Material", "CellType") and not self.geometry_only:
             self.root = self._build_category_tree(color_mode, under)
@@ -519,7 +582,7 @@ class GeometryModel(QAbstractItemModel):
                     sub_name=f"{sub_prefix}{sub}",
                     color=color,
                     dim_badge=dim if dim is not None and dim >= 0 else None,
-                    mesh_failed=element_path in under,
+                    mesh_achieved=under.get(element_path),
                 )
                 geometry_node.children.append(node)
                 for child_name in _child_entity_names(geom_obj, sub):
@@ -533,14 +596,17 @@ class GeometryModel(QAbstractItemModel):
                         target_obj=target,
                         sub_name=f"{sub_prefix}{child_name}",
                         color=child_color,
-                        mesh_failed=child_path in under,
+                        mesh_achieved=under.get(child_path),
                     )
                     node.children.append(child)
 
     def _build_category_tree(self, color_mode, under):
         root = self._root_node()
         cats = self.view_state.getCategories() or []
-        cell_type = color_mode == "CellType"
+        if color_mode == "CellType":
+            # Cell types are mesh-local, so no element of the geometry is going
+            # to end up under one of them.
+            return self._append_cell_types(root, cats)
 
         # (element, analysis-relative path, geometry, select-on object, subname)
         all_elements = []
@@ -574,13 +640,8 @@ class GeometryModel(QAbstractItemModel):
                 category_key=key,
                 color=color,
                 is_category=True,
-                cell_type=cell_type,
             )
             root.children.append(cat_node)
-
-            if cell_type:
-                cat_node.name = label
-                continue
 
             for e, element_path, geom, target, sub_name in all_elements:
                 if self.view_state.categoryOfElement(element_path) != cat_idx:
@@ -599,12 +660,71 @@ class GeometryModel(QAbstractItemModel):
                     category_key=key,
                     color=color,
                     dim_badge=dim if dim is not None and dim >= 0 else None,
-                    mesh_failed=element_path in under,
+                    mesh_achieved=under.get(element_path),
                 )
                 cat_node.children.append(member)
 
             count = len(cat_node.children)
             cat_node.name = f"{label} ({count})"
+
+        return root
+
+    def _append_cell_types(self, root, cats):
+        """
+        The element types under the two heads that say what they are for.
+
+        Which types the analysis solves on and which ones only got the mesher
+        there is the one thing the cell-type colouring is asked to teach, and a
+        type can sit on both sides at once: the triangles skinning a solid and
+        the triangles of a shell are both tria3. Grouping says which is which
+        without the list having to shrink and grow as the view is filtered,
+        which is not something the tree does for any other setting.
+        """
+        groups = {}
+
+        def group_for(construction):
+            node = groups.get(construction)
+            if node is not None:
+                return node
+            name = (
+                QtCore.QCoreApplication.translate("FEM_ViewPanel", "Construction elements")
+                if construction
+                else QtCore.QCoreApplication.translate("FEM_ViewPanel", "Analysis elements")
+            )
+            node = ElementNode(
+                name,
+                root,
+                is_category=True,
+                construction_group=construction,
+            )
+            groups[construction] = node
+            return node
+
+        # Analysis first whatever order the categories arrive in; the mesh is
+        # the point and the scaffolding is the footnote.
+        for construction in (False, True):
+            for cat in cats:
+                if bool(cat.get("construction")) != construction:
+                    continue
+                key = cat["key"]
+                label = cat.get("label") or key
+                parent = group_for(construction)
+                parent.children.append(
+                    ElementNode(
+                        label,
+                        parent,
+                        category_key=key,
+                        color=_color_tuple(cat.get("color")),
+                        count_badge=cat.get("count"),
+                        is_category=True,
+                        cell_type=True,
+                    )
+                )
+
+        for construction in (False, True):
+            node = groups.get(construction)
+            if node is not None:
+                root.children.append(node)
 
         return root
 
@@ -621,6 +741,9 @@ class GeometryModel(QAbstractItemModel):
         if role == Qt.ItemDataRole.DisplayRole and column == 0:
             return node.display_name()
 
+        if role == Qt.ItemDataRole.ToolTipRole and column == 0:
+            return node.display_name()
+
         # Stable key for selection sync (DisplayRole includes badges like "[3D]")
         if role == Qt.ItemDataRole.UserRole and column == 0:
             return node.element or node.name
@@ -628,7 +751,8 @@ class GeometryModel(QAbstractItemModel):
         if role == Qt.DecorationRole and column == 1:
             color = node.color()
             if color:
-                pixmap = QtGui.QPixmap(64, 64)
+                size = _TREE_ICON_SIZE
+                pixmap = QtGui.QPixmap(size, size)
                 pixmap.fill(
                     QtGui.QColor(
                         int(255 * color[0]),
@@ -647,6 +771,12 @@ class GeometryModel(QAbstractItemModel):
     def flags(self, index):
         if not index.isValid():
             return Qt.NoItemFlags
+
+        node = self.get_item(index)
+        if node is not None and not node.enabled():
+            # Still selectable: a row the user cannot tick right now is one
+            # they should still be able to pick out in the 3D view.
+            return Qt.ItemIsSelectable
 
         if index.column() == 2:
             return Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsUserCheckable
@@ -719,16 +849,29 @@ class GeometryModel(QAbstractItemModel):
         return False
 
     def _emit_check_column(self, index):
-        """Refresh checkbox column for this node, ancestors, and descendants."""
+        """
+        Refresh this node, its ancestors and its descendants.
+
+        The whole row, not only the box: turning the construction elements off
+        greys out the types under them, and a row that changed how it is drawn
+        has to be repainted for the user to see it.
+        """
         if not index.isValid():
             return
-        # Descendants (parent toggle propagates hide to children)
-        stack = [index]
+
+        def refresh(row):
+            first = row.sibling(row.row(), 0)
+            last = row.sibling(row.row(), self.columnCount(row.parent()) - 1)
+            if first.isValid() and last.isValid():
+                self.dataChanged.emit(first, last)
+
+        # Descendants (parent toggle propagates hide to children). Off the first
+        # column an index has no children to walk, and the box that was ticked
+        # sits in the last one.
+        stack = [index.sibling(index.row(), 0)]
         while stack:
             cur = stack.pop()
-            check_idx = cur.sibling(cur.row(), 2)
-            if check_idx.isValid():
-                self.dataChanged.emit(check_idx, check_idx, [Qt.CheckStateRole])
+            refresh(cur)
             item = cur.internalPointer()
             if not item:
                 continue
@@ -737,17 +880,8 @@ class GeometryModel(QAbstractItemModel):
         # Ancestors (parent partial/all visibility)
         parent = index.parent()
         while parent.isValid():
-            check_idx = parent.sibling(parent.row(), 2)
-            if check_idx.isValid():
-                self.dataChanged.emit(check_idx, check_idx, [Qt.CheckStateRole])
+            refresh(parent)
             parent = parent.parent()
-
-    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DecorationRole:
-            if section == 2:
-                return FreeCADGui.getIcon("dagViewVisible.svg")
-            return ""
-        return None
 
 
 class GeometryExplorer(QtGui.QTreeView):
@@ -762,6 +896,8 @@ class GeometryExplorer(QtGui.QTreeView):
         self.edit_obj = None
         self._edit_step = None
         self._pre_edit_hidden = None
+        self._color_mode = None
+        self._updating_color_mode = False
 
         size_policy = QtGui.QSizePolicy(
             QtGui.QSizePolicy.Policy.Expanding, QtGui.QSizePolicy.Policy.Expanding
@@ -777,6 +913,14 @@ class GeometryExplorer(QtGui.QTreeView):
         self._model._explorer = self
         self.setModel(self._model)
 
+        self.setHeaderHidden(True)
+        self.setIconSize(QtCore.QSize(_TREE_ICON_SIZE, _TREE_ICON_SIZE))
+        if hasattr(QtCore.Qt, "TextElideMode"):
+            self.setTextElideMode(QtCore.Qt.TextElideMode.ElideRight)
+        else:
+            self.setTextElideMode(QtCore.Qt.ElideRight)
+        self._configure_columns()
+
         self.active_analysis = FemGui.getActiveAnalysis()
         if self.active_analysis:
             self.setup_analysis()
@@ -789,6 +933,85 @@ class GeometryExplorer(QtGui.QTreeView):
         # NoResolve (0): selection of geometry under Analysis is remapped to a
         # dotted parent path; OldStyle resolve may drop those events entirely.
         FreeCADGui.Selection.addObserver(self, 0)
+
+    def _configure_columns(self):
+        """Keep colour and visibility columns minimal and pinned to the right."""
+        header = self.header()
+        header.setStretchLastSection(False)
+        header.setCascadingSectionResizes(False)
+        header.setSectionsMovable(False)
+        header.setMinimumSectionSize(1)
+        if hasattr(header, "setSectionResizeMode"):
+            fixed = QtGui.QHeaderView.ResizeMode.Fixed
+            stretch = QtGui.QHeaderView.ResizeMode.Stretch
+            set_mode = header.setSectionResizeMode
+        else:
+            fixed = QtGui.QHeaderView.Fixed
+            stretch = QtGui.QHeaderView.Stretch
+            set_mode = header.setResizeMode
+        set_mode(0, stretch)
+        set_mode(1, fixed)
+        set_mode(2, fixed)
+        header.resizeSection(1, _COLOR_COLUMN_WIDTH)
+        header.resizeSection(2, _VIS_COLUMN_WIDTH)
+
+    def attach_color_mode(self, combo):
+        """Wire the tree header combo that selects the colour layout."""
+        self._color_mode = combo
+        combo.currentIndexChanged.connect(self._colormode_changed)
+        self._sync_color_mode()
+
+    def _sync_color_mode(self):
+        combo = self._color_mode
+        if combo is None:
+            return
+        stage = self.view_state.getActiveStage() if self.view_state else None
+        # Nothing is drawn outside the two preprocessing stages, so there is no
+        # colouring to choose either.
+        combo.setEnabled(stage in ("Geometry", "Mesh"))
+        if not self.view_state:
+            return
+        self._sync_color_mode_entries(combo, stage)
+        cm = self.view_state.getColorMode()
+        idx = combo.findText(cm)
+        if idx < 0:
+            return
+        self._updating_color_mode = True
+        try:
+            combo.setCurrentIndex(idx)
+        finally:
+            self._updating_color_mode = False
+
+    @staticmethod
+    def _sync_color_mode_entries(combo, stage):
+        """
+        Grey out the entries that say nothing about the stage on show.
+
+        The view state coerces a mesh colouring back to Subelement outside the
+        mesh stage, and a combo that springs back the moment it is let go is a
+        riddle. Greyed out it is an answer instead.
+        """
+        why = QtCore.QCoreApplication.translate(
+            "FEM_ViewPanel", "Colours mesh elements, so only the mesh stage has it"
+        )
+        model = combo.model()
+        for index in range(combo.count()):
+            item = model.item(index) if hasattr(model, "item") else None
+            if item is None:
+                continue
+            mesh_only = combo.itemText(index) in _MESH_COLOR_MODES
+            item.setEnabled(not mesh_only or stage == "Mesh")
+            combo.setItemData(
+                index,
+                why if mesh_only else None,
+                QtCore.Qt.ItemDataRole.ToolTipRole,
+            )
+
+    def _colormode_changed(self, index):
+        if self._updating_color_mode or not self.view_state or self._color_mode is None:
+            return
+        text = self._color_mode.itemText(index)
+        self.view_state.setColorMode(text)
 
     def shutdown(self):
         self._disconnect_view_state()
@@ -813,6 +1036,7 @@ class GeometryExplorer(QtGui.QTreeView):
         def _on_changed():
             if self._suspend_vs_rebuild:
                 return
+            self._sync_color_mode()
             expanded = self._capture_expanded_paths()
             self._model.beginResetModel()
             self._model.update_model()
@@ -898,6 +1122,7 @@ class GeometryExplorer(QtGui.QTreeView):
 
         self._connect_view_state()
         self._model.endResetModel()
+        self._sync_color_mode()
         self.expandAll()
         # A model reset drops the highlight; restore it from Gui.Selection.
         self._request_tree_sync()
@@ -1213,6 +1438,45 @@ class GeometryExplorer(QtGui.QTreeView):
         self._suppress_scroll = True
 
 
+class GeometryTreePanel(QtGui.QWidget):
+    """Colour-mode header row and geometry tree."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.color_mode = QtGui.QComboBox()
+        self.color_mode.addItems(_COLOR_MODES)
+        self.color_mode.setToolTip(
+            QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel",
+                "How the tree is grouped and which colours are shown",
+            )
+        )
+
+        self.explorer = GeometryExplorer(self)
+        self.explorer.attach_color_mode(self.color_mode)
+        if hasattr(QtGui.QFrame, "Shape"):
+            self.explorer.setFrameShape(QtGui.QFrame.Shape.StyledPanel)
+            self.explorer.setFrameShadow(QtGui.QFrame.Shadow.Sunken)
+        else:
+            self.explorer.setFrameShape(QtGui.QFrame.StyledPanel)
+            self.explorer.setFrameShadow(QtGui.QFrame.Sunken)
+
+        layout = QtGui.QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(self.color_mode)
+        layout.addWidget(self.explorer)
+        self.setLayout(layout)
+
+        size_policy = QtGui.QSizePolicy(
+            QtGui.QSizePolicy.Policy.Expanding, QtGui.QSizePolicy.Policy.Expanding
+        )
+        self.setSizePolicy(size_policy)
+
+    def shutdown(self):
+        self.explorer.shutdown()
+
+
 class _clipEditWidget(QtGui.QWidget):
     """
     Popup with the exact values of one clip plane.
@@ -1224,10 +1488,11 @@ class _clipEditWidget(QtGui.QWidget):
     once the field is left and the clipping is not recomputed per keystroke.
     """
 
-    def __init__(self, handle, analysis=None, parent=None):
+    def __init__(self, handle, analysis=None, on_scope_changed=None, parent=None):
         super().__init__(parent)
         self.handle = handle
         self.analysis = analysis
+        self.on_scope_changed = on_scope_changed
         self._updating = False
 
         self.widget = FreeCADGui.PySideUic.loadUi(_ui_path("ViewClipEditWidget.ui"))
@@ -1263,6 +1528,17 @@ class _clipEditWidget(QtGui.QWidget):
         )
         self.widget.ScopeLabel.setToolTip(scope_tip)
         self.widget.Scope.setToolTip(scope_tip)
+        for button, axis in self._axis_buttons():
+            button.setToolTip(
+                QtCore.QCoreApplication.translate(
+                    "FEM_ViewPanel", "Cut along {}, keeping the far side"
+                ).format(axis)
+            )
+        self.widget.FlipButton.setToolTip(
+            QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel", "Keep the other side of the plane instead"
+            )
+        )
 
         self.layout = QtGui.QVBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -1274,6 +1550,10 @@ class _clipEditWidget(QtGui.QWidget):
         self.widget.Scope.currentIndexChanged.connect(self.scope_changed)
         for box in self._plane_boxes():
             box.valueChanged.connect(self.plane_changed)
+        self.widget.NormalXButton.clicked.connect(self.normal_x_clicked)
+        self.widget.NormalYButton.clicked.connect(self.normal_y_clicked)
+        self.widget.NormalZButton.clicked.connect(self.normal_z_clicked)
+        self.widget.FlipButton.clicked.connect(self.flip_clicked)
 
     def _scope_paths(self):
         """
@@ -1367,6 +1647,41 @@ class _clipEditWidget(QtGui.QWidget):
             return
         scope = self.widget.Scope.currentData()
         self.handle.setScope(scope if scope else "")
+        if self.on_scope_changed:
+            self.on_scope_changed()
+
+    def _axis_buttons(self):
+        return (
+            (self.widget.NormalXButton, "X"),
+            (self.widget.NormalYButton, "Y"),
+            (self.widget.NormalZButton, "Z"),
+        )
+
+    def _set_normal(self, normal):
+        """
+        Point the plane along a new normal, leaving it where it is.
+
+        Six of the directions a clipping plane is ever given are the axes, and
+        typing three numbers to reach one of them is three chances to end up
+        with a plane at some angle nobody asked for.
+        """
+        if not self.handle:
+            return
+        self.handle.setPlane(self.handle.getOrigin(), normal)
+        self.refresh()
+
+    def normal_x_clicked(self, value=None):
+        self._set_normal(FreeCAD.Vector(1, 0, 0))
+
+    def normal_y_clicked(self, value=None):
+        self._set_normal(FreeCAD.Vector(0, 1, 0))
+
+    def normal_z_clicked(self, value=None):
+        self._set_normal(FreeCAD.Vector(0, 0, 1))
+
+    def flip_clicked(self, value=None):
+        if self.handle:
+            self._set_normal(self.handle.getNormal().negative())
 
     def plane_changed(self, value=None):
         if self._updating or not self.handle:
@@ -1398,19 +1713,23 @@ class _clipWidget(QtGui.QWidget):
     the row goes away.
     """
 
-    def __init__(self, handle, analysis=None, parent=None):
+    def __init__(self, handle, analysis=None, on_removed=None, parent=None):
         super().__init__(parent)
         self.handle = handle
+        self.on_removed = on_removed
 
         self.widget = FreeCADGui.PySideUic.loadUi(_ui_path("ViewClipWidget.ui"))
-        self.widget.ClipButton.setText(handle.getName())
         self.widget.ClipButton.setChecked(handle.isActive())
         self.widget.WidgetButton.setChecked(handle.isWidgetVisible())
+        # Without an icon a QToolButton falls back to its text, and a row of
+        # three buttons one of which is a word does not read as a row.
+        self.widget.WidgetButton.setIcon(FreeCADGui.getIcon("Std_Placement.svg"))
         self.widget.DeleteButton.setIcon(FreeCADGui.getIcon("delete.svg"))
         self.widget.EditButton.setIcon(FreeCADGui.getIcon("preferences-general.svg"))
-        self.widget.ClipButton.setToolTip(
-            QtCore.QCoreApplication.translate("FEM_ViewPanel", "Apply this clipping plane")
+        self.widget.DeleteButton.setToolTip(
+            QtCore.QCoreApplication.translate("FEM_ViewPanel", "Remove this clipping plane")
         )
+        self.setup_label()
         self.widget.WidgetButton.setToolTip(
             QtCore.QCoreApplication.translate(
                 "FEM_ViewPanel", "Show the plane and its drag handles in the 3D view"
@@ -1424,14 +1743,27 @@ class _clipWidget(QtGui.QWidget):
 
         # A menu of our own instead of the button popup mode, which would turn
         # the button into a drop down with an arrow.
-        self.editor = _clipEditWidget(handle, analysis)
+        self.editor = _clipEditWidget(handle, analysis, on_scope_changed=self.setup_label)
         self.edit_menu = QtGui.QMenu(self.widget.EditButton)
         edit_action = QtGui.QWidgetAction(self.edit_menu)
         edit_action.setDefaultWidget(self.editor)
         self.edit_menu.addAction(edit_action)
 
+        # Parts this row from the one above it. Hidden on the first row, where
+        # the frame of the group box is line enough.
+        self.separator = QtGui.QFrame()
+        if hasattr(QtGui.QFrame, "Shape"):
+            self.separator.setFrameShape(QtGui.QFrame.Shape.HLine)
+            self.separator.setFrameShadow(QtGui.QFrame.Shadow.Sunken)
+        else:
+            self.separator.setFrameShape(QtGui.QFrame.HLine)
+            self.separator.setFrameShadow(QtGui.QFrame.Sunken)
+        self.separator.setVisible(False)
+
         self.layout = QtGui.QVBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(2)
+        self.layout.addWidget(self.separator)
         self.layout.addWidget(self.widget)
         self.setLayout(self.layout)
 
@@ -1443,6 +1775,34 @@ class _clipWidget(QtGui.QWidget):
     @property
     def name(self):
         return self.handle.getName() if self.handle else ""
+
+    def setup_label(self):
+        """
+        Name the row, and say what it cuts where that is not everything.
+
+        Planes are called 1, 2, 3, which tells the rows apart and nothing else.
+        The one thing that distinguishes them at a glance is what they reach,
+        so a plane confined to an instance carries its path.
+        """
+        if not self.handle:
+            return
+        name = self.handle.getName()
+        scope = self.handle.getScope()
+        label = f"{name} · {scope}" if scope else name
+        self.widget.ClipButton.setText(label)
+        self.widget.ClipButton.setToolTip(
+            QtCore.QCoreApplication.translate("FEM_ViewPanel", "Cut {} with this plane").format(
+                scope
+            )
+            if scope
+            else QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel", "Cut the whole analysis with this plane"
+            )
+        )
+
+    def set_separated(self, on):
+        """Draw, or drop, the rule that parts this row from the one above."""
+        self.separator.setVisible(bool(on))
 
     def shutdown(self):
         """Drop the clip plane and its 3D widget, then retire the row."""
@@ -1459,6 +1819,7 @@ class _clipWidget(QtGui.QWidget):
             return
         self.handle.refresh()
         self.widget.ClipButton.setChecked(self.handle.isActive())
+        self.setup_label()
         if self.editor.isVisible():
             self.editor.refresh()
 
@@ -1467,7 +1828,12 @@ class _clipWidget(QtGui.QWidget):
         self.edit_menu.popup(button.mapToGlobal(QtCore.QPoint(0, button.height())))
 
     def delete_clicked(self, value):
+        on_removed = self.on_removed
         self.shutdown()
+        # After the row has left the layout, so that the list it is counted out
+        # of is the one that remains.
+        if on_removed:
+            on_removed()
 
     def clip_changed(self, value):
         if self.handle:
@@ -1498,14 +1864,27 @@ class ViewSettings(QtGui.QWidget):
         )
         self.widget.ClipButton.setIcon(FreeCADGui.getIcon("list-add.svg"))
 
-        # Colour mode combo (not in the legacy UI file)
-        self.color_mode = QtGui.QComboBox()
-        self.color_mode.addItems(_COLOR_MODES)
-        self.widget.MeshGroup.layout().insertWidget(0, self.color_mode)
-
-        # Dimension modes match AnalysisViewState::DimensionMode
         self.widget.Dimension.clear()
-        self.widget.Dimension.addItems(_DIM_MODES)
+        self.widget.Dimension.addItems(list(_DIM_MODES))
+        self.widget.Dimension.setToolTip(
+            QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel",
+                "Which dimensions to show. Only the ones the analysis has can be "
+                "picked, unless the construction elements are taken in as well.",
+            )
+        )
+        self.widget.Construction.setToolTip(
+            QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel",
+                "Also show the elements the mesher built the mesh from, such as the "
+                "skin of a solid. The analysis does not solve them.",
+            )
+        )
+        self.widget.ElementCount.setToolTip(
+            QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel", "Elements shown, of the elements in the mesh"
+            )
+        )
 
         self.layout = QtGui.QVBoxLayout()
         self.layout.setContentsMargins(0, 0, 0, 0)
@@ -1523,15 +1902,16 @@ class ViewSettings(QtGui.QWidget):
         self._clip_key = None
         self._edit_obj = None
         self._edit_stage = None
+        self._counts = None
         self.setup_analysis()
 
         self.widget.GeometryButton.clicked.connect(self.geometry_button_checked)
         self.widget.MeshButton.clicked.connect(self.mesh_button_checked)
         self.widget.Dimension.currentIndexChanged.connect(self.dimension_changed)
+        self.widget.Construction.clicked.connect(self.construction_changed)
         self.widget.ViewMode.currentIndexChanged.connect(self.viewmode_changed)
         self.widget.Overlay.clicked.connect(self.overlay_changed)
         self.widget.ClipButton.clicked.connect(self.add_clipping_plane)
-        self.color_mode.currentIndexChanged.connect(self.colormode_changed)
 
         FemGui.addActiveAnalysisObserver(self)
         self._gui_observer = _GuiDocObserver(self)
@@ -1593,11 +1973,12 @@ class ViewSettings(QtGui.QWidget):
             places = importtools.analysis_has_imports(self.active_analysis)
             self._has_geometry = self.geom_obj is not None or places
             self._has_mesh = self.mesh_obj is not None or places
-            # Importing geometry should put the view into the Geometry stage so
-            # the Geometry button and 3D colouring stay in sync with the tree.
-            if self._has_geometry and not self._has_mesh and self.view_state:
-                if self.view_state.getActiveStage() != "Geometry":
-                    self.view_state.setActiveStage("Geometry")
+            # A mesh can go away under the panel, and the stage it left behind
+            # draws nothing and offers no way back. Showing neither is a
+            # deliberate choice on the other hand, so that one is left alone.
+            if self.view_state and not self._has_mesh:
+                if self.view_state.getActiveStage() == "Mesh":
+                    self.view_state.setActiveStage("Geometry" if self._has_geometry else _NO_STAGE)
         else:
             self._has_geometry = False
             self._has_mesh = False
@@ -1606,6 +1987,7 @@ class ViewSettings(QtGui.QWidget):
             self._edit_stage = None
 
         self._connect_view_state()
+        self._counts = self._read_element_counts()
 
         # setup_analysis() also runs on every geometry or mesh change, where the
         # clip planes have to stay put and only re-fit their indicator.
@@ -1619,37 +2001,109 @@ class ViewSettings(QtGui.QWidget):
 
         self.setup_widgets()
 
+    # -- how many elements there are, and of which dimension ------------------
+
+    def _read_element_counts(self):
+        """
+        Elements per dimension, counted once per change of the mesh.
+
+        Two tallies: what the analysis solves, taken from the classification the
+        merge leaves behind, and what the mesh holds altogether. The difference
+        between them is the construction elements. Walking every element is too
+        much to do from setup_widgets(), which runs on every change of the view
+        state, so the numbers are kept until the mesh itself moves.
+        """
+        mesh = self.mesh_obj
+        if mesh is None:
+            return None
+        try:
+            # The merged mesh first: it is what fills the classification, and
+            # asking the other way round reads yesterday's answer.
+            femmesh = mesh.FemMesh
+            topology = {
+                1: femmesh.EdgeCount,
+                2: femmesh.FaceCount,
+                3: femmesh.VolumeCount,
+            }
+            cell_dim = mesh.CellDimension
+        except (AttributeError, ReferenceError, RuntimeError):
+            return None
+
+        total = len(cell_dim)
+        if not total:
+            return None
+
+        analysis = {0: 0, 1: 0, 2: 0, 3: 0}
+        for dim in cell_dim:
+            if 0 <= dim <= 3:
+                analysis[dim] += 1
+        # SMESH keeps no count of the 0D elements of its own; whatever the other
+        # three leave over is what they are.
+        topology[0] = max(0, total - topology[1] - topology[2] - topology[3])
+        return {"total": total, "analysis": analysis, "topology": topology}
+
+    def _dimension_counts(self, construction):
+        """Elements per dimension that the given construction setting shows."""
+        if not self._counts:
+            return None
+        return self._counts["topology"] if construction else self._counts["analysis"]
+
+    def _shown_count(self, mode, construction):
+        counts = self._dimension_counts(construction)
+        if counts is None:
+            return None
+        dim = _DIM_MODES.get(mode)
+        return sum(counts.values()) if dim is None else counts.get(dim, 0)
+
+    def _dimension_available(self, mode, construction=None):
+        """Whether anything at all would be drawn in this dimension mode."""
+        if construction is None:
+            construction = bool(self.view_state and self.view_state.getShowConstruction())
+        shown = self._shown_count(mode, construction)
+        # Without counts to go by, nothing is ruled out.
+        return shown is None or shown > 0
+
+    # -- keeping the widgets in step with the state ---------------------------
+
     def setup_widgets(self):
         self._updating = True
         try:
             has_vs = self.view_state is not None
             editing = self._edit_obj is not None
+            stage = self.view_state.getActiveStage() if has_vs else None
+            # Outside the two preprocessing stages nothing of the model is
+            # drawn, so there is no content to describe. The scene settings
+            # below stay live: they still apply to whatever is on screen.
+            content = stage in ("Geometry", "Mesh")
             self.widget.GeometryButton.setEnabled(has_vs and self._has_geometry)
             self.widget.MeshButton.setEnabled(has_vs and self._has_mesh and not editing)
             self.widget.ClipButton.setEnabled(has_vs)
-            self.color_mode.setEnabled(has_vs)
-            self.widget.Dimension.setEnabled(has_vs)
+            self.widget.Dimension.setEnabled(content)
+            # Only a mesh has elements the mesher built it from; the faces of a
+            # solid are the solid, not scaffolding around it.
+            self.widget.Construction.setEnabled(stage == "Mesh")
             self.widget.ViewMode.setEnabled(has_vs)
             self.widget.Overlay.setEnabled(has_vs)
+            self.setup_clip_list()
 
             if not has_vs:
+                self.widget.ElementCount.clear()
                 return
 
             self.widget.Overlay.setChecked(self.view_state.getOverlay())
 
-            stage = self.view_state.getActiveStage()
             self.widget.GeometryButton.setChecked(stage == "Geometry")
             self.widget.MeshButton.setChecked(stage == "Mesh")
+
+            construction = self.view_state.getShowConstruction()
+            self.widget.Construction.setChecked(construction)
+            self.setup_dimension_entries(construction)
+            self.setup_element_count(stage, construction)
 
             dim = self.view_state.getDimensionMode()
             idx = self.widget.Dimension.findText(dim)
             if idx >= 0:
                 self.widget.Dimension.setCurrentIndex(idx)
-
-            cm = self.view_state.getColorMode()
-            idx = self.color_mode.findText(cm)
-            if idx >= 0:
-                self.color_mode.setCurrentIndex(idx)
 
             if self.view_state.getWireframe():
                 self.widget.ViewMode.setCurrentIndex(0)
@@ -1657,6 +2111,59 @@ class ViewSettings(QtGui.QWidget):
                 self.widget.ViewMode.setCurrentIndex(1)
         finally:
             self._updating = False
+
+    def setup_dimension_entries(self, construction):
+        """
+        Grey out the dimensions that nothing would be drawn in.
+
+        This is where the two kinds of element are told apart without a word of
+        prose: a solid meshed with tetrahedra offers 3D and nothing else, and
+        the 2D entry comes alive the moment the construction elements are taken
+        in. What the greying leaves out is exactly what the analysis leaves out.
+        """
+        counts = self._dimension_counts(construction)
+        combo = self.widget.Dimension
+        model = combo.model()
+        for index in range(combo.count()):
+            item = model.item(index) if hasattr(model, "item") else None
+            if item is None:
+                continue
+            mode = combo.itemText(index)
+            shown = self._shown_count(mode, construction)
+            item.setEnabled(counts is None or shown > 0)
+            combo.setItemData(
+                index,
+                self._dimension_tooltip(mode, shown, construction),
+                QtCore.Qt.ItemDataRole.ToolTipRole,
+            )
+
+    @staticmethod
+    def _dimension_tooltip(mode, shown, construction):
+        if shown is None or mode == _ALL_DIMENSIONS:
+            return None
+        if shown > 0:
+            return QtCore.QCoreApplication.translate("FEM_ViewPanel", "{} elements").format(
+                _thousands(shown)
+            )
+        if construction:
+            return QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel", "The mesh has no elements of this dimension"
+            )
+        return QtCore.QCoreApplication.translate(
+            "FEM_ViewPanel",
+            "The analysis has no elements of this dimension. Show the construction "
+            "elements to see the ones the mesher built the mesh from.",
+        )
+
+    def setup_element_count(self, stage, construction):
+        """The count only means anything where there are elements to count."""
+        shown = self._shown_count(self.view_state.getDimensionMode(), construction)
+        if stage != "Mesh" or shown is None:
+            self.widget.ElementCount.clear()
+            return
+        self.widget.ElementCount.setText(
+            f"{_thousands(shown)} / {_thousands(self._counts['total'])}"
+        )
 
     def slotActiveFemAnalysisUpdated(self, analysis):
         if analysis != self.active_analysis:
@@ -1774,6 +2281,22 @@ class ViewSettings(QtGui.QWidget):
         for widget in self.clip_widgets():
             layout.removeWidget(widget)
             widget.shutdown()
+        self.setup_clip_list()
+
+    def setup_clip_list(self):
+        """
+        Make the rows read as a list, however many of them there are.
+
+        With none the group is a frame around a single button, and a frame
+        around nothing reads as a bug, so one dimmed line says it is a list
+        that happens to be empty. With several the rows run together, each
+        being three buttons much like the row above, so all but the first are
+        parted by a rule.
+        """
+        widgets = self.clip_widgets()
+        self.widget.ClipHint.setVisible(not widgets)
+        for position, widget in enumerate(widgets):
+            widget.set_separated(position > 0)
 
     def setup_clipping_planes(self):
         """Rebuild the clip rows for the current analysis, planes included."""
@@ -1784,6 +2307,7 @@ class ViewSettings(QtGui.QWidget):
         # and only need their handle back.
         for name in sorted(self.view_state.getClipPlanes().keys()):
             self._add_clip_widget(name)
+        self.setup_clip_list()
 
     def _add_clip_widget(self, name=None):
         try:
@@ -1799,8 +2323,9 @@ class ViewSettings(QtGui.QWidget):
             return None
 
         layout = self.widget.ClippingGroup.layout()
-        widget = _clipWidget(handle, self.active_analysis)
+        widget = _clipWidget(handle, self.active_analysis, on_removed=self.setup_clip_list)
         layout.insertWidget(layout.count() - 1, widget)
+        self.setup_clip_list()
         return widget
 
     def add_clipping_plane(self, value):
@@ -1824,34 +2349,37 @@ class ViewSettings(QtGui.QWidget):
         text = self.widget.Dimension.itemText(index)
         self.view_state.setDimensionMode(text)
 
-    def colormode_changed(self, index):
+    def construction_changed(self, value):
         if self._updating or not self.view_state:
             return
-        text = self.color_mode.itemText(index)
-        self.view_state.setColorMode(text)
+        construction = bool(value)
+        self.view_state.beginUpdate()
+        try:
+            self.view_state.setShowConstruction(construction)
+            # A dimension only the construction elements reach leaves an empty
+            # view behind when they go, and the entry greys out along with them,
+            # so it is no way back out either.
+            if not self._dimension_available(self.view_state.getDimensionMode(), construction):
+                self.view_state.setDimensionMode(_ALL_DIMENSIONS)
+        finally:
+            self.view_state.endUpdate()
+
+    def _stage_button_clicked(self, stage, checked):
+        """
+        The two stage buttons switch rather than choose: pressing the lit one
+        turns it off instead of handing the view to the other, leaving neither
+        stage drawn. That is the way to get the preprocessing out of the way of
+        the results.
+        """
+        if self._updating or not self.view_state:
+            return
+        self.view_state.setActiveStage(stage if checked else _NO_STAGE)
 
     def geometry_button_checked(self, value):
-        if self._updating or not self.view_state:
-            return
-        if value:
-            self.view_state.setActiveStage("Geometry")
-        elif self._has_mesh:
-            self.view_state.setActiveStage("Mesh")
-        else:
-            # No mesh yet — keep Geometry stage so colouring/tree stay consistent.
-            self._updating = True
-            try:
-                self.widget.GeometryButton.setChecked(True)
-            finally:
-                self._updating = False
+        self._stage_button_clicked("Geometry", value)
 
     def mesh_button_checked(self, value):
-        if self._updating or not self.view_state:
-            return
-        if value:
-            self.view_state.setActiveStage("Mesh")
-        else:
-            self.view_state.setActiveStage("Geometry")
+        self._stage_button_clicked("Mesh", value)
 
 
 class MainWidget(QtGui.QWidget):
@@ -1859,15 +2387,16 @@ class MainWidget(QtGui.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._settings = ViewSettings(self)
-        self._explorer = GeometryExplorer(self)
+        self._tree_panel = GeometryTreePanel(self)
+        self._explorer = self._tree_panel.explorer
 
         layout = QtGui.QVBoxLayout()
         layout.addWidget(self._settings)
-        layout.addWidget(self._explorer)
+        layout.addWidget(self._tree_panel)
         self.setLayout(layout)
 
     def shutdown(self):
-        self._explorer.shutdown()
+        self._tree_panel.shutdown()
         self._settings.shutdown()
 
 
@@ -1878,6 +2407,60 @@ class Panel(QtGui.QDockWidget):
         self.setObjectName("FEMView")
         self._widget = MainWidget()
         self.setWidget(self._widget)
+        # Docking and floating a panel that is only being put back where it
+        # came from must not be mistaken for the user moving it.
+        self.restoring = False
+        # Owned by the panel, so a pending retry dies with it
+        self._stay_above_timer = QtCore.QTimer(self)
+        self._stay_above_timer.setSingleShot(True)
+        self._stay_above_timer.timeout.connect(self._deferred_stay_above)
+        self.topLevelChanged.connect(self._top_level_changed)
+        self.dockLocationChanged.connect(self._dock_location_changed)
+
+    def _dock_location_changed(self, area):
+        save_panel_placement(self)
+
+    def _top_level_changed(self, floating):
+        if not floating:
+            save_panel_placement(self)
+            return
+        # Qt says so in the middle of the drag that tears the panel off, and
+        # rebuilding the window right there would pull it out from under the
+        # drag, so the flag waits until the mouse is let go.
+        self._stay_above_timer.start(0)
+
+    def _deferred_stay_above(self):
+        if not self.isFloating():
+            return
+        if QtGui.QApplication.mouseButtons() != QtCore.Qt.MouseButton.NoButton:
+            self._stay_above_timer.start(100)
+            return
+        self.stay_above_main_window()
+        save_panel_placement(self)
+
+    def stay_above_main_window(self):
+        """
+        Keep the floating panel over the main window.
+
+        Wherever the window manager decorates a floated dock, Qt gives it the
+        plain Window flag, and such a window sinks behind the main one the
+        moment that is clicked. Tool is the same window tied to its parent: it
+        stays over FreeCAD without climbing over other applications. Qt writes
+        the flags afresh on every undock, so this has to run again each time.
+        """
+        tool = QtCore.Qt.WindowType.Tool
+        flags = self.windowFlags()
+        if (flags & tool) == tool:
+            return
+
+        # New flags mean a new native window, which loses both the placement
+        # and the shown state.
+        visible = self.isVisible()
+        geometry = self.geometry()
+        self.setWindowFlags(flags | tool)
+        self.setGeometry(geometry)
+        if visible:
+            self.show()
 
     def shutdown(self):
         self._widget.shutdown()
@@ -1885,6 +2468,91 @@ class Panel(QtGui.QDockWidget):
 
 def _panel_pref():
     return FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/Fem/General")
+
+
+# Where the panel goes when it is docked rather than floating; the ints are
+# the Qt::DockWidgetArea values the preference is written in.
+_DOCK_AREAS = {
+    1: QtCore.Qt.DockWidgetArea.LeftDockWidgetArea,
+    2: QtCore.Qt.DockWidgetArea.RightDockWidgetArea,
+    4: QtCore.Qt.DockWidgetArea.TopDockWidgetArea,
+    8: QtCore.Qt.DockWidgetArea.BottomDockWidgetArea,
+}
+_DEFAULT_PANEL_SIZE = (360, 620)
+# Gap the panel starts out at from the main window edges, a toolbar or so, to
+# keep it clear of the toolbars and of whatever sits in the right dock area.
+_DEFAULT_PANEL_MARGIN = 40
+
+
+def _enum_int(value):
+    """Qt6 hands out enum objects where Qt5 handed out plain ints."""
+    return int(value.value) if hasattr(value, "value") else int(value)
+
+
+def _default_panel_geometry():
+    """
+    Where the panel opens before the user has moved it anywhere: a palette in
+    the top right corner of the main window, over the 3D view rather than
+    beside it.
+    """
+    width, height = _DEFAULT_PANEL_SIZE
+    mw = FreeCADGui.getMainWindow()
+    frame = mw.frameGeometry() if mw is not None else QtCore.QRect(0, 0, 1280, 800)
+    height = min(height, max(240, frame.height() - 2 * _DEFAULT_PANEL_MARGIN))
+    x = max(frame.left(), frame.right() - width - _DEFAULT_PANEL_MARGIN)
+    y = frame.top() + _DEFAULT_PANEL_MARGIN
+    return QtCore.QRect(x, y, width, height)
+
+
+def save_panel_placement(dock):
+    """Remember where the panel was left, so recreating it does not move it."""
+    if dock.restoring:
+        return
+
+    pref = _panel_pref()
+    floating = dock.isFloating()
+    pref.SetBool("ViewPanelFloating", floating)
+    pref.SetInt("ViewPanelWidth", dock.width())
+    pref.SetInt("ViewPanelHeight", dock.height())
+    if floating:
+        pref.SetInt("ViewPanelPosX", dock.x())
+        pref.SetInt("ViewPanelPosY", dock.y())
+        return
+    mw = FreeCADGui.getMainWindow()
+    if mw is not None:
+        pref.SetInt("ViewPanelArea", _enum_int(mw.dockWidgetArea(dock)))
+
+
+def restore_panel_placement(dock):
+    """
+    Put the panel back where it was left. The panel is destroyed on every
+    workbench switch, so without this it would fall back into the dock area on
+    each return to the FEM workbench.
+    """
+    pref = _panel_pref()
+    default = _default_panel_geometry()
+    area = _DOCK_AREAS.get(pref.GetInt("ViewPanelArea", 2))
+    floating = pref.GetBool("ViewPanelFloating", True)
+    geometry = QtCore.QRect(
+        pref.GetInt("ViewPanelPosX", default.x()),
+        pref.GetInt("ViewPanelPosY", default.y()),
+        pref.GetInt("ViewPanelWidth", default.width()),
+        pref.GetInt("ViewPanelHeight", default.height()),
+    )
+
+    dock.restoring = True
+    try:
+        mw = FreeCADGui.getMainWindow()
+        mw.addDockWidget(area or QtCore.Qt.DockWidgetArea.RightDockWidgetArea, dock)
+        if floating:
+            dock.setFloating(True)
+            # Straight away rather than over the deferred route: nothing is
+            # being dragged here, and the panel is still to be shown, so the
+            # rebuilt window costs no flicker.
+            dock.stay_above_main_window()
+            dock.setGeometry(geometry)
+    finally:
+        dock.restoring = False
 
 
 def setup_visualization_panel():
@@ -1899,7 +2567,7 @@ def setup_visualization_panel():
 
     mw = FreeCADGui.getMainWindow()
     __dock = Panel(mw)
-    mw.addDockWidget(QtCore.Qt.DockWidgetArea.RightDockWidgetArea, __dock)
+    restore_panel_placement(__dock)
     __dock.setVisible(_panel_pref().GetBool("ShowViewPanel", True))
 
 
@@ -1910,6 +2578,7 @@ def unsetup_visualization_panel():
         return
 
     _panel_pref().SetBool("ShowViewPanel", __dock.isVisible())
+    save_panel_placement(__dock)
     mw = FreeCADGui.getMainWindow()
     if mw is not None:
         mw.removeDockWidget(__dock)
@@ -1925,6 +2594,8 @@ def toggle_visualization_panel():
         return
 
     visible = not __dock.isVisible()
+    if not visible:
+        save_panel_placement(__dock)
     __dock.setVisible(visible)
     if visible:
         __dock.raise_()

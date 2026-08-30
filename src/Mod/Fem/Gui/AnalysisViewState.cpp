@@ -169,6 +169,15 @@ void AnalysisViewState::setDimensionMode(DimensionMode mode)
     notifyChanged();
 }
 
+void AnalysisViewState::setShowConstruction(bool on)
+{
+    if (m_showConstruction == on) {
+        return;
+    }
+    m_showConstruction = on;
+    notifyChanged();
+}
+
 void AnalysisViewState::setWireframe(bool on)
 {
     if (m_wireframe == on) {
@@ -289,7 +298,7 @@ void AnalysisViewState::removeClipPlane(const std::string& name)
     }
 }
 
-void AnalysisViewState::setUnderAchievedElements(std::set<std::string> elements)
+void AnalysisViewState::setUnderAchievedElements(std::map<std::string, int> elements)
 {
     m_underAchieved = std::move(elements);
 }
@@ -407,15 +416,20 @@ std::vector<Category> AnalysisViewState::categories() const
     auto* self = const_cast<AnalysisViewState*>(this);
 
     std::vector<Category> result;
-    std::set<std::string> seen;
+    std::map<std::string, size_t> seen;
     auto collect = [&result, &seen](const Classification* cls) {
         if (!cls) {
             return;
         }
         for (const auto& cat : cls->categories()) {
-            if (seen.insert(cat.key).second) {
+            auto [it, fresh] = seen.emplace(cat.key, result.size());
+            if (fresh) {
                 result.push_back(cat);
+                continue;
             }
+            // A category several meshes have is one category, and the count
+            // the tree shows for it is what all of them add up to.
+            result[it->second].count += cat.count;
         }
     };
 

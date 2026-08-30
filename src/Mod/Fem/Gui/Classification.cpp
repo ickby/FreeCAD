@@ -302,6 +302,16 @@ Base::Color Classification::colorForIndex(int index)
     return colors[static_cast<size_t>(wrapped)];
 }
 
+Base::Color Classification::constructionColor(const Base::Color& color)
+{
+    // Far enough towards a light grey to read as scaffolding at a glance, not
+    // so far that two of them stop being different colours.
+    constexpr float Target = 0.82f;
+    constexpr float Mix = 0.55f;
+    auto wash = [](float c) { return c + (Target - c) * Mix; };
+    return Base::Color(wash(color.r), wash(color.g), wash(color.b), color.a);
+}
+
 std::unique_ptr<Classification> Classification::create(
     ColorMode mode,
     Fem::FemAnalysis* analysis,
@@ -328,7 +338,7 @@ std::unique_ptr<Classification> Classification::create(
                 gridSource
             );
         case ColorMode::CellType:
-            return std::make_unique<CellTypeClassification>(meshGrid);
+            return std::make_unique<CellTypeClassification>(meshGrid, geometry, gridSource);
         case ColorMode::Subelement:
         default:
             return std::make_unique<SubelementClassification>(
@@ -732,12 +742,20 @@ int MaterialClassification::categoryOfCell(vtkIdType cell) const
 // CellTypeClassification
 // ---------------------------------------------------------------------------
 
-CellTypeClassification::CellTypeClassification(vtkUnstructuredGrid* meshGrid)
+CellTypeClassification::CellTypeClassification(
+    vtkUnstructuredGrid* meshGrid,
+    Fem::FemGeometry* geometry,
+    const GridSource& gridSource
+)
 {
-    build(meshGrid);
+    build(meshGrid, geometry, gridSource);
 }
 
-void CellTypeClassification::build(vtkUnstructuredGrid* meshGrid)
+void CellTypeClassification::build(
+    vtkUnstructuredGrid* meshGrid,
+    Fem::FemGeometry* geometry,
+    const GridSource& gridSource
+)
 {
     m_categories.clear();
     m_keyToIndex.clear();
@@ -759,23 +777,56 @@ void CellTypeClassification::build(vtkUnstructuredGrid* meshGrid)
     }
 
     const vtkIdType n = meshGrid->GetNumberOfCells();
-    std::set<std::string> keys;
+
+    // Which side of the analysis every cell falls on. Cheap enough to ask for
+    // outright: the answer only moves when the geometry does, and that is what
+    // throws this whole classification away. The names on the grid of a placed
+    // instance belong to the analysis it was meshed in, so it is that geometry
+    // the split has to be read against, the same one the mask reads.
+    const auto* owner = gridSource.geometry ? gridSource.geometry : geometry;
+    const auto analysis = FemVisibilityMask::analysisCells(meshGrid, owner);
+
+    // Base type of a cell, and the two-sided key it is filtered and coloured by.
     std::vector<std::string> cellKeys(static_cast<size_t>(n));
+    std::set<std::string> baseKeys;
+    // key -> (base type, construction), in the order categories will be numbered
+    std::set<std::pair<std::string, bool>> present;
     for (vtkIdType i = 0; i < n; ++i) {
         const int t = celltypeArr->GetValue(i);
-        cellKeys[static_cast<size_t>(i)] = FemVisibilityMask::cellTypeKey(t);
-        keys.insert(cellKeys[static_cast<size_t>(i)]);
+        const bool construction =
+            static_cast<size_t>(i) < analysis.size() && analysis[static_cast<size_t>(i)] == 0;
+        const std::string base = FemVisibilityMask::cellTypeKey(t);
+        cellKeys[static_cast<size_t>(i)] = FemVisibilityMask::cellTypeKey(t, construction);
+        baseKeys.insert(base);
+        present.insert({base, construction});
     }
 
-    std::vector<std::string> sorted(keys.begin(), keys.end());
-    std::sort(sorted.begin(), sorted.end());
-    for (const auto& key : sorted) {
-        ensureCategory(m_categories, m_keyToIndex, key, key);
+    // The colour belongs to the base type, so the two sides of a type stay one
+    // hue apart from every other type instead of taking a palette slot each.
+    std::map<std::string, int> baseIndex;
+    for (const auto& base : baseKeys) {
+        const int idx = static_cast<int>(baseIndex.size());
+        baseIndex[base] = idx;
+    }
+
+    for (const auto& [base, construction] : present) {
+        Category cat;
+        cat.key = construction ? base + FemVisibilityMask::ConstructionSuffix : base;
+        // The group the tree hangs the row under already says "construction",
+        // so the label stays the bare type name on both sides.
+        cat.label = base;
+        cat.construction = construction;
+        const Base::Color color = Classification::colorForIndex(baseIndex[base]);
+        cat.color = construction ? Classification::constructionColor(color) : color;
+        m_keyToIndex[cat.key] = static_cast<int>(m_categories.size());
+        m_categories.push_back(std::move(cat));
     }
 
     m_cellCategory.resize(static_cast<size_t>(n), 0);
     for (vtkIdType i = 0; i < n; ++i) {
-        m_cellCategory[static_cast<size_t>(i)] = m_keyToIndex[cellKeys[static_cast<size_t>(i)]];
+        const int idx = m_keyToIndex[cellKeys[static_cast<size_t>(i)]];
+        m_cellCategory[static_cast<size_t>(i)] = idx;
+        ++m_categories[static_cast<size_t>(idx)].count;
     }
 }
 

@@ -85,6 +85,21 @@ public:
     }
     void setDimensionMode(DimensionMode mode);
 
+    /**
+     * Whether the elements the mesher built the mesh from are in scope.
+     *
+     * A mesh holds more than the analysis solves: the skin triangles of a
+     * volume, the edges those triangles were grown from. Off, which is the
+     * default, the dimension mode selects among the analysis elements only,
+     * and asking for a dimension the analysis does not have shows nothing.
+     * On, it selects among every element in the mesh.
+     */
+    bool showConstruction() const
+    {
+        return m_showConstruction;
+    }
+    void setShowConstruction(bool on);
+
     bool wireframe() const
     {
         return m_wireframe;
@@ -166,12 +181,15 @@ public:
      */
     std::vector<Category> categories() const;
 
-    /** Toplevel elements where achieved mesh dim < declared analysis dim. */
-    const std::set<std::string>& underAchievedElements() const
+    /**
+     * Toplevel elements where achieved mesh dim < declared analysis dim,
+     * mapped to the dimension the mesh did reach.
+     */
+    const std::map<std::string, int>& underAchievedElements() const
     {
         return m_underAchieved;
     }
-    void setUnderAchievedElements(std::set<std::string> elements);
+    void setUnderAchievedElements(std::map<std::string, int> elements);
 
     Connection connectChanged(Slot slot);
 
@@ -207,6 +225,7 @@ private:
 
     ActiveStage m_stage {ActiveStage::Geometry};
     DimensionMode m_dimensionMode {DimensionMode::Highest};
+    bool m_showConstruction {false};
     bool m_wireframe {false};
     bool m_overlay {true};
     std::map<ActiveStage, ColorMode> m_colorMode;
@@ -214,7 +233,7 @@ private:
     std::set<std::string> m_hiddenElements;
     std::set<std::string> m_hiddenCellTypes;
     std::map<std::string, ClippingPlane> m_clipPlanes;
-    std::set<std::string> m_underAchieved;
+    std::map<std::string, int> m_underAchieved;
 
     /// One classification per mesh grid; the null key serves grid-less callers.
     // Keyed by colour mode as well as by grid, because the mode belongs to the

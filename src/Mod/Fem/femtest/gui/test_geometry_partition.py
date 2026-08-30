@@ -43,7 +43,7 @@ from femtaskpanels import task_geometry_partition
 from femviewprovider import view_geometry_base
 
 from femtest.app.support_utils import fcc_print
-from femtest.gui.test_geometry_marks import face_material, node_colors
+from femtest.gui.test_geometry_marks import children_of_type, face_material, node_colors, own_render
 
 
 def _mask_mode(vobj):
@@ -87,6 +87,47 @@ def _pickable_at(vobj, x, y):
     action.setPickAll(False)
     action.apply(vobj.RootNode)
     return action.getPickedPoint() is not None
+
+
+def _tool_preview_node(vobj):
+    """
+    The SoPreviewShape ViewProviderFemGeometry hangs under its Default mask.
+
+    Exactly one is built at attach(); an empty one is still present when no
+    cutting tool is being shown.
+    """
+    own = own_render(vobj)
+    preview_type = coin.SoType.fromName("SoPreviewShape")
+    if preview_type != coin.SoType.badType():
+        matches = [
+            own.getChild(i)
+            for i in range(own.getNumChildren())
+            if own.getChild(i).getTypeId() == preview_type
+        ]
+        if matches:
+            return matches[-1]
+
+    # Fallback when the typed name is not registered in pivy: look for the
+    # separator that carries a matrix transform and an unpickable pick style.
+    for i in range(own.getNumChildren()):
+        child = own.getChild(i)
+        if not child.isOfType(coin.SoSeparator.getClassTypeId()):
+            continue
+        if not children_of_type(child, "SoMatrixTransform"):
+            continue
+        if not children_of_type(child, "SoPickStyle"):
+            continue
+        if not children_of_type(child, "SoCoordinate3"):
+            continue
+        return child
+    return None
+
+
+def _preview_coord_count(preview):
+    coords = children_of_type(preview, "SoCoordinate3")
+    if not coords:
+        return 0
+    return coords[0].point.getNum()
 
 
 class TestGeometryPartitionGui(unittest.TestCase):
@@ -555,3 +596,96 @@ class TestGeometryPartitionGui(unittest.TestCase):
             )
         finally:
             panel.deactivate()
+
+    # -- cutting-tool preview -----------------------------------------------
+
+    def test_tool_preview_shows_a_configured_plane(self):
+        """
+        Once the cutting tool is defined the panel has to put it on the screen,
+        so the user can see where the cut will land before accepting.
+        """
+        datum = self.document.addObject("Part::DatumPlane", "Datum")
+        datum.Placement = FreeCAD.Placement(
+            FreeCAD.Vector(10, 0, 0),
+            FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), FreeCAD.Vector(1, 0, 0)),
+        )
+        self.document.recompute()
+        self.part.Method = geometry_partition.METHOD_PLANE_REF
+        self.part.Tool = (datum, "")
+        self.document.recompute()
+
+        view_geometry_base.set_input_preview(self.part, True)
+        panel = task_geometry_partition._PartitionTaskPanel(self.part)
+        try:
+            preview = _tool_preview_node(self.imp.ViewObject)
+            self.assertIsNotNone(preview, "the input VP must own a tool-preview node")
+            self.assertGreater(
+                _preview_coord_count(preview),
+                0,
+                "a configured plane must reach the Coin overlay",
+            )
+            pick = children_of_type(preview, "SoPickStyle")
+            self.assertTrue(pick, "the tool preview must declare a pick style")
+            self.assertEqual(
+                pick[0].style.getValue(),
+                coin.SoPickStyle.UNPICKABLE,
+                "the tool must not stand between the user and the geometry",
+            )
+        finally:
+            panel.deactivate()
+            view_geometry_base.set_input_preview(self.part, False)
+
+    def test_tool_preview_is_cleared_when_the_panel_closes(self):
+        datum = self.document.addObject("Part::DatumPlane", "Datum")
+        datum.Placement = FreeCAD.Placement(
+            FreeCAD.Vector(10, 0, 0),
+            FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), FreeCAD.Vector(1, 0, 0)),
+        )
+        self.document.recompute()
+        self.part.Method = geometry_partition.METHOD_PLANE_REF
+        self.part.Tool = (datum, "")
+        self.document.recompute()
+
+        view_geometry_base.set_input_preview(self.part, True)
+        panel = task_geometry_partition._PartitionTaskPanel(self.part)
+        preview = _tool_preview_node(self.imp.ViewObject)
+        self.assertGreater(_preview_coord_count(preview), 0)
+        panel.deactivate()
+        self.assertEqual(
+            _preview_coord_count(preview),
+            0,
+            "closing the panel must drop the cutting-tool overlay",
+        )
+        view_geometry_base.set_input_preview(self.part, False)
+
+    def test_tool_preview_outside_the_solid_is_not_pickable(self):
+        """
+        A ray that only meets the oversized tool plane, not the solid, must
+        miss. Otherwise the plane would steal clicks meant for nothing.
+        """
+        datum = self.document.addObject("Part::DatumPlane", "Datum")
+        datum.Placement = FreeCAD.Placement(
+            FreeCAD.Vector(10, 0, 0),
+            FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), FreeCAD.Vector(1, 0, 0)),
+        )
+        self.document.recompute()
+        self.part.Method = geometry_partition.METHOD_PLANE_REF
+        self.part.Tool = (datum, "")
+        self.document.recompute()
+
+        view_geometry_base.set_input_preview(self.part, True)
+        panel = task_geometry_partition._PartitionTaskPanel(self.part)
+        try:
+            # The tool plane sits at x=10 and extends far past the solid in Y.
+            # A ray along +X at y=-80 meets only the plane.
+            action = coin.SoRayPickAction(coin.SbViewportRegion(400, 400))
+            action.setRay(coin.SbVec3f(-50, -80, 5), coin.SbVec3f(1, 0, 0))
+            action.setPickAll(False)
+            action.apply(self.imp.ViewObject.RootNode)
+            self.assertIsNone(
+                action.getPickedPoint(),
+                "the tool plane must not answer a pick outside the solid",
+            )
+        finally:
+            panel.deactivate()
+            view_geometry_base.set_input_preview(self.part, False)

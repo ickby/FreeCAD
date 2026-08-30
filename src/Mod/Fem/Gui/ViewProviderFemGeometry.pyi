@@ -92,3 +92,25 @@ class ViewProviderFemGeometry(ViewProviderDocumentObject):
     def getElementHighlight(self, role: str, /) -> list[str]:
         """Element names currently marked by that role."""
         ...
+
+    def setToolPreview(
+        self, shape: object, color: object = None, transparency: float = 0.55, /
+    ) -> None:
+        """
+        Show a temporary cutting-tool shape over this geometry.
+
+        Used while a partition panel is open. The overlay is unpickable and
+        semi-transparent. Pass a null/empty shape to clear.
+
+        shape : Part.Shape
+            The tool geometry to tessellate.
+        color : tuple of float, optional
+            (r, g, b) in 0..1. Defaults to the partition tool mark colour.
+        transparency : float, optional
+            0 opaque, 1 fully transparent. Defaults to 0.55.
+        """
+        ...
+
+    def clearToolPreview(self) -> None:
+        """Remove the cutting-tool preview overlay."""
+        ...

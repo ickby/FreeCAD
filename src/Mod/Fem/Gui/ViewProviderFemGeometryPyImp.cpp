@@ -22,6 +22,7 @@
 
 #include <Base/VectorPy.h>
 #include <Mod/Fem/Gui/ViewProviderFemGeometry.h>
+#include <Mod/Part/App/TopoShapePy.h>
 
 // clang-format off
 // inclusion of the generated files (generated out of ViewProviderFemGeometry.pyi)
@@ -186,6 +187,56 @@ PyObject* ViewProviderFemGeometryPy::getElementHighlight(PyObject* args)
         elements.append(Py::String(element));
     }
     return Py::new_reference_to(elements);
+}
+
+PyObject* ViewProviderFemGeometryPy::setToolPreview(PyObject* args)
+{
+    PyObject* pyShape = nullptr;
+    PyObject* pyColor = Py_None;
+    double transparency = 0.55;
+    if (!PyArg_ParseTuple(args, "O|Od", &pyShape, &pyColor, &transparency)) {
+        return nullptr;
+    }
+    if (!PyObject_TypeCheck(pyShape, &(Part::TopoShapePy::Type))) {
+        PyErr_SetString(PyExc_TypeError, "shape must be a Part.Shape");
+        return nullptr;
+    }
+
+    auto color = FemGui::ViewProviderFemGeometry::defaultToolPreviewColor();
+    if (pyColor && pyColor != Py_None) {
+        if (!PySequence_Check(pyColor) || PySequence_Size(pyColor) != 3) {
+            PyErr_SetString(PyExc_TypeError, "color must be an (r, g, b) sequence in 0..1");
+            return nullptr;
+        }
+        float channel[3] {};
+        for (Py_ssize_t i = 0; i < 3; i++) {
+            Py::Object item(PySequence_GetItem(pyColor, i), true);
+            const double value = PyFloat_AsDouble(item.ptr());
+            if (PyErr_Occurred()) {
+                return nullptr;
+            }
+            channel[i] = static_cast<float>(value);
+        }
+        color = Base::Color(channel[0], channel[1], channel[2]);
+    }
+
+    const Part::TopoShape& shape
+        = *static_cast<Part::TopoShapePy*>(pyShape)->getTopoShapePtr();
+    this->getViewProviderFemGeometryPtr()->setToolPreview(
+        shape,
+        color,
+        static_cast<float>(transparency)
+    );
+    Py_Return;
+}
+
+PyObject* ViewProviderFemGeometryPy::clearToolPreview(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    this->getViewProviderFemGeometryPtr()->clearToolPreview();
+    Py_Return;
 }
 
 PyObject* ViewProviderFemGeometryPy::getCustomAttributes(const char* /*attr*/) const

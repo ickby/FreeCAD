@@ -41,6 +41,12 @@ namespace Fem
 {
 class FemAnalysis;
 class FemGeometry;
+class FemMeshShapeGroup;
+}
+
+namespace Gui
+{
+class ViewProviderDocumentObject;
 }
 
 namespace FemGui
@@ -49,6 +55,16 @@ namespace FemGui
 class ViewProviderFemAnalysis;
 class Classification;
 struct Category;
+
+/**
+ * Put @a vp on display mask @a mode without bringing a hidden object back.
+ *
+ * A mask switch writes the mode switch node itself, so an object the user hid
+ * reappears the moment the stage changes the mask underneath it. Visibility is
+ * what says whether an object is drawn at all and the mask only says what is
+ * drawn when it is; this keeps the two in that order.
+ */
+FemGuiExport void setStageMask(Gui::ViewProviderDocumentObject& vp, const char* mode);
 
 /**
  * Runtime view state for one analysis. Not model state — mutations never
@@ -73,11 +89,28 @@ public:
     void beginUpdate();
     void endUpdate();
 
-    ActiveStage activeStage() const
-    {
-        return m_stage;
-    }
+    /**
+     * The stage on show, read off the geometry and mesh groups.
+     *
+     * Whether a group is drawn is its own Visibility and nothing else: the
+     * user can hit space bar on it in the tree, and a stage kept alongside
+     * could only ever disagree with what is on screen. Geometry wins when both
+     * are shown, which is the state a document written before this reads back
+     * as, and neither shown is a stage of its own that leaves the view to the
+     * results. An analysis with no groups at all has nothing to read, and
+     * keeps the last stage it was told.
+     */
+    ActiveStage activeStage() const;
     void setActiveStage(ActiveStage stage);
+
+    /**
+     * Told by a group view provider that the Visibility it owns has changed.
+     *
+     * @param owner the stage that group stands for. Showing it selects that
+     *              stage and puts the other group away, which is what makes
+     *              the space bar in the tree do what the stage buttons do.
+     */
+    void stageVisibilityChanged(ActiveStage owner);
 
     DimensionMode dimensionMode() const
     {
@@ -121,11 +154,11 @@ public:
     void setColorMode(ActiveStage stage, ColorMode mode);
     ColorMode colorMode() const
     {
-        return colorMode(m_stage);
+        return colorMode(activeStage());
     }
     void setColorMode(ColorMode mode)
     {
-        setColorMode(m_stage, mode);
+        setColorMode(activeStage(), mode);
     }
 
     const std::set<std::string>& hiddenElements() const
@@ -221,6 +254,11 @@ public:
 private:
     void notifyChanged();
     Fem::FemGeometry* findGeometry() const;
+    Fem::FemMeshShapeGroup* findMeshGroup() const;
+    /// The stage the group visibilities spell out, see activeStage().
+    ActiveStage readStage() const;
+    /// Show the group the current stage belongs to and hide the other one.
+    void applyStageToGroups();
     /// Cheap fingerprint of what the placed instances contribute, see classification().
     std::size_t importRevision() const;
     /// Mirror the persistable subset onto the analysis view provider.
@@ -233,7 +271,10 @@ private:
     bool m_pendingNotify {false};
     mutable bool m_pendingPersist {false};
 
-    ActiveStage m_stage {ActiveStage::Geometry};
+    /// The stage as last read, kept for the groups an analysis does not build
+    mutable ActiveStage m_stage {ActiveStage::Geometry};
+    /// Set while the group visibilities are being written from m_stage
+    bool m_writingStage {false};
     DimensionMode m_dimensionMode {DimensionMode::Highest};
     bool m_showConstruction {false};
     bool m_wireframe {false};

@@ -925,9 +925,15 @@ class MeshSetsGetter:
 
     def get_mat_geo_sets_multiple_mat_single_fluid(self):
         fluidsec_obj = self.member.geos_fluidsection[0]["Object"]
+        # A fluid section speaks for the edge elements, so that is a material's
+        # share of it. As with the shell and the solid, a material of another
+        # dimension holds none and the order the material reports is kept.
+        edge_ids = set(self.model_element_ids(1))
         for mat_data in self.member.mats_linear:
             mat_obj = mat_data["Object"]
-            elset_data = mat_data["FEMElements"]
+            elset_data = [eid for eid in mat_data["FEMElements"] if eid in edge_ids]
+            if not elset_data:
+                continue
             names = [{"short": mat_data["ShortName"]}, {"short": "F0"}]
             matgeoset = {}
             matgeoset["ccx_elset"] = elset_data
@@ -992,9 +998,17 @@ class MeshSetsGetter:
 
     def get_mat_geo_sets_multiple_mat_single_shell(self):
         shellth_obj = self.member.geos_shellthickness[0]["Object"]
+        # The single shell object speaks for every face element of the model, so
+        # a material's share of it is what that material holds of dimension two.
+        # A material may well hold none, as soon as solids are in the mesh too,
+        # and a shell section over a volume element is one CalculiX refuses.
+        face_ids = set(self.model_element_ids(2))
         for mat_data in self.member.mats_linear:
             mat_obj = mat_data["Object"]
-            elset_data = mat_data["FEMElements"]
+            # empty sets possible, and the order the material reports is kept
+            elset_data = [eid for eid in mat_data["FEMElements"] if eid in face_ids]
+            if not elset_data:
+                continue
             names = [
                 {"long": mat_obj.Name, "short": mat_data["ShortName"]},
                 {"long": shellth_obj.Name, "short": "S0"},
@@ -1043,9 +1057,16 @@ class MeshSetsGetter:
         print(self.mat_geo_sets)
 
     def get_mat_geo_sets_multiple_mat_solid(self):
+        # Only the volume elements take a solid section. A material of a shell
+        # holds none of them, and the face elements a solid material picks up
+        # along its boundary are no more a volume than the shell is.
+        volume_ids = set(self.model_element_ids(3))
         for mat_data in self.member.mats_linear:
             mat_obj = mat_data["Object"]
-            elset_data = mat_data["FEMElements"]
+            # empty sets possible, and the order the material reports is kept
+            elset_data = [eid for eid in mat_data["FEMElements"] if eid in volume_ids]
+            if not elset_data:
+                continue
             names = [
                 {"long": mat_obj.Name, "short": mat_data["ShortName"]},
                 {"long": "Solid", "short": "Solid"},

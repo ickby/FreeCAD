@@ -345,6 +345,68 @@ class TestCcxTools(unittest.TestCase):
         self.input_file_writing_test(get_namefromdef("test_"))
 
     # ********************************************************************************************
+    def test_a_section_only_covers_elements_of_its_own_dimension(self):
+        # A material says which elements are made of it, not what shape they
+        # are, so on a mesh of mixed dimensions every material meets every
+        # section kind. Handing a solid section a shell element, or the other
+        # way round, is a deck CalculiX refuses to read.
+        import ObjectsFem
+        from femexamples.mixed_solid_shell_beam import setup
+        from femmesh import meshsetsgetter
+        from femtools import membertools
+
+        setup(self.document, "ccxtools")
+
+        # The example carries one material for all three components. Splitting
+        # it in two is what puts the mesh on the multiple material path, where
+        # the section a material gets is no longer a foregone conclusion.
+        # A document holds a Material property of its own, so the object of
+        # that name has to be asked for rather than read off the document.
+        # The beam keeps the first material, so that every component of the
+        # mesh still has one and the split is the only thing that changed.
+        solid_mat = self.document.getObject("Material")
+        solid_mat.References = [
+            (self.document.getObject("Box"), "Solid1"),
+            (self.document.getObject("Line"), "Edge1"),
+        ]
+        shell_mat = ObjectsFem.makeMaterialSolid(self.document, "MaterialShell")
+        shell_mat.Material = solid_mat.Material
+        shell_mat.References = [(self.document.getObject("Plane"), "Face1")]
+        self.document.Analysis.addObject(shell_mat)
+        self.document.recompute()
+
+        analysis = self.document.Analysis
+        solver = self.document.CalculiXCcxTools
+        fea = ccxtools.FemToolsCcx(analysis, solver)
+        fea.update_objects()
+
+        getter = meshsetsgetter.MeshSetsGetter(
+            analysis, solver, fea.mesh, membertools.AnalysisMember(analysis)
+        )
+        getter.get_mesh_sets()
+
+        # The kind of section a set is written as is told by the object held
+        # against it, which is how write_femelement_geometry decides too.
+        wanted_dimension = {"fluidsection_obj": 1, "shellthickness_obj": 2, "beamsection_obj": 1}
+        self.assertTrue(getter.mat_geo_sets, "no sections were built at all")
+        for matgeoset in getter.mat_geo_sets:
+            elements = matgeoset["ccx_elset"]
+            if isinstance(elements, str):
+                # a set written by name, already one dimension by construction
+                continue
+            dimension = 3
+            for key, dim in wanted_dimension.items():
+                if key in matgeoset:
+                    dimension = dim
+            allowed = set(getter.model_element_ids(dimension))
+            strays = sorted(set(elements) - allowed)
+            self.assertFalse(
+                strays,
+                f"{matgeoset['ccx_elset_name']} is written as a section of dimension "
+                f"{dimension} but holds {len(strays)} element(s) that are not: {strays[:10]}",
+            )
+
+    # ********************************************************************************************
     def input_file_writing_test(
         self,
         base_name,

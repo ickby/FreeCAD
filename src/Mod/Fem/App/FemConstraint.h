@@ -110,6 +110,24 @@ public:
     App::PropertyVectorList Normals;
 
     /**
+     * @brief How many entries of @ref Points each reference contributed.
+     *
+     * @details
+     *  @ref Points is one flat list over all of @ref References, and how many
+     *  entries a reference lands in it depends on its size and shape. Without
+     *  this nothing downstream can tell which reference a symbol belongs to,
+     *  which is what a view provider needs to draw the symbols of one
+     *  reference differently from those of another.
+     *
+     *  The entries are in the flat order of @ref References, that is the order
+     *  of getValues() and getSubValues(), and they sum to the length of @ref
+     *  Points. A reference no symbol was drawn for contributes a zero rather
+     *  than being left out, so the index into this list is the index of the
+     *  reference.
+     */
+    App::PropertyIntegerList PointsPerReference;
+
+    /**
      * @brief Updates @ref NormalDirection.
      *
      * @details
@@ -192,6 +210,10 @@ protected:
      *  The scale contains a scale value for the object in References that was
      *  processed last. For calculation various versions of @ref
      *  calcDrawScaleFactor are used.
+     * @param[out] pointsPerReference
+     *  Optional. One entry per reference, in the flat order of @ref
+     *  References, holding how many points that reference added. See @ref
+     *  PointsPerReference.
      *
      * @return
      *  If the calculation of points, normals and scale was successful it
@@ -201,7 +223,8 @@ protected:
     bool getPoints(
         std::vector<Base::Vector3d>& points,
         std::vector<Base::Vector3d>& normals,
-        double* scale
+        double* scale,
+        std::vector<long>* pointsPerReference = nullptr
     ) const;
 
     /**

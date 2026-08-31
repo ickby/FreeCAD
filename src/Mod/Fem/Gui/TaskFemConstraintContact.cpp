@@ -27,8 +27,10 @@
 
 #include <limits>
 #include <sstream>
+#include <vector>
 
 #include <QMessageBox>
+#include <boost/dynamic_bitset.hpp>
 
 #include "Mod/Fem/App/FemConstraintContact.h"
 #include <Gui/Command.h>
@@ -118,6 +120,8 @@ TaskFemConstraintContact::TaskFemConstraintContact(
     /* */
 
     connect(ui->ckbFriction, &QCheckBox::toggled, this, &TaskFemConstraintContact::onFrictionChanged);
+    connect(ui->ckbRevMaster, &QCheckBox::toggled, this, &TaskFemConstraintContact::onReversedChanged);
+    connect(ui->ckbRevSlave, &QCheckBox::toggled, this, &TaskFemConstraintContact::onReversedChanged);
 }
 
 TaskFemConstraintContact::~TaskFemConstraintContact() = default;
@@ -129,6 +133,30 @@ void TaskFemConstraintContact::onFrictionChanged(bool state)
     ui->spbStickSlope->setEnabled(state);
 }
 
+void TaskFemConstraintContact::onReversedChanged(bool)
+{
+    writeSides();
+}
+
+void TaskFemConstraintContact::writeSides()
+{
+    auto* constraint = ConstraintView->getObject<Fem::ConstraintContact>();
+    if (!constraint) {
+        return;
+    }
+
+    // A PropertyBoolList keeps a bitset, which no vector of bool converts to.
+    auto asBitset = [](const std::vector<bool>& flags) {
+        boost::dynamic_bitset<> bits(flags.size());
+        for (std::size_t i = 0; i < flags.size(); ++i) {
+            bits[i] = flags[i];
+        }
+        return bits;
+    };
+
+    constraint->ReversedMaster.setValues(asBitset(getRevMaster()));
+    constraint->ReversedSlave.setValues(asBitset(getRevSlave()));
+}
 
 const std::string TaskFemConstraintContact::getSlope() const
 {

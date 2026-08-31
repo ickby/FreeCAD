@@ -408,6 +408,55 @@ class TestCcxTools(unittest.TestCase):
                 f"{dimension} but holds {len(strays)} element(s) that are not: {strays[:10]}",
             )
 
+    def test_only_shells_and_beams_leave_the_writer_a_side_to_pick(self):
+        # The tie and contact panels tell the user that reversing a surface
+        # bears on shells and beams and on nothing else, so that they do not go
+        # looking for an effect on a solid that cannot come. What decides it is
+        # whether a reference names elements itself or the faces of larger
+        # ones: only the former leaves the writer the choice of a side, and it
+        # is what makes the S1/S2 branch of write_constraint_tie run at all.
+        import Fem
+
+        from femmesh import meshtools
+
+        def mesh_of(kind):
+            femmesh = Fem.FemMesh()
+            for index, point in enumerate(((0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)), start=1):
+                femmesh.addNode(*point, index)
+            # One id space over all element kinds, so they cannot share a 1
+            femmesh.addEdge([1, 2], 1)
+            if kind in ("shell", "solid"):
+                femmesh.addFace([1, 2, 3], 2)
+            if kind == "solid":
+                femmesh.addVolume([1, 2, 3, 4], 3)
+            return femmesh
+
+        class Getter:
+            """The two attributes get_entity_dimension reads, and no more."""
+
+            mesh_object = None
+
+            def __init__(self, femmesh):
+                self.femmesh = femmesh
+
+        cases = (
+            ("shell", "Face", False),
+            ("beam", "Edge", False),
+            ("solid", "Face", True),
+        )
+        for kind, geom_type, expected_sub_element in cases:
+            with self.subTest(kind=kind):
+                getter = Getter(mesh_of(kind))
+                # The reference is never looked at without a dimension map, and
+                # there is none on a mesh built by hand.
+                entity_dim = meshtools.get_entity_dimension(getter, (None, ""))
+                ref_dim = meshtools.REFERENCE_DIMENSION[geom_type]
+                self.assertEqual(
+                    ref_dim < entity_dim,
+                    expected_sub_element,
+                    f"a {geom_type} on a {kind} mesh is read the other way round",
+                )
+
     # ********************************************************************************************
     def input_file_writing_test(
         self,

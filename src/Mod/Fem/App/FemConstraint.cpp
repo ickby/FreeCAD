@@ -119,11 +119,19 @@ Constraint::Constraint()
         App::PropertyType(App::Prop_ReadOnly | App::Prop_Output | App::Prop_Hidden),
         "Normals where symbols are drawn"
     );
+    ADD_PROPERTY_TYPE(
+        PointsPerReference,
+        (0L),
+        "Constraint",
+        App::PropertyType(App::Prop_ReadOnly | App::Prop_Output | App::Prop_Hidden),
+        "How many of the drawn symbols each reference accounts for"
+    );
 
     Scale.setConstraints(&scaleConstraint);
 
     Points.setValues(std::vector<Base::Vector3d>());
     Normals.setValues(std::vector<Base::Vector3d>());
+    PointsPerReference.setValues(std::vector<long>());
 
     References.setScope(App::LinkScope::Global);
 
@@ -201,9 +209,11 @@ void Constraint::onChanged(const App::Property* prop)
 
         std::vector<Base::Vector3d> points;
         std::vector<Base::Vector3d> normals;
-        if (getPoints(points, normals, &sizeFactor)) {
+        std::vector<long> groups;
+        if (getPoints(points, normals, &sizeFactor, &groups)) {
             Points.setValues(points);
             Normals.setValues(normals);
+            PointsPerReference.setValues(groups);
             Points.touch();
         }
     }
@@ -267,7 +277,8 @@ void Constraint::handleChangedPropertyType(
 bool Constraint::getPoints(
     std::vector<Base::Vector3d>& points,
     std::vector<Base::Vector3d>& normals,
-    double* scale
+    double* scale,
+    std::vector<long>* pointsPerReference
 ) const
 {
     std::vector<App::DocumentObject*> Objects = References.getValues();
@@ -277,6 +288,9 @@ bool Constraint::getPoints(
     TopoDS_Shape sh;
 
     for (std::size_t i = 0; i < Objects.size(); i++) {
+        // How many points a reference adds is only known once it is done, and
+        // a shape type none of the branches below handles adds none at all.
+        const std::size_t before = points.size();
         auto* feat = Base::freecad_cast<App::GeoFeature*>(Objects[i]);
         const Part::TopoShape* featShape = Tools::getFeatureShape(Objects[i]);
         if (!feat || !featShape) {
@@ -468,6 +482,10 @@ bool Constraint::getPoints(
                     fillPointsAndNormals(pUV.X(), pUV.Y());
                 }
             }
+        }
+
+        if (pointsPerReference) {
+            pointsPerReference->push_back(static_cast<long>(points.size() - before));
         }
     }
 

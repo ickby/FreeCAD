@@ -51,14 +51,23 @@ from femtools import importtools
 from femtest.app.support_utils import fcc_print
 
 
-def _draws(parent, child):
-    """Whether a traversal of *parent* reaches the scene graph of *child*."""
+def _search(parent, child, everything):
     search = coin.SoSearchAction()
     search.setNode(child.ViewObject.RootNode)
     search.setInterest(coin.SoSearchAction.FIRST)
-    search.setSearchingAll(True)
+    search.setSearchingAll(everything)
     search.apply(parent.ViewObject.RootNode)
     return search.getPath() is not None
+
+
+def _draws(parent, child):
+    """Whether a traversal of *parent* reaches the scene graph of *child*."""
+    return _search(parent, child, True)
+
+
+def _renders(parent, child):
+    """The same, but only where *parent* is actually drawing, switches and all."""
+    return _search(parent, child, False)
 
 
 class TestAnalysisVisibilityGui(unittest.TestCase):
@@ -138,6 +147,63 @@ class TestAnalysisVisibilityGui(unittest.TestCase):
 
         self.assertTrue(first.ViewObject.Visibility)
         self.assertFalse(second.ViewObject.Visibility)
+
+    def _pipeline(self, name):
+        """An analysis with a result pipeline that has a filter in it."""
+        analysis = ObjectsFem.makeAnalysis(self.document, name)
+        pipeline = self.document.addObject("Fem::FemPostPipeline", name + "Result")
+        analysis.addObject(pipeline)
+        filter_obj = ObjectsFem.makePostVtkFilterWarp(self.document, pipeline, name + "Warp")
+        self.document.recompute()
+        return analysis, pipeline, filter_obj
+
+    def test_a_pipeline_that_is_hidden_still_draws_its_filters(self):
+        """
+        Looking at a filter alone is the ordinary way to read a result.
+
+        So the filters hang next to what the pipeline draws of itself rather
+        than under it, and switching the pipeline off leaves them be.
+        """
+        analysis, pipeline, warp = self._pipeline("Post")
+        self.assertTrue(_renders(pipeline, warp))
+
+        pipeline.ViewObject.Visibility = False
+
+        self.assertTrue(warp.ViewObject.Visibility, "the pipeline wrote the filter")
+        self.assertTrue(_renders(pipeline, warp), "the filter went with the pipeline")
+        self.assertTrue(_renders(analysis, warp))
+
+    def test_hiding_the_analysis_takes_the_filters_with_it(self):
+        """A filter is drawn through the analysis, so the analysis can clear it away."""
+        analysis, _pipe, warp = self._pipeline("Whole")
+        self.assertTrue(_renders(analysis, warp))
+
+        analysis.ViewObject.Visibility = False
+
+        self.assertFalse(_renders(analysis, warp), "the filter is still on screen")
+        self.assertTrue(warp.ViewObject.Visibility, "the analysis wrote the filter")
+
+    def test_a_function_is_drawn_through_the_pipeline_that_holds_it(self):
+        """
+        The functions a filter cuts with sit in a group of their own below the
+        pipeline, and are drawn in 3D as something to drag about. That widget
+        has to go when the analysis does, while surviving a hidden pipeline,
+        since hiding the result is how one gets a clear look at the function.
+        """
+        analysis, pipeline, _warp = self._pipeline("Cut")
+        provider = self.document.addObject("Fem::FemPostFunctionProvider", "Functions")
+        pipeline.addObject(provider)
+        plane = self.document.addObject("Fem::FemPostPlaneFunction", "Plane")
+        provider.addObject(plane)
+        self.document.recompute()
+        self.assertTrue(_renders(analysis, plane))
+
+        pipeline.ViewObject.Visibility = False
+        self.assertTrue(_renders(analysis, plane), "the function went with the pipeline")
+
+        analysis.ViewObject.Visibility = False
+        self.assertFalse(_renders(analysis, plane), "the function is still on screen")
+        self.assertTrue(plane.ViewObject.Visibility, "the analysis wrote the function")
 
     def test_the_import_container_draws_its_imports(self):
         """

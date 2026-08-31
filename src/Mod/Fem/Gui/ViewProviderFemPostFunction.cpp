@@ -52,6 +52,7 @@
 #include "FemSettings.h"
 #include "TaskPostBoxes.h"
 #include "ViewProviderAnalysis.h"
+#include "ViewProviderChildRootExtension.h"
 #include "ViewProviderFemPostFunction.h"
 
 
@@ -59,7 +60,11 @@ using namespace FemGui;
 
 PROPERTY_SOURCE(FemGui::ViewProviderFemPostFunctionProvider, Gui::ViewProviderDocumentObject)
 
-ViewProviderFemPostFunctionProvider::ViewProviderFemPostFunctionProvider() = default;
+ViewProviderFemPostFunctionProvider::ViewProviderFemPostFunctionProvider()
+{
+    // The functions are drawn under us, so that whatever holds the pipeline reaches them
+    ViewProviderChildRootExtension::initExtension(this);
+}
 
 ViewProviderFemPostFunctionProvider::~ViewProviderFemPostFunctionProvider() = default;
 

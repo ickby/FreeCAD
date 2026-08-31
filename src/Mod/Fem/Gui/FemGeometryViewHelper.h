@@ -305,7 +305,7 @@ private:
     DimensionMode m_cachedDimMode {DimensionMode::Highest};
     bool m_cachedWireframe {false};
     ColorMode m_cachedColorMode {ColorMode::Subelement};
-    ActiveStage m_cachedStage {ActiveStage::Geometry};
+    bool m_cachedOverlay {true};
     std::set<std::string> m_cachedHidden;
     std::map<std::string, ClippingPlane> m_cachedClips;
 };

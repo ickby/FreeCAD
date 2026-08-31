@@ -547,24 +547,37 @@ void FemGeometryViewHelper::onViewStateChanged()
     const DimensionMode dimMode = state->dimensionMode();
     const bool wireframe = state->wireframe();
     const ColorMode colorMode = state->colorMode();
+    const bool overlay = state->overlay();
     const auto hidden = localHiddenElements(state->hiddenElements());
     const auto clips = localClipPlanes(state->clipPlanes());
-    const ActiveStage stage = state->activeStage();
 
-    const bool colorOnly = m_viewStateCacheValid && m_cachedDimMode == dimMode
-        && m_cachedWireframe == wireframe && m_cachedHidden == hidden && m_cachedClips == clips
-        && m_cachedColorMode != colorMode && m_cachedStage == stage;
+    // The stage is not among these. It picks the mask set above and nothing
+    // else; where it does have a say, over which colour mode is in force, the
+    // colour mode itself already carries it.
+    const bool sameShape = m_viewStateCacheValid && m_cachedDimMode == dimMode
+        && m_cachedWireframe == wireframe && m_cachedHidden == hidden && m_cachedClips == clips;
+    const bool sameColor = m_viewStateCacheValid && m_cachedColorMode == colorMode;
+    const bool sameOverlay = m_viewStateCacheValid && m_cachedOverlay == overlay;
 
     m_cachedDimMode = dimMode;
     m_cachedWireframe = wireframe;
     m_cachedColorMode = colorMode;
-    m_cachedStage = stage;
+    m_cachedOverlay = overlay;
     m_cachedHidden = hidden;
     m_cachedClips = clips;
     m_viewStateCacheValid = true;
 
-    if (colorOnly) {
-        updateColors();
+    // Every helper of the analysis is told of every change, and all but the one
+    // the change is about see what they saw before. Colours and the ghost are
+    // written out of what the pipeline already produced, so only a change to
+    // the shape of that output is worth running again.
+    if (sameShape) {
+        if (!sameColor) {
+            updateColors();
+        }
+        if (!sameOverlay) {
+            updateGhostOverlay();
+        }
         return;
     }
     updateVTK();

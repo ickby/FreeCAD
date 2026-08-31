@@ -134,6 +134,14 @@ Fem::FemAnalysisImport::FemAnalysisImport()
         App::Prop_None,
         "Source analysis member names to omit"
     );
+
+    ADD_PROPERTY_TYPE(
+        SourceRevision,
+        (0),
+        "FEM Import",
+        App::PropertyType(App::Prop_Output | App::Prop_Hidden | App::Prop_Transient),
+        "Counter raised whenever this instance is recomputed"
+    );
 }
 
 Fem::FemAnalysisImport::~FemAnalysisImport() = default;
@@ -143,24 +151,20 @@ short Fem::FemAnalysisImport::mustExecute() const
     if (Analysis.isTouched() || SuppressedMembers.isTouched() || SuppressedComponents.isTouched()) {
         return 1;
     }
-    auto* src = Base::freecad_cast<Fem::FemAnalysis*>(Analysis.getValue());
-    if (src) {
-        if (auto* geom = Tools::getAnalysisGeometry(src)) {
-            if (geom->isTouched()) {
-                return 1;
-            }
-        }
-        if (auto* meshGroup = meshGroupOf(src)) {
-            if (meshGroup->isTouched()) {
-                return 1;
-            }
-        }
-    }
+    // What the source analysis holds needs no asking after. The analysis keeps
+    // its geometry, its mesh and its own instances in Group, so a change to any
+    // of them travels up to it and on to us along the link, nested instances
+    // included - which is more than reading the touched flag of the two
+    // top-level ones ever caught.
     return App::GeoFeature::mustExecute();
 }
 
 App::DocumentObjectExecReturn* Fem::FemAnalysisImport::execute()
 {
+    // Raised before the checks below, so that a source that has gone away
+    // reaches the view as well; what it draws is out of date either way.
+    SourceRevision.setValue(SourceRevision.getValue() + 1);
+
     auto* src = Base::freecad_cast<Fem::FemAnalysis*>(Analysis.getValue());
     if (!src) {
         return new App::DocumentObjectExecReturn("Analysis import needs a source analysis", this);

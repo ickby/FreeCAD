@@ -74,6 +74,19 @@ class GeometryGroup(base_fempythonobject.BaseFemPythonObject):
     def __init__(self, obj):
         super().__init__(obj)
         obj.addExtension("App::GeoFeatureGroupExtensionPython")
+        self._keep_visibility_out_of_the_recompute(obj)
+
+    def onDocumentRestored(self, obj):
+        self._keep_visibility_out_of_the_recompute(obj)
+
+    @staticmethod
+    def _keep_visibility_out_of_the_recompute(obj):
+        # Showing or hiding a member says nothing about the shape, and the group
+        # extension would otherwise touch us for it. What does change the shape
+        # reaches us through the Group link like any other dependency. The status
+        # of a transient property is written to the file, so a document saved
+        # before this was set brings the old one back with it.
+        obj.setPropertyStatus("_GroupTouched", "Output")
 
     def onChanged(self, obj, prop):
         if prop == "Group":

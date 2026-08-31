@@ -59,6 +59,19 @@ public:
     /** Member names from the source analysis to omit when resolving imports. */
     App::PropertyStringList SuppressedMembers;
 
+    /**
+     * Bumped on every recompute of this instance.
+     *
+     * Nothing stored here says what the instance draws: geometry and mesh are
+     * read from the source analysis, so a change over there leaves this object
+     * looking untouched and the view provider with nothing to follow. The
+     * dependency graph does reach us, through the link to the source analysis,
+     * and this is how that arrival is passed on. Output, so that saying it
+     * does not ask for another recompute, and transient, because a restored
+     * document builds its render tree anyway.
+     */
+    App::PropertyInteger SourceRevision;
+
     const char* getViewProviderName() const override
     {
         return "FemGui::ViewProviderFemAnalysisImport";

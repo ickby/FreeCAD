@@ -24,6 +24,7 @@
 
 #include <memory>
 #include <set>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -179,6 +180,21 @@ private:
 
     void rebuildRenderTree();
     void clearRenderTree();
+    /**
+     * Everything the render tree is built out of, in one comparable string.
+     *
+     * A recompute of the instance says that something in the source analysis
+     * moved, not that it was any of the things drawn here; a constraint that
+     * was edited reaches us the same way the geometry does. Rebuilding is far
+     * too expensive to do on that alone, so what would be read is read first
+     * and the tree kept if it comes out the same.
+     */
+    std::string renderSignature() const;
+    void appendNodeSignature(
+        Fem::FemAnalysisImport* importObj,
+        std::vector<const Fem::FemAnalysisImport*>& chain,
+        std::ostringstream& out
+    ) const;
     ImportRenderNode* buildRenderNode(
         Fem::FemAnalysisImport* importObj,
         const Base::Placement& outer,
@@ -221,9 +237,6 @@ private:
         const Base::Placement& outer,
         const Base::Placement* own = nullptr
     );
-    /** True when *obj* is part of what any analysis in the import tree renders. */
-    bool sourceProvides(const App::DocumentObject* obj) const;
-
     Fem::FemAnalysis* findAnalysis() const;
     static std::vector<unsigned char> buildComponentSubsetMask(
         const Fem::FemMesh& mesh,
@@ -262,6 +275,8 @@ private:
     SoSeparator* m_meshRoot {nullptr};
     SoSeparator* m_hidden {nullptr};
     std::vector<std::unique_ptr<ImportRenderNode>> m_renderNodes;
+    /** What renderSignature() read when the tree standing now was built. */
+    std::string m_builtFrom;
     std::vector<fastsignals::connection> m_connections;
     fastsignals::scoped_connection m_treeConn;
     AnalysisViewState::Connection m_viewStateConn;

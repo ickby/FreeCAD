@@ -62,6 +62,7 @@ class SoIndexedPointSet;
 class SoShapeHints;
 class SoDrawStyle;
 class SoDepthBuffer;
+class SoSwitch;
 
 namespace PartGui
 {
@@ -364,6 +365,9 @@ protected:
     SoIndexedPointSet* m_highlightoverlaypoints {nullptr};
 
     // Cutting-tool preview while a chain-step panel is open (e.g. partition).
+    // Switched out while no tool is set: an empty preview still holds a point
+    // at the origin, and a bounding box drawn around that reaches back to it.
+    SoSwitch* m_toolPreviewSwitch {nullptr};
     PartGui::SoPreviewShape* m_toolPreview {nullptr};
 
     SoSFColor m_colorhighlight;

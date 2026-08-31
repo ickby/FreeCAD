@@ -25,6 +25,7 @@
 #include <QWidget>
 
 #include <Gui/ViewProviderDocumentObjectGroup.h>
+#include "ViewProviderChildRootExtension.h"
 #include "ViewProviderShapeExtension.h"
 
 namespace FemGui
@@ -32,7 +33,8 @@ namespace FemGui
 
 class ViewProviderFemPostFunction;
 
-class FemGuiExport ViewProviderFemPostFunctionProvider: public Gui::ViewProviderDocumentObjectGroup
+class FemGuiExport ViewProviderFemPostFunctionProvider: public Gui::ViewProviderDocumentObjectGroup,
+                                                        public ViewProviderChildRootExtension
 {
     PROPERTY_HEADER_WITH_OVERRIDE(FemGui::ViewProviderFemPostFunctionProvider);
 

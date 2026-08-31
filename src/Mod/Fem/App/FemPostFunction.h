@@ -89,6 +89,8 @@ public:
 protected:
     bool allowObject(App::DocumentObject* obj) override;
     void unsetupObject() override;
+    /// Leaves each function the visibility it was given, see FemPostGroupExtension
+    void extensionOnChanged(const App::Property* prop) override;
 
     // update documents
     void handleChangedPropertyName(

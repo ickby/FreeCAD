@@ -67,6 +67,22 @@
 
 using namespace FemGui;
 
+namespace
+{
+/// Looks an analysis view provider up by name, for work that is put off until the event loop
+ViewProviderFemAnalysis* analysisViewProvider(const std::string& docName, const std::string& objName)
+{
+    auto* doc = App::GetApplication().getDocument(docName.c_str());
+    auto* guiDoc = doc && Gui::Application::Instance ? Gui::Application::Instance->getDocument(doc)
+                                                     : nullptr;
+    if (!guiDoc) {
+        return nullptr;
+    }
+    auto* obj = freecad_cast<Fem::FemAnalysis*>(doc->getObject(objName.c_str()));
+    return obj ? freecad_cast<ViewProviderFemAnalysis*>(guiDoc->getViewProvider(obj)) : nullptr;
+}
+}  // namespace
+
 ViewProviderFemHighlighter::ViewProviderFemHighlighter()
 {
     annotate = new SoSeparator();
@@ -155,6 +171,10 @@ void ViewProviderFemAnalysis::attach(App::DocumentObject* obj)
     childRoot->setName("FemAnalysisChildren");
     addDisplayMaskMode(childRoot, "Analysis");
     setDisplayMaskMode("Analysis");
+
+    frontRoot = new SoSeparator();
+    frontRoot->setName("FemAnalysisChildrenForeground");
+    frontHidden = new SoSeparator();
 
     if (auto* analysis = freecad_cast<Fem::FemAnalysis*>(obj)) {
         // Ensure view state exists and is loaded from persisted properties
@@ -255,6 +275,18 @@ void ViewProviderFemAnalysis::updateData(const App::Property* prop)
         // Before the caller rebuilds the 3D children off the back of this, so
         // that a container that just joined is one that can hold its own.
         giveContainersAChildRoot();
+
+        if (!Visibility.getValue()) {
+            // The caller refills our foreground once it is done, so we clear it again after.
+            // Named rather than captured, see finishRestoring().
+            const std::string docName = analysis->getDocument()->getName();
+            const std::string objName = analysis->getNameInDocument();
+            QTimer::singleShot(0, [docName, objName]() {
+                if (auto* vp = analysisViewProvider(docName, objName)) {
+                    vp->drawForeground(false);
+                }
+            });
+        }
     }
     Gui::ViewProviderDocumentObjectGroup::updateData(prop);
 }
@@ -283,17 +315,7 @@ void ViewProviderFemAnalysis::finishRestoring()
     const std::string docName = analysis->getDocument()->getName();
     const std::string objName = analysis->getNameInDocument();
     QTimer::singleShot(0, [docName, objName]() {
-        auto* doc = App::GetApplication().getDocument(docName.c_str());
-        auto* guiDoc = doc && Gui::Application::Instance
-            ? Gui::Application::Instance->getDocument(doc)
-            : nullptr;
-        if (!guiDoc) {
-            return;
-        }
-        auto* obj = freecad_cast<Fem::FemAnalysis*>(doc->getObject(objName.c_str()));
-        auto* vp = obj ? freecad_cast<ViewProviderFemAnalysis*>(guiDoc->getViewProvider(obj))
-                       : nullptr;
-        if (vp) {
+        if (auto* vp = analysisViewProvider(docName, objName)) {
             vp->refreshClipPlaneHandles();
         }
     });
@@ -373,6 +395,24 @@ SoGroup* ViewProviderFemAnalysis::getChildRoot() const
     return childRoot;
 }
 
+SoSeparator* ViewProviderFemAnalysis::getFrontRoot() const
+{
+    return frontRoot;
+}
+
+void ViewProviderFemAnalysis::drawForeground(bool on)
+{
+    auto* from = on ? frontHidden.get() : frontRoot.get();
+    auto* to = on ? frontRoot.get() : frontHidden.get();
+    while (from->getNumChildren() > 0) {
+        SoNode* node = from->getChild(0);
+        from->removeChild(0);
+        if (to->findChild(node) < 0) {
+            to->addChild(node);
+        }
+    }
+}
+
 std::vector<std::string> ViewProviderFemAnalysis::getDisplayModes() const
 {
     return {"Analysis"};
@@ -381,11 +421,13 @@ std::vector<std::string> ViewProviderFemAnalysis::getDisplayModes() const
 void ViewProviderFemAnalysis::hide()
 {
     Gui::ViewProviderDocumentObjectGroup::hide();
+    drawForeground(false);
 }
 
 void ViewProviderFemAnalysis::show()
 {
     Gui::ViewProviderDocumentObjectGroup::show();
+    drawForeground(true);
 }
 
 void ViewProviderFemAnalysis::setupContextMenu(QMenu* menu, QObject*, const char*)

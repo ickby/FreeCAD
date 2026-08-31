@@ -1343,6 +1343,33 @@ class TestGeometryReferences(unittest.TestCase):
         self.assertEqual(len(list(constraint.PointsPerReference)), 1)
         self.assertEqual(sum(constraint.PointsPerReference), len(constraint.Points))
 
+    def test_a_path_into_the_chain_names_the_step_it_ends_at(self):
+        """
+        A click on a chain step, while a task panel previews it, arrives as a
+        path down through the analysis and the geometry group. Answering it
+        with a container is answering with the wrong shape: the result of the
+        chain is not what was clicked, and its Face1 is a different face from
+        the step's. A selection gate asking what the reference is then refuses
+        every pick, which leaves no way to fill an empty reference field.
+        """
+        step = self.group.Group[0]
+        path = f"{step.Name}.Face1"
+
+        self.assertIs(self.group.getSubObject(path, retType=1), step)
+        self.assertIs(
+            self.analysis.getSubObject(f"{self.group.Name}.{path}", retType=1),
+            step,
+        )
+
+    def test_a_path_of_one_word_still_names_the_group(self):
+        """The result of the chain is what the group itself holds and draws."""
+        self.assertIs(self.group.getSubObject("Face1", retType=1), self.group)
+        self.assertIs(
+            self.analysis.getSubObject(f"{self.group.Name}.Face1", retType=1),
+            self.group,
+        )
+        self.assertIsNotNone(self.group.getSubObject("Face1"), "the shape comes with it")
+
     def test_a_member_of_a_member_finds_the_analysis(self):
         """A mesh refinement hangs two groups deep, in the mesher of the mesh."""
         from femtools import femutils

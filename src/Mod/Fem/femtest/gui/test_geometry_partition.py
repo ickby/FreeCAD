@@ -343,6 +343,29 @@ class TestGeometryPartitionGui(unittest.TestCase):
 
         self.assertEqual(picker.references, [(self.imp, "Solid1")])
 
+    def test_pick_reported_against_the_analysis_reaches_the_step(self):
+        """
+        Once the group sits in an analysis the click comes down another level,
+        because the analysis holds its members in 3D as well. Reading only as
+        far as the group left the gate comparing a face of the chain result
+        against the step it was picked on, and every field stayed empty with
+        no way to fill it.
+        """
+        analysis = ObjectsFem.makeAnalysis(self.document)
+        analysis.addObject(self.group)
+        self.document.recompute()
+
+        picker = self._picker("Solid")
+        picker.start_selection()
+        FreeCADGui.Selection.addSelection(
+            self.document.Name,
+            analysis.Name,
+            f"{self.group.Name}.{self.imp.Name}.Face1",
+        )
+        picker.finish_selection()
+
+        self.assertEqual(picker.references, [(self.imp, "Solid1")])
+
     def test_face_pick_becomes_the_owning_solid(self):
         """A 3D click can only hit a face, so solid targets are derived."""
         picker = self._picker("Solid")

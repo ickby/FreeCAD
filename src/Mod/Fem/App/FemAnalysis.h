@@ -76,6 +76,25 @@ public:
         return "FemGui::ViewProviderFemAnalysis";
     }
 
+    /**
+     * The object a path names, however deep it runs.
+     *
+     * A group answers a path with the member it starts at and lets that member
+     * only confirm the rest, which is as far as a plain container ever needs to
+     * look. The members of an analysis are containers in their own right, and
+     * what is clicked in the 3D view sits below them: a face of a geometry step
+     * arrives as Geometry.Step.Face1. Stopping at the geometry group would name
+     * a face of the result where a face of the step was picked, and the two are
+     * not the same face.
+     */
+    App::DocumentObject* getSubObject(
+        const char* subname,
+        PyObject** pyObj = nullptr,
+        Base::Matrix4D* mat = nullptr,
+        bool transform = true,
+        int depth = 0
+    ) const override;
+
 protected:
     /**
      * Hiding the analysis is left to the scene graph.

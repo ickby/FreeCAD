@@ -620,23 +620,31 @@ class MeshSetsGetter:
     # ********************************************************************************************
     # ********************************************************************************************
     # element sets material and element geometry
-    def get_solid_element_sets(self, femobjs):
-        # get element ids and write them into the femobj
-        all_found = False
-        if self.femmesh.GroupCount:
-            all_found = meshtools.get_femelement_sets_from_group_data(
-                self.femmesh, femobjs, "Volume", len(self.model_element_ids(3))
-            )
-            FreeCAD.Console.PrintMessage(all_found)
-            FreeCAD.Console.PrintMessage("\n")
-        if all_found is False:
-            volumes_table, volume_nodes_ele = self.tables_for_dimension(3)
-            control = meshtools.get_femelement_sets(
-                self.femmesh, volumes_table, femobjs, volume_nodes_ele
-            )
-            # we only need to set it, if it is still True
-            if (self.femelement_count_test is True) and (control is False):
-                self.femelement_count_test = False
+    def get_element_sets_of_dimension(self, femobjs, dim):
+        """Element ids of dimension *dim* for each of *femobjs*, written into it.
+
+        A mesh which has groups already knows which elements a reference was
+        meshed from, and reading them costs nothing. The search below has to
+        find that out again from the node coordinates of the reference, which
+        on an assembly of a few parts is most of the time the writer takes.
+        """
+        if not femobjs:
+            return
+
+        group_type = meshtools.get_group_type_of_dimension(dim)
+        if self.femmesh.GroupCount and group_type:
+            if meshtools.get_femelement_sets_from_group_data(
+                self.femmesh, femobjs, group_type, self.model_element_ids(dim)
+            ):
+                return
+
+        element_table, femnodes_ele_table = self.tables_for_dimension(dim)
+        control = meshtools.get_femelement_sets(
+            self.femmesh, element_table, femobjs, femnodes_ele_table
+        )
+        # we only need to set it, if it is still True
+        if (self.femelement_count_test is True) and (control is False):
+            self.femelement_count_test = False
 
     @property
     def faces_table(self):
@@ -653,14 +661,12 @@ class MeshSetsGetter:
     def get_element_geometry2D_elements(self):
         # get element ids and write them into the objects
         FreeCAD.Console.PrintMessage("Shell thicknesses\n")
-        meshtools.get_femelement_sets(
-            self.femmesh, self.faces_table, self.member.geos_shellthickness
-        )
+        self.get_element_sets_of_dimension(self.member.geos_shellthickness, 2)
 
     def get_element_geometry1D_elements(self):
         # get element ids and write them into the objects
         FreeCAD.Console.PrintMessage("Beam sections\n")
-        meshtools.get_femelement_sets(self.femmesh, self.edges_table, self.member.geos_beamsection)
+        self.get_element_sets_of_dimension(self.member.geos_beamsection, 1)
 
     def get_element_rotation1D_elements(self):
         # get for each geometry edge direction the element ids and rotation norma
@@ -678,7 +684,7 @@ class MeshSetsGetter:
     def get_element_fluid1D_elements(self):
         # get element ids and write them into the objects
         FreeCAD.Console.PrintMessage("Fluid sections\n")
-        meshtools.get_femelement_sets(self.femmesh, self.edges_table, self.member.geos_fluidsection)
+        self.get_element_sets_of_dimension(self.member.geos_fluidsection, 1)
 
     def get_material_elements(self):
         """Element ids of every material object, over all dimensions of the mesh.
@@ -699,13 +705,15 @@ class MeshSetsGetter:
                 collected[index] += femobj.get("FEMElements", [])
 
         if 3 in self.model_dimensions:
-            self.get_solid_element_sets(materials)
+            self.get_element_sets_of_dimension(materials, 3)
             collect()
-        if self.member.geos_shellthickness and self.faces_table:
-            meshtools.get_femelement_sets(self.femmesh, self.faces_table, materials)
+        if self.member.geos_shellthickness and 2 in self.model_dimensions:
+            self.get_element_sets_of_dimension(materials, 2)
             collect()
-        if (self.member.geos_beamsection or self.member.geos_fluidsection) and self.edges_table:
-            meshtools.get_femelement_sets(self.femmesh, self.edges_table, materials)
+        if (
+            self.member.geos_beamsection or self.member.geos_fluidsection
+        ) and 1 in self.model_dimensions:
+            self.get_element_sets_of_dimension(materials, 1)
             collect()
 
         # A single round already wrote the result and each search orders its own

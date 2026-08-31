@@ -34,6 +34,7 @@ from femtest.gui.test_mesh_edges import TestMeshEdgesGui as FemGuiTest07
 from femtest.gui.test_component_selection import TestComponentSelectionGui as FemGuiTest08
 from femtest.gui.test_constraint_symbols import TestConstraintSymbolsGui as FemGuiTest09
 from femtest.gui.test_analysis_visibility import TestAnalysisVisibilityGui as FemGuiTest10
+from femtest.gui.test_import_selection import TestImportSelectionGui as FemGuiTest11
 
 # dummy usage to get flake8 and lgtm quiet
 False if FemGuiTest01.__name__ else True
@@ -46,3 +47,4 @@ False if FemGuiTest07.__name__ else True
 False if FemGuiTest08.__name__ else True
 False if FemGuiTest09.__name__ else True
 False if FemGuiTest10.__name__ else True
+False if FemGuiTest11.__name__ else True

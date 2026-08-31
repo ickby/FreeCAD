@@ -1251,26 +1251,33 @@ class GeometryExplorer(QtGui.QTreeView):
         imports = set()
         if self.active_analysis:
             imports = {imp.Name for imp in importmembers.collect_imports(self.active_analysis)}
-        if obj not in chain and obj not in imports:
-            return None
 
         sub = sub or ""
         if not sub:
             return None
 
-        leaf = sub.rsplit(".", 1)[-1]
+        # A pick is recorded against the top of the tree, so the object named is
+        # the analysis and the way down to what was picked sits in the subname.
+        # Read the whole way: the object in front of it names the analysis, not
+        # what it holds.
+        path = [obj] + sub.split(".")
+        leaf = path[-1]
         if not _ELEMENT_NAME.match(leaf):
             return None
 
-        if obj in chain:
-            # A pick on the geometry chain carries the object path in front of
-            # the element; only the element names anything of the shape.
+        for index, step in enumerate(path[:-1]):
+            if step in imports:
+                # An instance draws a copy of everything the nested ones hold,
+                # so the first one on the way owns the pick, and names it with
+                # the nested instances still in front.
+                return ".".join(path[index:])
+
+        if any(step in chain for step in path[:-1]):
+            # The chain shares one shape and one numbering, so which of its
+            # steps was named says nothing: only the element does.
             return leaf
 
-        # A pick on an import is relative to it, so its own name completes the
-        # analysis-relative path — including for an element of a nested instance,
-        # whose subname already carries the instances in between.
-        return f"{obj}.{sub}"
+        return None
 
     def _rows_for_elements(self, wanted):
         """
@@ -1317,14 +1324,17 @@ class GeometryExplorer(QtGui.QTreeView):
 
     def _sync_tree_selection(self):
         """Make the tree highlight match the current FreeCAD selection."""
+        # An analysis that only places others has no geometry of its own, and
+        # the rows for what it places still answer to a selection.
+        owner = self.geom_obj if self.geom_obj is not None else self.active_analysis
         # While the tree propagates its own change the selection is still being
         # built up; the deferred pass reconciles the final state.
-        if not self.geom_obj or self.selection_lock:
+        if not owner or self.selection_lock:
             return
         self._sync_pending = False
 
         try:
-            doc = self.geom_obj.Document.Name
+            doc = owner.Document.Name
         except (AttributeError, ReferenceError, RuntimeError):
             # The deferred pass can outlive the document it was scheduled for
             return

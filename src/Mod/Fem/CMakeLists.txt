@@ -769,6 +769,7 @@ SET(FemGuiTests_SRCS
     femtest/gui/test_constraint_symbols.py
     femtest/gui/test_geometry_marks.py
     femtest/gui/test_geometry_partition.py
+    femtest/gui/test_import_selection.py
     femtest/gui/test_mesh_edges.py
     femtest/gui/test_open.py
     femtest/gui/test_palette.py

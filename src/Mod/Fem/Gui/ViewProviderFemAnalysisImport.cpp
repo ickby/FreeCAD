@@ -1379,6 +1379,41 @@ std::string ViewProviderFemAnalysisImport::getElement(const SoDetail* detail) co
     return {};
 }
 
+std::string ViewProviderFemAnalysisImport::selectedElement(
+    const char* featName,
+    const std::string& subname
+) const
+{
+    auto* importObj = getObject<Fem::FemAnalysisImport>();
+    const char* objName = importObj ? importObj->getNameInDocument() : nullptr;
+    if (!objName || !featName) {
+        return {};
+    }
+
+    // A panel selecting on the instance itself names it and nothing above it.
+    if (std::strcmp(featName, objName) == 0) {
+        return subname;
+    }
+
+    auto* doc = importObj->getDocument();
+    if (!doc) {
+        return {};
+    }
+    for (std::size_t pos = 0; pos < subname.size();) {
+        const auto dot = subname.find('.', pos);
+        if (dot == std::string::npos) {
+            break;
+        }
+        const std::string step = subname.substr(pos, dot - pos);
+        pos = dot + 1;
+        if (!Base::freecad_cast<Fem::FemAnalysisImport*>(doc->getObject(step.c_str()))) {
+            continue;
+        }
+        return step == objName ? subname.substr(pos) : std::string();
+    }
+    return {};
+}
+
 void ViewProviderFemAnalysisImport::syncSelectionHighlight()
 {
     auto* importObj = getObject<Fem::FemAnalysisImport>();
@@ -1386,8 +1421,7 @@ void ViewProviderFemAnalysisImport::syncSelectionHighlight()
         return;
     }
     const char* docName = importObj->getDocument()->getName();
-    const char* objName = importObj->getNameInDocument();
-    if (!objName) {
+    if (!importObj->getNameInDocument()) {
         return;
     }
 
@@ -1397,21 +1431,22 @@ void ViewProviderFemAnalysisImport::syncSelectionHighlight()
              App::DocumentObject::getClassTypeId(),
              Gui::ResolveMode::NoResolve
          )) {
-        if (std::strcmp(sel.getFeatName(), objName) != 0) {
-            continue;
-        }
         for (const auto& sub : sel.getSubNames()) {
-            selected.insert(sub);
+            auto element = selectedElement(sel.getFeatName(), sub);
+            if (!element.empty()) {
+                selected.insert(std::move(element));
+            }
         }
     }
 
     // Preselection is a single slot on the selection singleton.
     std::set<std::string> preselected;
     const auto& pre = Gui::Selection().getPreselection();
-    if (pre.pDocName && pre.pObjectName && pre.pSubName
-        && std::strcmp(pre.pDocName, docName) == 0
-        && std::strcmp(pre.pObjectName, objName) == 0) {
-        preselected.insert(pre.pSubName);
+    if (pre.pDocName && pre.pObjectName && pre.pSubName && std::strcmp(pre.pDocName, docName) == 0) {
+        auto element = selectedElement(pre.pObjectName, pre.pSubName);
+        if (!element.empty()) {
+            preselected.insert(std::move(element));
+        }
     }
 
     std::function<void(ImportRenderNode&)> walk = [&](ImportRenderNode& node) {

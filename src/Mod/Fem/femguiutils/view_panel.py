@@ -59,10 +59,10 @@ _MESH_COLOR_MODES = {"CellType"}
 _TREE_ICON_SIZE = 16
 _COLOR_COLUMN_WIDTH = _TREE_ICON_SIZE + 12
 _VIS_COLUMN_WIDTH = 32
-# The stage where neither geometry nor mesh is drawn. Switching both off is
-# what clears the view for the results, so the result stage is where that
-# lands; every preprocessing view provider already hides outside its own stage.
-_NO_STAGE = "Result"
+# The stage where neither geometry nor mesh is drawn, which is what clears the
+# view for the results. Reads back off the analysis as the state where neither
+# the geometry group nor the mesh group is visible.
+_NO_STAGE = "NoStage"
 _ELEMENT_NAME = re.compile(r"^(Component|CompSolid|Compound|Solid|Shell|Face|Wire|Edge|Vertex)\d+$")
 
 # One placed instance in the tree of an analysis:

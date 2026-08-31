@@ -78,6 +78,17 @@ public:
 
 protected:
     /**
+     * Hiding the analysis is left to the scene graph.
+     *
+     * A group would put every member out of sight by writing its Visibility,
+     * which is what a container with no scene graph of its own has to do. The
+     * members of an analysis hang under it in 3D, so switching the analysis
+     * off already takes them with it, and writing each of them would only
+     * throw away what it was set to and touch the document over a view change.
+     */
+    void extensionOnChanged(const App::Property* prop) override;
+
+    /**
      * @brief Retain compatibility with old "Member" property.
      *
      * @details

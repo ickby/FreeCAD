@@ -535,7 +535,7 @@ void FemGeometryViewHelper::onViewStateChanged()
     auto* state = m_boundViewState;
     if (state && m_manageStageVisibility && m_viewProvider && m_displayModesAdded) {
         const bool geometryStage = state->activeStage() == ActiveStage::Geometry;
-        m_viewProvider->setDisplayMaskMode(geometryStage ? GeometryMode : GeometryHiddenMode);
+        setStageMask(*m_viewProvider, geometryStage ? GeometryMode : GeometryHiddenMode);
     }
 
     if (!state) {

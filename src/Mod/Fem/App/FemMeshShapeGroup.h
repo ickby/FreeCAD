@@ -119,6 +119,18 @@ protected:
     void onChanged(const App::Property* prop) override;
     void onDocumentRestored() override;
 
+    /**
+     * Hiding the group is left to the scene graph.
+     *
+     * A group would put every mesh out of sight by writing its Visibility,
+     * which is what a container with no scene graph of its own has to do. The
+     * meshes hang under this one in 3D, so switching it off already takes them
+     * with it. Writing each of them would throw away what it was set to, and
+     * since showing the group is what the mesh stage is, that would happen on
+     * every switch of stage.
+     */
+    void extensionOnChanged(const App::Property* prop) override;
+
 private:
     /// Component claims of the mesh children, the base of every coverage check.
     struct ComponentClaims

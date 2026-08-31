@@ -87,6 +87,17 @@ public:
     bool doubleClicked() override;
 
     std::vector<App::DocumentObject*> claimChildren() const override;
+    /**
+     * Everything the analysis holds hangs under it in 3D.
+     *
+     * Which makes hiding the analysis hide the analysis, geometry, meshes,
+     * constraint symbols and placed instances alike, instead of leaving a
+     * document with two analyses in it drawing both on top of each other.
+     * Only the direct members are claimed; what sits in a container below is
+     * that container's to draw, see giveContainersAChildRoot().
+     */
+    std::vector<App::DocumentObject*> claimChildren3D() const override;
+    SoGroup* getChildRoot() const override;
 
     /// handling when object is deleted
     bool onDelete(const std::vector<std::string>&) override;
@@ -167,8 +178,19 @@ private:
     void syncClipPlaneHandles();
     void connectViewState();
 
+    /**
+     * Let the plain containers of this analysis draw their own members.
+     *
+     * The imports live in an App::DocumentObjectGroup, which has no scene
+     * graph and so would hide its members by writing each of them. Adding
+     * ViewProviderChildRootExtension gives it a node to hang them from, and
+     * hiding the container then simply takes them out of the view.
+     */
+    void giveContainersAChildRoot();
+
     ViewProviderFemHighlighter extension;
     Gui::CoinPtr<SoSeparator> clipPlaneRoot;
+    Gui::CoinPtr<SoGroup> childRoot;
 
     std::map<std::string, std::unique_ptr<ClipPlaneHandle>> clipPlaneHandles;
     /// The planes as of the last sync, to tell a real change from a passing one

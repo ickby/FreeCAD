@@ -445,18 +445,18 @@ void ViewProviderFemAnalysisImport::syncStageVisibility()
     // so the state it has to follow is only reachable later on.
     connectViewState();
     if (!m_boundViewState) {
-        setDisplayMaskMode(GeometryMode);
+        setStageMask(*this, GeometryMode);
         return;
     }
     switch (m_boundViewState->activeStage()) {
         case ActiveStage::Mesh:
-            setDisplayMaskMode(MeshMode);
+            setStageMask(*this, MeshMode);
             break;
         case ActiveStage::Geometry:
-            setDisplayMaskMode(GeometryMode);
+            setStageMask(*this, GeometryMode);
             break;
         default:
-            setDisplayMaskMode(HiddenMode);
+            setStageMask(*this, HiddenMode);
             break;
     }
 }

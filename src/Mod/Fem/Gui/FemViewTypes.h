@@ -93,7 +93,8 @@ enum class ActiveStage
 {
     Geometry = 0,
     Mesh,
-    Result  ///< reserved for later post-processing unification
+    Result,  ///< reserved for later post-processing unification
+    NoStage  ///< neither geometry nor mesh drawn, the view left to the results
 };
 
 /** Colour mode is stage-scoped; valid values depend on ActiveStage. */

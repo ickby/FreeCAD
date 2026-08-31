@@ -491,5 +491,5 @@ void FemPreprocessMeshViewHelper::syncStageVisibility()
     if (auto* state = m_boundViewState ? m_boundViewState : viewState()) {
         meshStage = (state->activeStage() == ActiveStage::Mesh);
     }
-    m_viewProvider->setDisplayMaskMode(meshStage ? PreprocessMode : PreprocessHiddenMode);
+    setStageMask(*m_viewProvider, meshStage ? PreprocessMode : PreprocessHiddenMode);
 }

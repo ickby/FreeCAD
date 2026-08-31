@@ -22,6 +22,11 @@
 
 #pragma once
 
+#include <string>
+#include <vector>
+
+#include <Inventor/nodes/SoGroup.h>
+
 #include <Gui/ViewProviderDocumentObjectGroup.h>
 #include <Gui/ViewProviderFeaturePython.h>
 #include <Mod/Fem/FemGlobal.h>
@@ -34,7 +39,10 @@ namespace FemGui
 /**
  * View provider for FemMeshShapeGroup.
  *
- * Child mesh objects render themselves. This VP only wires view-state updates.
+ * The child meshes render themselves, so this one holds no geometry of its
+ * own. What it does hold is their scene graph: the meshes hang under it in 3D,
+ * which is what makes hiding the group hide the meshes in it, and that in turn
+ * is how the mesh stage is switched on and off.
  */
 class FemGuiExport ViewProviderFemMeshGroup: public Gui::ViewProviderDocumentObjectGroup
 {
@@ -48,7 +56,9 @@ public:
     void updateData(const App::Property* prop) override;
     void onChanged(const App::Property* prop) override;
 
-    void updateStageVisibility();
+    std::vector<std::string> getDisplayModes() const override;
+    SoGroup* getChildRoot() const override;
+    std::vector<App::DocumentObject*> claimChildren3D() const override;
 
 protected:
     Fem::FemAnalysis* findAnalysis() const;
@@ -57,6 +67,7 @@ protected:
 
 private:
     AnalysisViewState::Connection m_viewStateConn;
+    SoGroup* m_childRoot {nullptr};
 };
 
 using ViewProviderFemMeshGroupPython = Gui::ViewProviderFeaturePythonT<ViewProviderFemMeshGroup>;

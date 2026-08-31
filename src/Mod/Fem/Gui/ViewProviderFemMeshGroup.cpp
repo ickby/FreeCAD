@@ -34,20 +34,42 @@ using namespace FemGui;
 PROPERTY_SOURCE(FemGui::ViewProviderFemMeshGroup, Gui::ViewProviderDocumentObjectGroup)
 
 ViewProviderFemMeshGroup::ViewProviderFemMeshGroup()
+    : m_childRoot(new SoGroup())
 {
     sPixmap = "FEM_MeshGroup";
+    m_childRoot->ref();
 }
 
 ViewProviderFemMeshGroup::~ViewProviderFemMeshGroup()
 {
     m_viewStateConn.disconnect();
+    m_childRoot->unref();
 }
 
 void ViewProviderFemMeshGroup::attach(App::DocumentObject* pcObject)
 {
     Gui::ViewProviderDocumentObjectGroup::attach(pcObject);
+    addDisplayMaskMode(m_childRoot, "Group");
+    setDisplayMaskMode("Group");
     connectViewState();
-    updateStageVisibility();
+}
+
+std::vector<std::string> ViewProviderFemMeshGroup::getDisplayModes() const
+{
+    return {"Group"};
+}
+
+SoGroup* ViewProviderFemMeshGroup::getChildRoot() const
+{
+    return m_childRoot;
+}
+
+std::vector<App::DocumentObject*> ViewProviderFemMeshGroup::claimChildren3D() const
+{
+    if (auto* group = Base::freecad_cast<Fem::FemMeshShapeGroup*>(getObject())) {
+        return group->Group.getValues();
+    }
+    return {};
 }
 
 void ViewProviderFemMeshGroup::updateData(const App::Property* prop)
@@ -58,7 +80,6 @@ void ViewProviderFemMeshGroup::updateData(const App::Property* prop)
         return;
     }
     if (strcmp(prop->getName(), "Group") == 0) {
-        updateStageVisibility();
         syncChildViewStates();
     }
 }
@@ -67,7 +88,14 @@ void ViewProviderFemMeshGroup::onChanged(const App::Property* prop)
 {
     Gui::ViewProviderDocumentObjectGroup::onChanged(prop);
     if (prop == &Visibility) {
-        updateStageVisibility();
+        // Showing the meshes is what the mesh stage is, so the stage has to be
+        // read again whenever this changes, including when the user hits space
+        // bar on the group in the tree.
+        if (auto* analysis = findAnalysis()) {
+            if (auto* state = AnalysisViewState::find(analysis)) {
+                state->stageVisibilityChanged(ActiveStage::Mesh);
+            }
+        }
     }
 }
 
@@ -99,10 +127,8 @@ void ViewProviderFemMeshGroup::connectViewState()
         return;
     }
     m_viewStateConn = state->connectChanged([this]() {
-        updateStageVisibility();
         syncChildViewStates();
     });
-    updateStageVisibility();
     syncChildViewStates();
 }
 
@@ -128,24 +154,6 @@ void ViewProviderFemMeshGroup::syncChildViewStates()
         if (vp) {
             vp->syncRepresentation();
         }
-    }
-}
-
-void ViewProviderFemMeshGroup::updateStageVisibility()
-{
-    bool meshStage = true;
-    if (auto* analysis = findAnalysis()) {
-        if (auto* state = AnalysisViewState::forAnalysis(analysis)) {
-            meshStage = (state->activeStage() == ActiveStage::Mesh);
-        }
-    }
-
-    if (!meshStage) {
-        return;
-    }
-
-    if (!Visibility.getValue()) {
-        Visibility.setValue(true);
     }
 }
 

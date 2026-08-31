@@ -197,6 +197,15 @@ void FemMeshShapeGroup::onChanged(const App::Property* prop)
     FemMeshShapeBaseObject::onChanged(prop);
 }
 
+void FemMeshShapeGroup::extensionOnChanged(const App::Property* prop)
+{
+    if (prop == &Visibility) {
+        App::Extension::extensionOnChanged(prop);
+        return;
+    }
+    App::GroupExtension::extensionOnChanged(prop);
+}
+
 void FemMeshShapeGroup::onDocumentRestored()
 {
     // Anything that read the merge while the document was still coming off disk

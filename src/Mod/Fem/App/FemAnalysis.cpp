@@ -21,6 +21,8 @@
  ***************************************************************************/
 
 
+#include <cstring>
+
 #include <App/DocumentObjectPy.h>
 #include <App/FeaturePythonPyImp.h>
 #include <Base/Uuid.h>
@@ -41,6 +43,25 @@ FemAnalysis::FemAnalysis()
 }
 
 FemAnalysis::~FemAnalysis() = default;
+
+App::DocumentObject* FemAnalysis::getSubObject(
+    const char* subname,
+    PyObject** pyObj,
+    Base::Matrix4D* mat,
+    bool transform,
+    int depth
+) const
+{
+    const char* dot = subname ? std::strchr(subname, '.') : nullptr;
+    if (dot && subname[0] != '$') {
+        if (auto* member = Group.findUsingMap(std::string(subname, dot))) {
+            if (auto* deeper = member->getSubObject(dot + 1, pyObj, mat, true, depth + 1)) {
+                return deeper;
+            }
+        }
+    }
+    return App::DocumentObjectGroup::getSubObject(subname, pyObj, mat, transform, depth);
+}
 
 void FemAnalysis::extensionOnChanged(const App::Property* prop)
 {

@@ -148,12 +148,17 @@ App::DocumentObject* FemGeometry::getSubObject(
         return const_cast<FemGeometry*>(this);
     }
 
-    if (substr.back() == '.') {
-        return App::GeoFeature::getSubObject(subname, pyObj, pmat, transform, depth);
-    }
-
     while (!substr.empty() && substr.front() == '.') {
         substr.erase(0, 1);
+    }
+
+    // Solid1, Face3, Component2: what this holds is named in one word. A dot
+    // means the name runs on into a step of the chain below, and the group
+    // extension is what knows the way there. Answering such a path with an
+    // element of our own leaves whoever asked one object short of where they
+    // clicked, and a picked face of a step reads as a face of the result.
+    if (substr.find('.') != std::string::npos) {
+        return App::GeoFeature::getSubObject(substr.c_str(), pyObj, pmat, transform, depth);
     }
 
     Base::Matrix4D _mat;

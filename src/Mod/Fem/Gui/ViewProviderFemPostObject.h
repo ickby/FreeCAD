@@ -57,6 +57,7 @@ class SoIndexedTriangleStripSet;
 class SoTransparencyType;
 class SoDepthBuffer;
 class SoSwitch;
+class SoGroup;
 
 namespace Gui
 {
@@ -95,6 +96,7 @@ public:
     std::vector<std::string> getDisplayModes() const override;
     void updateData(const App::Property*) override;
     void onChanged(const App::Property* prop) override;
+    void finishRestoring() override;
 
     // edit handling
     bool doubleClicked() override;
@@ -130,6 +132,14 @@ protected:
     void updateVtk();
     void setRangeOfColorBar(float min, float max);
 
+    /*!
+     * Draws the members of a post group next to this object instead of at the top of the
+     * scene, so that they follow whatever holds this object. They are drawn beside our own
+     * display, not below it, because a pipeline is regularly hidden while its filters are
+     * on show.
+     */
+    void nestGroupMembers();
+
     SoCoordinate3* m_coordinates;
     SoIndexedPointSet* m_markers;
     SoIndexedLineSet* m_lines;
@@ -150,6 +160,9 @@ protected:
     SoTransparencyType* m_transpType;
     SoSeparator* m_sepMarkerLine;
     SoDepthBuffer* m_depthBuffer;
+    SoGroup* m_childRoot;
+    SoSeparator* m_childFront;
+    std::vector<std::string> m_nested;
 
     vtkSmartPointer<vtkPolyDataAlgorithm> m_currentAlgorithm;
     vtkSmartPointer<vtkGeometryFilter> m_surface;

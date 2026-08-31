@@ -98,6 +98,12 @@ public:
      */
     std::vector<App::DocumentObject*> claimChildren3D() const override;
     SoGroup* getChildRoot() const override;
+    /*!
+     * A foreground of our own, so that what a member draws over the scene still reaches the
+     * viewer once we have taken the member out of it. The post processing color bar lives
+     * there.
+     */
+    SoSeparator* getFrontRoot() const override;
 
     /// handling when object is deleted
     bool onDelete(const std::vector<std::string>&) override;
@@ -191,6 +197,10 @@ private:
     ViewProviderFemHighlighter extension;
     Gui::CoinPtr<SoSeparator> clipPlaneRoot;
     Gui::CoinPtr<SoGroup> childRoot;
+    Gui::CoinPtr<SoSeparator> frontRoot;
+    /// The foreground sits next to the scene, so we take it away by hand while hidden
+    Gui::CoinPtr<SoSeparator> frontHidden;
+    void drawForeground(bool on);
 
     std::map<std::string, std::unique_ptr<ClipPlaneHandle>> clipPlaneHandles;
     /// The planes as of the last sync, to tell a real change from a passing one

@@ -85,6 +85,14 @@ void FemPostGroupExtension::extensionOnChanged(const App::Property* p)
             m_blockChange = false;
         }
     }
+
+    // A pipeline is regularly hidden while its filters are on show, so the filters keep the
+    // visibility they were given. They follow the pipeline through the scene graph instead.
+    if (p == &getExtendedObject()->Visibility) {
+        App::Extension::extensionOnChanged(p);
+        return;
+    }
+
     GroupExtension::extensionOnChanged(p);
 }
 

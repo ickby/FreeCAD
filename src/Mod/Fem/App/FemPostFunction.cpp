@@ -43,6 +43,15 @@ bool FemPostFunctionProvider::allowObject(App::DocumentObject* obj)
     return obj->isDerivedFrom<FemPostFunction>();
 }
 
+void FemPostFunctionProvider::extensionOnChanged(const App::Property* prop)
+{
+    if (prop == &Visibility) {
+        App::Extension::extensionOnChanged(prop);
+        return;
+    }
+    App::GroupExtension::extensionOnChanged(prop);
+}
+
 void FemPostFunctionProvider::unsetupObject()
 {
     // remove all children!

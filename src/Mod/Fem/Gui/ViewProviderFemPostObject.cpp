@@ -25,6 +25,7 @@
 #include <Inventor/nodes/SoCoordinate3.h>
 #include <Inventor/nodes/SoDepthBuffer.h>
 #include <Inventor/nodes/SoDrawStyle.h>
+#include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoIndexedFaceSet.h>
 #include <Inventor/nodes/SoIndexedLineSet.h>
 #include <Inventor/nodes/SoIndexedPointSet.h>
@@ -36,6 +37,7 @@
 #include <Inventor/nodes/SoShapeHints.h>
 #include <Inventor/nodes/SoSwitch.h>
 #include <Inventor/nodes/SoTransparencyType.h>
+#include <algorithm>
 #include <functional>
 #include <limits>
 
@@ -63,6 +65,7 @@
 #include <Gui/View3DInventor.h>
 #include <Gui/View3DInventorViewer.h>
 #include <Mod/Fem/App/FemPostFilter.h>
+#include <Mod/Fem/App/FemPostGroupExtension.h>
 
 #include "TaskPostBoxes.h"
 #ifdef FC_USE_VTK_PYTHON
@@ -232,9 +235,18 @@ ViewProviderFemPostObject::ViewProviderFemPostObject()
     m_separator = new SoSeparator();
     m_separator->ref();
 
+    m_childRoot = new SoGroup();
+    m_childRoot->ref();
+    m_childRoot->setName("FemPostGroupChildren");
+    m_childFront = new SoSeparator();
+    m_childFront->ref();
+    m_childFront->setName("FemPostGroupChildrenForeground");
+
     // simple color bar
     m_colorRoot = new SoSeparator();
     m_colorRoot->ref();
+    // The children come before our own style, so that hiding us leaves their color bar alone
+    m_colorRoot->addChild(m_childFront);
     m_colorStyle = new SoDrawStyle();
     m_colorStyle->ref();
     m_colorRoot->addChild(m_colorStyle);
@@ -286,6 +298,8 @@ ViewProviderFemPostObject::~ViewProviderFemPostObject()
         m_switchMatEdges->unref();
         m_colorStyle->unref();
         m_colorRoot->unref();
+        m_childFront->unref();
+        m_childRoot->unref();
         deleteColorBar();
     }
     catch (Base::Exception& e) {
@@ -355,7 +369,73 @@ void ViewProviderFemPostObject::attach(App::DocumentObject* pcObj)
     addDisplayMaskMode(m_separator, "Default");
     setDisplayMaskMode("Default");
 
+    // beside the mode switch, so that our own visibility does not reach the members
+    pcRoot->addChild(m_childRoot);
+
     (void)setupPipeline();
+}
+
+void ViewProviderFemPostObject::nestGroupMembers()
+{
+    auto* obj = getObject();
+    auto* group = obj ? obj->getExtensionByType<Fem::FemPostGroupExtension>(true) : nullptr;
+    if (!group) {
+        return;
+    }
+    auto* guiDoc = getDocument();
+    if (!guiDoc) {
+        return;
+    }
+
+    std::vector<Gui::View3DInventorViewer*> viewers;
+    for (auto* view : guiDoc->getMDIViewsOfType(Gui::View3DInventor::getClassTypeId())) {
+        viewers.push_back(static_cast<Gui::View3DInventor*>(view)->getViewer());
+    }
+
+    auto viewProviderOf = [guiDoc](App::DocumentObject* member) {
+        return freecad_cast<Gui::ViewProviderDocumentObject*>(guiDoc->getViewProvider(member));
+    };
+
+    // Start from nothing, so that a member that was deleted behind our back leaves no node
+    m_childRoot->removeAllChildren();
+    m_childFront->removeAllChildren();
+
+    std::vector<std::string> nested;
+    for (auto* member : group->Group.getValues()) {
+        auto* vp = member ? viewProviderOf(member) : nullptr;
+        if (!vp) {
+            continue;
+        }
+        nested.emplace_back(member->getNameInDocument());
+        for (auto* viewer : viewers) {
+            if (viewer->hasViewProvider(vp)) {
+                viewer->removeViewProvider(vp);
+            }
+        }
+        m_childRoot->addChild(vp->getRoot());
+        if (auto* front = vp->getFrontRoot()) {
+            m_childFront->addChild(front);
+        }
+    }
+
+    // whoever left the group is drawn on its own again
+    for (const auto& name : m_nested) {
+        if (std::ranges::find(nested, name) != nested.end()) {
+            continue;
+        }
+        auto* member = obj->getDocument()->getObject(name.c_str());
+        auto* vp = member ? viewProviderOf(member) : nullptr;
+        if (!vp) {
+            continue;
+        }
+        for (auto* viewer : viewers) {
+            if (!viewer->hasViewProvider(vp)) {
+                viewer->addViewProvider(vp);
+            }
+        }
+    }
+
+    m_nested = nested;
 }
 
 SoSeparator* ViewProviderFemPostObject::getFrontRoot() const
@@ -802,6 +882,17 @@ void ViewProviderFemPostObject::updateData(const App::Property* p)
     if (p == &postObject->Data) {
         updateVtk();
     }
+
+    auto* group = postObject->getExtensionByType<Fem::FemPostGroupExtension>(true);
+    if (group && p == &group->Group) {
+        nestGroupMembers();
+    }
+}
+
+void ViewProviderFemPostObject::finishRestoring()
+{
+    Gui::ViewProviderDocumentObject::finishRestoring();
+    nestGroupMembers();
 }
 
 bool ViewProviderFemPostObject::setupPipeline()

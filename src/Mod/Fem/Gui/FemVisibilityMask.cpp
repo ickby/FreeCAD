@@ -19,6 +19,7 @@
 
 #ifndef _PreComp_
 # include <algorithm>
+# include <functional>
 # include <vtkCellData.h>
 # include <vtkDataArray.h>
 # include <vtkDataSet.h>
@@ -203,6 +204,46 @@ std::string FemVisibilityMask::cellTypeKey(int vtkCellType)
         default:
             return "vtk" + std::to_string(vtkCellType);
     }
+}
+
+int FemVisibilityMask::cellTypeOrder(const std::string& key)
+{
+    // Rising dimension and then rising node count, so that neighbouring slots
+    // fall to types that are told apart by more than their colour anyway.
+    static const std::vector<std::string> order = {
+        "vertex",
+        "polyvertex",
+        "line",
+        "polyline",
+        "edge3",
+        "edge4",
+        "tria3",
+        "quad4",
+        "tria6",
+        "quad8",
+        "quad9",
+        "tetra4",
+        "hexa8",
+        "penta6",
+        "pyra5",
+        "tetra10",
+        "hexa20",
+        "penta15",
+        "pyra13",
+        "hexa27",
+    };
+    const auto it = std::find(order.begin(), order.end(), key);
+    if (it != order.end()) {
+        return static_cast<int>(std::distance(order.begin(), it));
+    }
+
+    // A type VTK grew and cellTypeKey() spells "vtk<n>". Keeping it out of the
+    // range above is what stops it taking the colour of a named type; two of
+    // them may still meet, which is a far smaller surprise than a tetra and a
+    // triangle sharing a hue.
+    const std::size_t known = order.size();
+    std::size_t hash = std::hash<std::string> {}(key);
+    return static_cast<int>(known + (hash % known));
 }
 
 void FemVisibilityMask::bakeCellArrays(vtkUnstructuredGrid* grid)

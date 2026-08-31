@@ -925,11 +925,12 @@ def get_femnodes_by_refs_group_data(femmesh, references):
 
 # ************************************************************************************************
 def get_femelement_sets_from_group_data(
-    femmesh, fem_objects, group_data_type="Volume", expected_count=None
+    femmesh, fem_objects, group_data_type="Volume", model_elements=None
 ):
     # get femelements from femmesh groupdata for reference shapes of each obj.References
     count_femelements = 0
-    sum_group_elements = []
+    claimed = set()
+    remaining_object = None
     for fem_object_i, fem_object in enumerate(fem_objects):
         obj = fem_object["Object"]
         FreeCAD.Console.PrintMessage(
@@ -944,11 +945,26 @@ def get_femelement_sets_from_group_data(
             group_elements = get_femmesh_groupdata_sets_by_refs(
                 femmesh, getattr(obj, "References", None) or (), group_data_type
             )
-        sum_group_elements += group_elements
-        count_femelements += len(group_elements)
         fem_object["FEMElements"] = group_elements
+        if not getattr(obj, "References", None):
+            # An object without references stands for whatever the others leave
+            # over, and that is only known once all of them have been asked.
+            remaining_object = fem_object
+            continue
+        claimed.update(group_elements)
+        count_femelements += len(group_elements)
+
+    if remaining_object is not None:
+        if model_elements is None:
+            return False
+        remaining = sorted(set(model_elements).difference(claimed))
+        remaining_object["FEMElements"] = remaining
+        count_femelements += len(remaining)
+
     # check if all worked out well
-    if expected_count is None:
+    if model_elements is not None:
+        expected_count = len(model_elements)
+    else:
         expected_count = femmesh.VolumeCount if group_data_type == "Volume" else None
     if expected_count is not None and not femelements_count_ok(expected_count, count_femelements):
         FreeCAD.Console.PrintError(

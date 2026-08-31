@@ -1408,6 +1408,156 @@ class TestGeometryReferences(unittest.TestCase):
         self.assertNotIn("Invalid", constraint.State)
 
 
+class TestElementSetsFromGroups(unittest.TestCase):
+    """Element sets of a mesh that has groups are read out, not searched for.
+
+    A mesh made from geometry names a group after every solid, face and edge
+    it was meshed from, so which elements a reference stands for is already
+    written down. The search that replaces a missing group has to ask the
+    geometry kernel for the nodes of the reference and then walk the elements
+    looking for them, which on an assembly of a few parts is the bulk of the
+    time a solver write takes.
+    """
+
+    fcc_print("import TestElementSetsFromGroups")
+
+    def setUp(self):
+        self.document = FreeCAD.newDocument(self.__class__.__name__)
+        self.analysis = ObjectsFem.makeAnalysis(self.document, "Analysis")
+        self.solver = ObjectsFem.makeSolverCalculiX(self.document, "Solver")
+        self.analysis.addObject(self.solver)
+        # A solid and a free face, so that Solid1 and Face7 are both real
+        # references and the mesh below can be of two dimensions.
+        self.geometry = self.document.addObject("Part::Feature", "Geometry")
+        self.geometry.Shape = Part.makeCompound([_box(), _face_xy()])
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.document.Name)
+
+    def _mixed_mesh_object(self, with_groups=True):
+        """A tet and a free triangle, each in a group named after its geometry."""
+        mesh = Fem.FemMesh()
+        for node_id, point in enumerate(
+            [(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1), (10, 0, 0), (11, 0, 0), (10, 1, 0)],
+            start=1,
+        ):
+            mesh.addNode(point[0], point[1], point[2], node_id)
+        self.volume = mesh.addVolume([1, 2, 3, 4])
+        self.shell = mesh.addFace([5, 6, 7])
+        if with_groups:
+            for name, group_type, members in (
+                ("Solid1", "Volume", [self.volume]),
+                ("Face7", "Face", [self.shell]),
+            ):
+                mesh.addGroupElements(mesh.addGroup(name, group_type), members)
+
+        mesh_obj = self.document.addObject("Fem::FemMeshObject", "Mesh")
+        mesh_obj.FemMesh = mesh
+        self.analysis.addObject(mesh_obj)
+        return mesh_obj
+
+    def _materials(self, rest_has_references=False):
+        """One material on the solid and one for whatever is left over.
+
+        A material without references is how a model says "the rest of it",
+        and a mixed mesh leaves the rest in a dimension of its own.
+        """
+        solid = ObjectsFem.makeMaterialSolid(self.document, "SolidMaterial")
+        solid.References = [(self.geometry, ["Solid1"])]
+        self.analysis.addObject(solid)
+
+        rest = ObjectsFem.makeMaterialSolid(self.document, "RestMaterial")
+        if rest_has_references:
+            rest.References = [(self.geometry, ["Face7"])]
+        self.analysis.addObject(rest)
+
+        # Without a section the shell elements are nothing the writer asks
+        # about, and the face dimension is never looked at.
+        shell = ObjectsFem.makeElementGeometry2D(self.document, 1.0, "Thickness")
+        self.analysis.addObject(shell)
+        self.document.recompute()
+        return solid, rest
+
+    def _getter(self, mesh_obj):
+        from femmesh import meshsetsgetter
+        from femtools import membertools
+
+        return meshsetsgetter.MeshSetsGetter(
+            self.analysis, self.solver, mesh_obj, membertools.AnalysisMember(self.analysis)
+        )
+
+    def _count_searches(self):
+        """Calls that fall through to the geometric search, as they happen."""
+        from femmesh import meshtools
+
+        calls = []
+        original = meshtools.get_femelements_by_references
+
+        def counted(femmesh, table, references, *args, **kwargs):
+            calls.append([sub for _, subs in references for sub in subs])
+            return original(femmesh, table, references, *args, **kwargs)
+
+        meshtools.get_femelements_by_references = counted
+        self.addCleanup(setattr, meshtools, "get_femelements_by_references", original)
+        return calls
+
+    @staticmethod
+    def _elements_of(getter, material):
+        for femobj in getter.member.mats_linear:
+            if femobj["Object"].Name == material.Name:
+                return sorted(femobj["FEMElements"])
+        raise AssertionError(f"{material.Name} is no member of the analysis")
+
+    def test_00print(self):
+        fcc_print(
+            "\n{0}\n{1} run FEM TestElementSetsFromGroups tests {2}\n{0}".format(
+                100 * "*", 10 * "*", 45 * "*"
+            )
+        )
+
+    def test_every_dimension_is_read_from_the_groups(self):
+        # The solid dimension has been read from the groups for a long time,
+        # the others were searched for even when the group was right there.
+        mesh_obj = self._mixed_mesh_object()
+        solid, rest = self._materials(rest_has_references=True)
+        getter = self._getter(mesh_obj)
+        searches = self._count_searches()
+
+        getter.get_material_elements()
+
+        self.assertFalse(searches, "a reference the mesh has a group for was searched for")
+        self.assertEqual(self._elements_of(getter, solid), [self.volume])
+        self.assertEqual(self._elements_of(getter, rest), [self.shell])
+
+    def test_the_material_without_references_takes_what_the_groups_leave(self):
+        # Reading the groups only answers for the references that name one, so
+        # a material standing for the remainder used to send every other
+        # material through the search as well, one dimension at a time.
+        mesh_obj = self._mixed_mesh_object()
+        solid, rest = self._materials()
+        getter = self._getter(mesh_obj)
+        searches = self._count_searches()
+
+        getter.get_material_elements()
+
+        self.assertFalse(searches, "the remainder was worked out by searching")
+        self.assertEqual(self._elements_of(getter, solid), [self.volume])
+        self.assertEqual(self._elements_of(getter, rest), [self.shell])
+
+    def test_a_mesh_without_groups_is_still_searched(self):
+        # The groups are a shortcut, not a requirement; an imported mesh has
+        # none and has to keep working.
+        mesh_obj = self._mixed_mesh_object(with_groups=False)
+        solid, _ = self._materials()
+        getter = self._getter(mesh_obj)
+        searches = self._count_searches()
+
+        getter.get_material_elements()
+
+        self.assertTrue(searches, "a mesh without groups left the elements unaccounted for")
+        self.assertEqual(self._elements_of(getter, solid), [self.volume])
+
+
 class TestMeshMerge(unittest.TestCase):
     fcc_print("import TestMeshMerge")
 

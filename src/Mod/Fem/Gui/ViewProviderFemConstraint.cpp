@@ -23,6 +23,9 @@
  ***************************************************************************/
 
 
+#include <algorithm>
+#include <numbers>
+
 #include <Inventor/nodes/SoMaterial.h>
 #include <Inventor/nodes/SoMultipleCopy.h>
 #include <Inventor/nodes/SoPickStyle.h>
@@ -46,6 +49,36 @@
 
 using namespace FemGui;
 
+namespace
+{
+SbMatrix toMatrix(const Base::Placement& placement)
+{
+    const Base::Vector3d& position = placement.getPosition();
+    double q0 {};
+    double q1 {};
+    double q2 {};
+    double q3 {};
+    placement.getRotation().getValue(q0, q1, q2, q3);
+
+    SbMatrix mat;
+    mat.setTransform(
+        SbVec3f(
+            static_cast<float>(position.x),
+            static_cast<float>(position.y),
+            static_cast<float>(position.z)
+        ),
+        SbRotation(
+            static_cast<float>(q0),
+            static_cast<float>(q1),
+            static_cast<float>(q2),
+            static_cast<float>(q3)
+        ),
+        SbVec3f(1, 1, 1)
+    );
+    return mat;
+}
+}  // namespace
+
 PROPERTY_SOURCE(FemGui::ViewProviderFemConstraint, Gui::ViewProviderGeometryObject)
 
 
@@ -56,6 +89,15 @@ ViewProviderFemConstraint::ViewProviderFemConstraint()
     , pExtraTrans(nullptr)
     , ivFile(nullptr)
 {
+    ADD_PROPERTY_TYPE(
+        SymbolPlacements,
+        (Base::Placement()),
+        "Display Options",
+        App::PropertyType(App::Prop_Output | App::Prop_Hidden),
+        "Extra transform for the symbols of one reference each"
+    );
+    SymbolPlacements.setValues(std::vector<Base::Placement>());
+
     pShapeSep = new SoSeparator();
     pShapeSep->ref();
     pMultCopy = new SoMultipleCopy();
@@ -165,6 +207,9 @@ void ViewProviderFemConstraint::setupContextMenu(QMenu* menu, QObject* receiver,
 
 void ViewProviderFemConstraint::onChanged(const App::Property* prop)
 {
+    if (prop == &SymbolPlacements) {
+        updateSymbol();
+    }
     ViewProviderGeometryObject::onChanged(prop);
 }
 
@@ -173,7 +218,7 @@ void ViewProviderFemConstraint::updateData(const App::Property* prop)
     auto pcConstraint = this->getObject<const Fem::Constraint>();
 
     if (prop == &pcConstraint->Points || prop == &pcConstraint->Normals
-        || prop == &pcConstraint->Scale) {
+        || prop == &pcConstraint->Scale || prop == &pcConstraint->PointsPerReference) {
         updateSymbol();
     }
     else {
@@ -221,6 +266,45 @@ void ViewProviderFemConstraint::updateSymbol()
     transformExtraSymbol();
 }
 
+Base::Placement ViewProviderFemConstraint::reversedSymbolPlacement()
+{
+    return Base::Placement(
+        Base::Vector3d(),
+        Base::Rotation(Base::Vector3d(0, 0, 1), std::numbers::pi_v<double>)
+    );
+}
+
+std::vector<Base::Placement> ViewProviderFemConstraint::symbolPlacementPerPoint(std::size_t count) const
+{
+    const std::vector<Base::Placement>& perReference = SymbolPlacements.getValues();
+    if (perReference.empty()) {
+        return {};
+    }
+
+    auto obj = this->getObject<const Fem::Constraint>();
+    if (!obj) {
+        return {};
+    }
+
+    // Which reference a symbol came from is the only thing the object records
+    // about it, and it records it as a run length rather than per symbol.
+    const std::vector<long>& groups = obj->PointsPerReference.getValues();
+    std::vector<Base::Placement> perPoint;
+    perPoint.reserve(count);
+    for (std::size_t reference = 0; reference < groups.size() && perPoint.size() < count;
+         ++reference) {
+        const Base::Placement placement = reference < perReference.size() ? perReference[reference]
+                                                                          : Base::Placement();
+        const auto run = static_cast<std::size_t>(std::max(0L, groups[reference]));
+        perPoint.resize(std::min(count, perPoint.size() + run), placement);
+    }
+
+    // A stale run length, from a reference edited between two redraws, leaves
+    // the tail of the symbols unspoken for. Drawn as usual beats not drawn.
+    perPoint.resize(count);
+    return perPoint;
+}
+
 void ViewProviderFemConstraint::fillSymbolMatrices(
     SoMultipleCopy* multCopy,
     const Base::Placement* pre
@@ -237,6 +321,8 @@ void ViewProviderFemConstraint::fillSymbolMatrices(
         return;
     }
 
+    const std::vector<Base::Placement> locals = symbolPlacementPerPoint(points.size());
+
     multCopy->matrix.setNum(static_cast<int>(points.size()));
     SbMatrix* mat = multCopy->matrix.startEditing();
 
@@ -248,6 +334,11 @@ void ViewProviderFemConstraint::fillSymbolMatrices(
             normal = pre->getRotation().multVec(normals[i]);
         }
         transformSymbol(point, normal, mat[i]);
+        if (i < locals.size() && !locals[i].isIdentity()) {
+            // Left of the placement, so it acts on the symbol as modelled and
+            // not on the surface it has already been turned onto.
+            mat[i] = toMatrix(locals[i]) * mat[i];
+        }
     }
 
     multCopy->matrix.finishEditing();

@@ -28,6 +28,7 @@
 #include <Gui/ViewProviderFeaturePython.h>
 #include <Mod/Fem/FemGlobal.h>
 
+#include <App/PropertyGeo.h>
 #include <Base/Placement.h>
 #include <Gui/ViewProviderSuppressibleExtension.h>
 
@@ -47,6 +48,27 @@ class FemGuiExport ViewProviderFemConstraint: public Gui::ViewProviderGeometryOb
     PROPERTY_HEADER_WITH_OVERRIDE(FemGui::ViewProviderFemConstraint);
 
 public:
+    /**
+     * @brief An extra transform for the symbols of one reference each.
+     *
+     * @details
+     *  Applied in the local frame of the symbol, before it is turned onto the
+     *  surface normal and scaled, so a rotation here says which way round the
+     *  symbol sits rather than where it goes. This is how a constraint whose
+     *  references do not all mean the same thing tells them apart on screen,
+     *  the way a tie draws its master the other way up from its slave.
+     *
+     *  One entry per reference, in the flat order of Fem::Constraint's
+     *  References, the same order the solver writers use. Missing entries and
+     *  an empty list mean no extra transform, so nothing has to be said about
+     *  the references that are drawn as usual.
+     *
+     * @note
+     *  The translation is in the units of the symbol file and is scaled along
+     *  with the symbol, so it cannot express an offset of a fixed length.
+     */
+    App::PropertyPlacementList SymbolPlacements;
+
     /// Constructor
     ViewProviderFemConstraint();
     ~ViewProviderFemConstraint() override;
@@ -104,6 +126,27 @@ protected:
         SbMatrix& mat
     ) const;
     virtual void transformExtraSymbol() const;
+
+    /**
+     * @brief SymbolPlacements spread from references onto the single symbols.
+     *
+     * @details
+     *  Empty when no symbol needs one, which spares the caller the whole
+     *  question in the ordinary case. Otherwise it is as long as *count* and
+     *  holds an identity wherever nothing was asked for.
+     */
+    std::vector<Base::Placement> symbolPlacementPerPoint(std::size_t count) const;
+
+    /**
+     * @brief Rotation that turns a symbol onto the other side of its surface.
+     *
+     * @details
+     *  A symbol is modelled standing on the surface and reaching along its
+     *  local Y, so a half turn about Z is what sinks it through to the other
+     *  side. Meant for SymbolPlacements, and shared so that the constraints
+     *  which reverse a surface all flip the same way.
+     */
+    static Base::Placement reversedSymbolPlacement();
 
 private:
     bool rotateSymbol;

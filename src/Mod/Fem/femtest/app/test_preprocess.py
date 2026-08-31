@@ -1320,6 +1320,29 @@ class TestGeometryReferences(unittest.TestCase):
         self.assertIs(femutils.get_analysis(constraint), self.analysis)
         self.assertIs(femutils.get_reference_geometry(constraint), self.group)
 
+    def test_the_symbol_points_say_which_reference_they_came_from(self):
+        """
+        Points is one flat list over all references, so anything wanting to
+        draw one reference differently from another, as a tie does with its
+        master, has nothing to tell them apart by. PointsPerReference is the
+        run lengths that cut the list back up.
+        """
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        constraint.References = [(self.group, ["Face1", "Face2"])]
+        self.document.recompute()
+
+        groups = list(constraint.PointsPerReference)
+        self.assertEqual(len(groups), 2, "a run per reference, sub-elements counted apart")
+        self.assertEqual(sum(groups), len(constraint.Points))
+        self.assertTrue(all(count > 0 for count in groups), groups)
+
+        # Editing the references has to re-cut the list, not add to it.
+        constraint.References = [(self.group, ["Face1"])]
+        self.document.recompute()
+        self.assertEqual(len(list(constraint.PointsPerReference)), 1)
+        self.assertEqual(sum(constraint.PointsPerReference), len(constraint.Points))
+
     def test_a_member_of_a_member_finds_the_analysis(self):
         """A mesh refinement hangs two groups deep, in the mesher of the mesh."""
         from femtools import femutils

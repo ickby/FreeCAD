@@ -23,6 +23,9 @@
  *                                                                         *
  ***************************************************************************/
 
+#include <algorithm>
+#include <iterator>
+
 #include "Mod/Fem/App/FemConstraintContact.h"
 #include "TaskFemConstraintContact.h"
 #include "ViewProviderFemConstraintContact.h"
@@ -59,5 +62,39 @@ bool ViewProviderFemConstraintContact::setEdit(int ModNum)
 
 void ViewProviderFemConstraintContact::updateData(const App::Property* prop)
 {
+    auto* constraint = getObject<const Fem::ConstraintContact>();
+    if (constraint
+        && (prop == &constraint->ReversedMaster || prop == &constraint->ReversedSlave
+            || prop == &constraint->PointsPerReference)) {
+        SymbolPlacements.setValues(masterSlaveSides(*constraint));
+    }
+
     ViewProviderFemConstraint::updateData(prop);
+}
+
+std::vector<Base::Placement> ViewProviderFemConstraintContact::masterSlaveSides(
+    const Fem::ConstraintContact& constraint
+)
+{
+    // References holds the slaves first and the single master last, the same
+    // order the solver writer reads it back in, so a side is settled by
+    // position alone.
+    const std::size_t count = constraint.References.getSubValues().size();
+    std::vector<Base::Placement> sides(count);
+    if (count == 0) {
+        return sides;
+    }
+
+    const auto& slaveFlags = constraint.ReversedSlave.getValues();
+    const auto& masterFlags = constraint.ReversedMaster.getValues();
+
+    // One checkbox fills a whole list, and a document written before the panel
+    // filled it may hold a shorter one, so the first entry stands for the side.
+    if (slaveFlags.size() > 0 && slaveFlags[0]) {
+        std::fill(sides.begin(), std::prev(sides.end()), reversedSymbolPlacement());
+    }
+    if (masterFlags.size() > 0 && masterFlags[0]) {
+        sides.back() = reversedSymbolPlacement();
+    }
+    return sides;
 }

@@ -69,7 +69,11 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
             QtCore.SIGNAL("toggled(bool)"),
             self.reversed_slave_changed,
         )
+        # Reading the object into the boxes trips their signals, which must not
+        # be read back as the user having picked a side.
+        self._loading = True
         self.init_parameter_widget()
+        self._loading = False
         # Tie's master and slave slots have no obvious primary; the command
         # does not stash a prefill.
         self.selection_widget = selection_slots.from_slot_specs(
@@ -125,8 +129,7 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
                 pass
         self.obj.Tolerance = self.tolerance
         self.obj.Adjust = self.adjust
-        self.obj.ReversedMaster = self.reversed_master
-        self.obj.ReversedSlave = self.reversed_slave
+        self.write_sides()
         self.selection_widget.finish_selection()
         return super().accept()
 
@@ -159,6 +162,28 @@ class _TaskPanel(base_femtaskpanel._BaseTaskPanel):
 
     def reversed_master_changed(self, bool_value):
         self.reversed_master = [bool_value]
+        self.write_sides()
 
     def reversed_slave_changed(self, bool_value):
         self.reversed_slave = [bool_value]
+        self.write_sides()
+
+    def write_sides(self):
+        """
+        Put the picked sides on the object at once, rather than on OK.
+
+        The 3D marker follows these properties, and a marker that only moved
+        once the panel was gone could not help anybody choose. Cancel takes
+        them back with everything else the panel wrote.
+
+        The lists run as long as the references they line up with, because the
+        solver writer walks the two in step and would otherwise reverse the
+        first slave only.
+        """
+        if self._loading:
+            return
+        count = sum(len(subs) for _, subs in self.obj.References)
+        master = bool(self.reversed_master) and bool(self.reversed_master[0])
+        slave = bool(self.reversed_slave) and bool(self.reversed_slave[0])
+        self.obj.ReversedMaster = [master] * min(count, 1)
+        self.obj.ReversedSlave = [slave] * max(count - 1, 0)

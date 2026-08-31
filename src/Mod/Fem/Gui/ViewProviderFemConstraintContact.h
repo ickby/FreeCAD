@@ -25,7 +25,14 @@
 
 #pragma once
 
+#include <vector>
+
 #include "ViewProviderFemConstraint.h"
+
+namespace Fem
+{
+class ConstraintContact;
+}
 
 namespace FemGui
 {
@@ -41,5 +48,9 @@ public:
 
 protected:
     bool setEdit(int ModNum) override;
+
+private:
+    /// A symbol placement per reference, the reversed sides turned over.
+    static std::vector<Base::Placement> masterSlaveSides(const Fem::ConstraintContact& constraint);
 };
 }  // namespace FemGui

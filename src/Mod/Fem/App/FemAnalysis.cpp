@@ -42,6 +42,15 @@ FemAnalysis::FemAnalysis()
 
 FemAnalysis::~FemAnalysis() = default;
 
+void FemAnalysis::extensionOnChanged(const App::Property* prop)
+{
+    if (prop == &Visibility) {
+        App::Extension::extensionOnChanged(prop);
+        return;
+    }
+    App::GroupExtension::extensionOnChanged(prop);
+}
+
 void FemAnalysis::handleChangedPropertyName(
     Base::XMLReader& reader,
     const char* TypeName,

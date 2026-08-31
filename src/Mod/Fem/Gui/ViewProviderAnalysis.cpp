@@ -21,6 +21,7 @@
  ***************************************************************************/
 
 
+#include <Inventor/nodes/SoGroup.h>
 #include <Inventor/nodes/SoSeparator.h>
 #include <QAction>
 #include <QApplication>
@@ -59,6 +60,7 @@
 
 #include "TaskDlgAnalysis.h"
 #include "ViewProviderAnalysis.h"
+#include "ViewProviderChildRootExtension.h"
 #include "AnalysisViewState.h"
 #include "ClipPlaneHandle.h"
 
@@ -149,10 +151,42 @@ void ViewProviderFemAnalysis::attach(App::DocumentObject* obj)
     Gui::ViewProviderDocumentObjectGroup::attach(obj);
     extension.attach(this);
 
+    childRoot = new SoGroup();
+    childRoot->setName("FemAnalysisChildren");
+    addDisplayMaskMode(childRoot, "Analysis");
+    setDisplayMaskMode("Analysis");
+
     if (auto* analysis = freecad_cast<Fem::FemAnalysis*>(obj)) {
         // Ensure view state exists and is loaded from persisted properties
         AnalysisViewState::forAnalysis(analysis);
         connectViewState();
+    }
+}
+
+void ViewProviderFemAnalysis::giveContainersAChildRoot()
+{
+    auto* analysis = freecad_cast<Fem::FemAnalysis*>(getObject());
+    if (!analysis) {
+        return;
+    }
+    for (auto* member : analysis->Group.getValues()) {
+        // A FEM container brings its own scene graph. A plain group, which is
+        // what the imports sit in, is given one here so that it can hold its
+        // members rather than hide them one by one.
+        if (!member || member->getTypeId() != App::DocumentObjectGroup::getClassTypeId()) {
+            continue;
+        }
+        auto* vp = freecad_cast<Gui::ViewProviderDocumentObject*>(
+            Gui::Application::Instance->getViewProvider(member)
+        );
+        const auto childRootType = ViewProviderChildRootExtension::getExtensionClassTypeId();
+        if (!vp || vp->hasExtension(childRootType, true)) {
+            continue;
+        }
+        // The Python flavour, because that is the one a document can read back:
+        // the container only saves and restores extensions that are addable
+        // from Python, and only deletes those again.
+        (new ViewProviderChildRootExtensionPython())->initExtension(vp);
     }
 }
 
@@ -216,6 +250,12 @@ ClipPlaneHandle* ViewProviderFemAnalysis::getClipPlaneHandle(const std::string& 
 
 void ViewProviderFemAnalysis::updateData(const App::Property* prop)
 {
+    auto* analysis = freecad_cast<Fem::FemAnalysis*>(getObject());
+    if (analysis && prop == &analysis->Group) {
+        // Before the caller rebuilds the 3D children off the back of this, so
+        // that a container that just joined is one that can hold its own.
+        giveContainersAChildRoot();
+    }
     Gui::ViewProviderDocumentObjectGroup::updateData(prop);
 }
 
@@ -227,6 +267,9 @@ void ViewProviderFemAnalysis::finishRestoring()
     if (!analysis) {
         return;
     }
+    // Documents written before the containers had one of their own
+    giveContainersAChildRoot();
+
     if (auto* state = AnalysisViewState::forAnalysis(analysis)) {
         connectViewState();
         // Gives the restored planes their handles, through the change this
@@ -308,6 +351,26 @@ bool ViewProviderFemAnalysis::doubleClicked()
 std::vector<App::DocumentObject*> ViewProviderFemAnalysis::claimChildren() const
 {
     return Gui::ViewProviderDocumentObjectGroup::claimChildren();
+}
+
+std::vector<App::DocumentObject*> ViewProviderFemAnalysis::claimChildren3D() const
+{
+    auto* analysis = freecad_cast<Fem::FemAnalysis*>(getObject());
+    if (!analysis) {
+        return {};
+    }
+    std::vector<App::DocumentObject*> children;
+    for (auto* member : analysis->Group.getValues()) {
+        if (member) {
+            children.push_back(member);
+        }
+    }
+    return children;
+}
+
+SoGroup* ViewProviderFemAnalysis::getChildRoot() const
+{
+    return childRoot;
 }
 
 std::vector<std::string> ViewProviderFemAnalysis::getDisplayModes() const

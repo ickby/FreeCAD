@@ -47,6 +47,8 @@ const char* stageToString(ActiveStage stage)
             return "Mesh";
         case ActiveStage::Result:
             return "Result";
+        case ActiveStage::NoStage:
+            return "NoStage";
     }
     return "Geometry";
 }
@@ -58,6 +60,9 @@ ActiveStage stageFromString(const std::string& s)
     }
     if (s == "Result") {
         return ActiveStage::Result;
+    }
+    if (s == "NoStage") {
+        return ActiveStage::NoStage;
     }
     return ActiveStage::Geometry;
 }

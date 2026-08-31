@@ -214,6 +214,8 @@ SET(FemGui_SRCS_ViewProvider
     FemPreprocessMeshViewHelper.h
     ViewProviderAnalysis.cpp
     ViewProviderAnalysis.h
+    ViewProviderChildRootExtension.cpp
+    ViewProviderChildRootExtension.h
     ViewProviderSolver.cpp
     ViewProviderSolver.h
     ViewProviderSetNodes.cpp

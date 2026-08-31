@@ -90,7 +90,7 @@ void ViewProviderFemMeshShapePreprocess::setDisplayMode(const char* ModeName)
 {
     if (ModeName && strcmp(ModeName, PreprocessMode) == 0) {
         if (m_preprocessMesh.hasDisplayModes()) {
-            setDisplayMaskMode(PreprocessMode);
+            setStageMask(*this, PreprocessMode);
         }
         return;
     }
@@ -222,13 +222,6 @@ void ViewProviderFemMeshShapePreprocess::updateStageVisibility()
         return;
     }
     m_preprocessMesh.syncStageVisibility();
-    // The stage picks what the mode switch holds, the visibility of the object
-    // switches the whole node off. Only the latter is what the tree reads, so
-    // hiding by hand has to end there, otherwise the item never greys out and
-    // the next space bar hit sees a shown object again.
-    if (!Visibility.getValue()) {
-        Gui::ViewProvider::hide();
-    }
 }
 
 // References are picked on the geometry, and the mesh drawn over it is there to

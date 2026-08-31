@@ -42,9 +42,50 @@
 #include <Mod/Fem/App/FemAnalysis.h>
 #include <Mod/Fem/App/FemAnalysisImport.h>
 #include <Mod/Fem/App/FemGeometry.h>
+#include <Mod/Fem/App/FemMeshShapeGroup.h>
 #include <Mod/Fem/App/FemTools.h>
 
 using namespace FemGui;
+
+namespace
+{
+
+Gui::ViewProviderDocumentObject* viewProviderOf(App::DocumentObject* obj)
+{
+    if (!obj || !Gui::Application::Instance) {
+        return nullptr;
+    }
+    auto* guiDoc = Gui::Application::Instance->getDocument(obj->getDocument());
+    if (!guiDoc) {
+        return nullptr;
+    }
+    return freecad_cast<Gui::ViewProviderDocumentObject*>(guiDoc->getViewProvider(obj));
+}
+
+bool isShown(App::DocumentObject* obj)
+{
+    auto* vp = viewProviderOf(obj);
+    return vp && vp->Visibility.getValue();
+}
+
+void setShown(App::DocumentObject* obj, bool shown)
+{
+    if (auto* vp = viewProviderOf(obj)) {
+        if (vp->Visibility.getValue() != shown) {
+            vp->Visibility.setValue(shown);
+        }
+    }
+}
+
+}  // namespace
+
+void FemGui::setStageMask(Gui::ViewProviderDocumentObject& vp, const char* mode)
+{
+    vp.setDisplayMaskMode(mode);
+    if (!vp.Visibility.getValue()) {
+        vp.Gui::ViewProvider::hide();
+    }
+}
 
 std::map<Fem::FemAnalysis*, std::unique_ptr<AnalysisViewState>> AnalysisViewState::s_states;
 
@@ -54,6 +95,7 @@ AnalysisViewState::AnalysisViewState(Fem::FemAnalysis* analysis)
     m_colorMode[ActiveStage::Geometry] = ColorMode::Subelement;
     m_colorMode[ActiveStage::Mesh] = ColorMode::Subelement;
     m_colorMode[ActiveStage::Result] = ColorMode::Subelement;
+    m_colorMode[ActiveStage::NoStage] = ColorMode::Subelement;
 }
 
 AnalysisViewState::~AnalysisViewState() = default;
@@ -151,13 +193,72 @@ AnalysisViewState::Connection AnalysisViewState::connectChanged(Slot slot)
     return m_changed.connect(std::move(slot));
 }
 
+ActiveStage AnalysisViewState::activeStage() const
+{
+    m_stage = readStage();
+    return m_stage;
+}
+
+ActiveStage AnalysisViewState::readStage() const
+{
+    // Whichever group is on show names the stage, geometry asked first so that
+    // a document written before the stage was kept here, where both groups are
+    // on, comes back in the stage it always came back in.
+    if (isShown(findGeometry())) {
+        return ActiveStage::Geometry;
+    }
+    if (isShown(findMeshGroup())) {
+        return ActiveStage::Mesh;
+    }
+    // A stage whose group the analysis does not build cannot be read off
+    // anything, so there the last stage asked for stands. That is how an
+    // analysis which only places others has a stage at all, and how the mesh
+    // stage survives in one that places meshes but has not meshed its own.
+    const bool missing = (m_stage == ActiveStage::Geometry) ? !findGeometry() : !findMeshGroup();
+    if (missing
+        && (m_stage == ActiveStage::Geometry || m_stage == ActiveStage::Mesh)) {
+        return m_stage;
+    }
+    return ActiveStage::NoStage;
+}
+
+void AnalysisViewState::applyStageToGroups()
+{
+    Base::StateLocker lock(m_writingStage);
+    setShown(findGeometry(), m_stage == ActiveStage::Geometry);
+    setShown(findMeshGroup(), m_stage == ActiveStage::Mesh);
+}
+
 void AnalysisViewState::setActiveStage(ActiveStage stage)
 {
-    if (m_stage == stage) {
+    if (activeStage() == stage) {
         return;
     }
     m_stage = stage;
+    applyStageToGroups();
     notifyChanged();
+}
+
+void AnalysisViewState::stageVisibilityChanged(ActiveStage owner)
+{
+    if (m_writingStage) {
+        return;
+    }
+    const ActiveStage before = m_stage;
+    const bool shown = (owner == ActiveStage::Mesh) ? isShown(findMeshGroup())
+                                                    : isShown(findGeometry());
+    if (shown) {
+        // Showing a group is choosing its stage, and the two are exclusive, so
+        // the other one steps aside rather than being drawn over it.
+        m_stage = owner;
+        applyStageToGroups();
+    }
+    else {
+        m_stage = readStage();
+    }
+    if (m_stage != before) {
+        notifyChanged();
+    }
 }
 
 void AnalysisViewState::setDimensionMode(DimensionMode mode)
@@ -332,6 +433,19 @@ Fem::FemGeometry* AnalysisViewState::findGeometry() const
     for (auto* obj : m_analysis->Group.getValues()) {
         if (auto* geo = Base::freecad_cast<Fem::FemGeometry*>(obj)) {
             return geo;
+        }
+    }
+    return nullptr;
+}
+
+Fem::FemMeshShapeGroup* AnalysisViewState::findMeshGroup() const
+{
+    if (!m_analysis) {
+        return nullptr;
+    }
+    for (auto* obj : m_analysis->Group.getValues()) {
+        if (auto* mesh = Base::freecad_cast<Fem::FemMeshShapeGroup*>(obj)) {
+            return mesh;
         }
     }
     return nullptr;

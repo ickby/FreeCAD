@@ -435,7 +435,7 @@ void ViewProviderFemGeometry::applyChainRole()
         step ? ToggleVisibilityMode::NoToggleVisibility : ToggleVisibilityMode::CanToggleVisibility
     );
     if (step) {
-        setDisplayMaskMode("Hidden");
+        setStageMask(*this, "Hidden");
     }
     else {
         // Shape changes were ignored while this was a step, so the vtk source
@@ -445,7 +445,7 @@ void ViewProviderFemGeometry::applyChainRole()
             m_vtksource->SetShape(m_shape);
         }
         m_viewStateCacheValid = false;
-        setDisplayMaskMode("Default");
+        setStageMask(*this, "Default");
         // Rebuilds the render and lets the active stage have the final say on
         // the mask. applyChainRole is a no-op from there, the role is set.
         onViewStateChanged();
@@ -601,11 +601,11 @@ void ViewProviderFemGeometry::onViewStateChanged()
     applyChainRole();
     if (m_isChainStep && !m_chainPreview) {
         // Nothing to show and nothing to filter: the group renders the result.
-        setDisplayMaskMode("Hidden");
+        setStageMask(*this, "Hidden");
         return;
     }
     if (m_suppressChainRender) {
-        setDisplayMaskMode(suppressedMaskMode());
+        setStageMask(*this, suppressedMaskMode());
         return;
     }
 
@@ -615,7 +615,7 @@ void ViewProviderFemGeometry::onViewStateChanged()
         // this a previewed step keeps the Hidden mask applyChainRole left
         // behind, and a group coming out of suppression never gets its render
         // back, leaving an empty viewport either way.
-        setDisplayMaskMode("Default");
+        setStageMask(*this, "Default");
         m_viewStateCacheValid = false;
         updateVTK();
         return;
@@ -633,9 +633,7 @@ void ViewProviderFemGeometry::onViewStateChanged()
     // steps below it draw nothing, so the extension-owned Group mask would leave
     // an empty view. A previewed step overrides the stage, because picking
     // geometry for a chain step is a geometry operation by definition.
-    setDisplayMaskMode(
-        (m_chainPreview || stage == ActiveStage::Geometry) ? "Default" : "Hidden"
-    );
+    setStageMask(*this, (m_chainPreview || stage == ActiveStage::Geometry) ? "Default" : "Hidden");
 
     const bool colorOnly = m_viewStateCacheValid && m_cachedDimMode == dimMode
         && m_cachedWireframe == wireframe && m_cachedHidden == hidden
@@ -732,15 +730,15 @@ void ViewProviderFemGeometry::attach(App::DocumentObject* pcObj)
 void ViewProviderFemGeometry::setDisplayMode(const char* ModeName)
 {
     if (m_isChainStep && !m_chainPreview) {
-        setDisplayMaskMode("Hidden");
+        setStageMask(*this, "Hidden");
         return;
     }
     if (m_suppressChainRender) {
-        setDisplayMaskMode(suppressedMaskMode());
+        setStageMask(*this, suppressedMaskMode());
         return;
     }
     if (ModeName) {
-        setDisplayMaskMode(strcmp(ModeName, "Hidden") == 0 ? "Hidden" : "Default");
+        setStageMask(*this, strcmp(ModeName, "Hidden") == 0 ? "Hidden" : "Default");
     }
     update3D();
 }
@@ -1528,6 +1526,15 @@ void ViewProviderFemGeometry::onChanged(const App::Property* prop)
     }
 
     ViewProviderDocumentObject::onChanged(prop);
+
+    if (prop == &Visibility && isAttachedToDocument()) {
+        // Showing the geometry is what the geometry stage is, so the stage has
+        // to be read again whenever this changes, including when the user hits
+        // space bar on the group in the tree.
+        if (auto* state = viewState()) {
+            state->stageVisibilityChanged(ActiveStage::Geometry);
+        }
+    }
 }
 
 void ViewProviderFemGeometry::updateVTK()

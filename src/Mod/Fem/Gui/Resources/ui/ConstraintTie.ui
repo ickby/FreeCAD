@@ -64,17 +64,40 @@
           </property>
          </widget>
         </item>
-        <item row="3" column="0">
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="grp_reversed">
+     <property name="title">
+      <string>For shell surfaces</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_6">
+      <item>
+       <widget class="QLabel" name="l_reversed_hint">
+        <property name="text">
+         <string>A shell surface has two sides. Solid faces have one, and are unaffected.</string>
+        </property>
+        <property name="wordWrap">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_rev">
+        <item>
          <widget class="QCheckBox" name="ckb_rev_master">
           <property name="text">
-           <string>Reverse master</string>
+           <string>Back side of master</string>
           </property>
          </widget>
         </item>
-        <item row="3" column="1">
+        <item>
          <widget class="QCheckBox" name="ckb_rev_slave">
           <property name="text">
-           <string>Reverse slave</string>
+           <string>Back side of slave</string>
           </property>
          </widget>
         </item>

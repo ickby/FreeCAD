@@ -56,11 +56,21 @@ public:
 
 private Q_SLOTS:
     void onFrictionChanged(bool);
+    void onReversedChanged(bool);
 
 protected:
     void changeEvent(QEvent* e) override;
 
 private:
+    /**
+     * @brief Put the picked sides on the object at once, rather than on OK.
+     *
+     * The 3D marker follows these properties, and a marker that only moved
+     * once the panel was gone could not help anybody choose. Cancel takes them
+     * back with everything else the panel wrote.
+     */
+    void writeSides();
+
     std::unique_ptr<Ui_TaskFemConstraintContact> ui;
 };
 

@@ -763,6 +763,7 @@ SET(FemGuiBenchmarks_SRCS
 SET(FemGuiTests_SRCS
     femtest/gui/__init__.py
     femtest/gui/test_component_selection.py
+    femtest/gui/test_constraint_symbols.py
     femtest/gui/test_geometry_marks.py
     femtest/gui/test_geometry_partition.py
     femtest/gui/test_mesh_edges.py

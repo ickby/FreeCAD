@@ -52,3 +52,11 @@ class VPConstraintTie(view_base_femconstraint.VPBaseFemConstraint):
     def attach(self, vobj):
         super().attach(vobj)
         vobj.loadSymbol(self.resource_symbol_dir + "ConstraintTie.iv")
+
+    def updateData(self, obj, prop):
+        # Which skin of an expanded shell the tie takes is a choice, unlike the
+        # single face a solid element offers, so the mark says which one.
+        if prop in view_base_femconstraint.SIDE_PROPERTIES:
+            view_base_femconstraint.apply_sides(
+                self.ViewObject, view_base_femconstraint.master_slave_sides(obj)
+            )

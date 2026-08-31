@@ -212,6 +212,18 @@ private:
      * the one that owns the element.
      */
     const ImportRenderNode* elementOwner(const char* subelement, std::vector<SoNode*>& branch) const;
+    /**
+     * What a selection entry names of this instance, or nothing if it names
+     * none of it.
+     *
+     * A pick is recorded against the top of the tree, so the object it names is
+     * an analysis and the way down to what was picked sits in the subname. The
+     * first instance on that way is the one that drew it, because an instance
+     * renders a copy of everything the nested ones hold; a pick inside a nested
+     * one therefore belongs to the outer one, which names it with the nested
+     * instances still in front - the way the render tree was built.
+     */
+    std::string selectedElement(const char* featName, const std::string& subname) const;
     void rebuildInheritedSymbols();
     void clearInheritedSymbols();
     void addInheritedSymbols(

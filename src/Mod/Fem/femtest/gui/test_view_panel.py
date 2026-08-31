@@ -717,6 +717,89 @@ class TestViewPanelGui(unittest.TestCase):
         self.assertTrue(self.settings.widget.MeshButton.isEnabled())
         self.assertTrue(self.settings.widget.GeometryButton.isEnabled())
 
+    # -- what a pick in the 3D view marks in the tree -------------------------
+
+    def _marked_elements(self):
+        """Elements of the rows the tree shows as selected."""
+        self.explorer._sync_tree_selection()
+        model = self.explorer._model
+        return {
+            model.get_item(index).element
+            for index in self.explorer.selectionModel().selectedIndexes()
+            if model.get_item(index).element
+        }
+
+    def test_a_pick_reported_against_the_analysis_marks_the_row(self):
+        """
+        A pick is recorded against the top of the tree, so what arrives names
+        the analysis and carries the way down to the element in the subname.
+        Read only as far as the name in front, no pick from the 3D view ever
+        matches a row, and the tree stays blank while the element sits in the
+        selection view.
+        """
+        FreeCADGui.Selection.addSelection(
+            self.document.Name,
+            self.analysis.Name,
+            f"{self.group.Name}.Solid1",
+        )
+        self.assertEqual(self._marked_elements(), {"Solid1"})
+
+    def test_a_pick_on_a_placed_instance_marks_its_row(self):
+        """
+        An instance draws its own copy of the analysis it places, so its row
+        is named by the instance and the element together.
+        """
+        self._import_another_analysis()
+        container = self.analysis.Group[-1]
+        FreeCADGui.Selection.addSelection(
+            self.document.Name,
+            self.analysis.Name,
+            f"{container.Name}.Leg1.Solid1",
+        )
+        self.assertEqual(self._marked_elements(), {"Leg1.Solid1"})
+
+    def test_a_pick_on_an_instance_of_an_instance_keeps_the_way_to_it(self):
+        """
+        The outer instance is the one that drew it, and the nested ones in
+        between are what tell its copy of the element from the others.
+        """
+        from femtools import importtools
+
+        self._import_another_analysis()
+        assembly = ObjectsFem.makeAnalysis(self.document, "Assembly")
+        outer = ObjectsFem.makeAnalysisImport(self.document, "Placed1")
+        outer.Analysis = self.analysis
+        importtools.wire_import(assembly, outer)
+        self.document.recompute()
+        FemGui.setActiveAnalysis(assembly)
+        self.explorer.setup_analysis()
+
+        container = assembly.Group[-1]
+        FreeCADGui.Selection.addSelection(
+            self.document.Name,
+            assembly.Name,
+            f"{container.Name}.Placed1.Leg1.Solid1",
+        )
+        self.assertEqual(self._marked_elements(), {"Placed1.Leg1.Solid1"})
+
+    def test_a_pick_on_a_different_analysis_marks_nothing(self):
+        other = ObjectsFem.makeAnalysis(self.document, "Other")
+        group = ObjectsFem.makeGeometryGroup(self.document, "OtherGeometry")
+        other.addObject(group)
+        step = ObjectsFem.makeGeometryImport(self.document)
+        source = self.document.addObject("Part::Feature", "OtherPart")
+        source.Shape = Part.makeBox(5, 5, 5)
+        step.Import = [source]
+        group.Group = [step]
+        self.document.recompute()
+
+        FreeCADGui.Selection.addSelection(
+            self.document.Name,
+            other.Name,
+            f"{group.Name}.Solid1",
+        )
+        self.assertEqual(self._marked_elements(), set())
+
     # -- the clipping list ---------------------------------------------------
 
     def test_the_empty_clipping_list_says_it_is_empty(self):

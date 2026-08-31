@@ -800,10 +800,13 @@ void CellTypeClassification::build(
 
     // The colour belongs to the base type, so the two sides of a type stay one
     // hue apart from every other type instead of taking a palette slot each.
+    // The slot is asked of the type itself rather than counted off the types
+    // this grid holds: the tree shows the meshes of the analysis as one list,
+    // and ranking each mesh on its own would give the first type of every mesh
+    // the same colour.
     std::map<std::string, int> baseIndex;
     for (const auto& base : baseKeys) {
-        const int idx = static_cast<int>(baseIndex.size());
-        baseIndex[base] = idx;
+        baseIndex[base] = FemVisibilityMask::cellTypeOrder(base);
     }
 
     for (const auto& [base, construction] : present) {

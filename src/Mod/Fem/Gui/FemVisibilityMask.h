@@ -83,6 +83,20 @@ public:
     static std::string cellTypeKey(int vtkCellType, bool construction);
 
     /**
+     * Palette slot of a cell type, the same one in every mesh of the analysis.
+     *
+     * A colour has to stand for the type wherever it is met, and a mesh only
+     * ever knows the handful of types it happens to hold. Ranking them against
+     * each other gives the first type of one mesh and the first of the next the
+     * same slot, so a solid of one and a shell of another come out one colour.
+     * The order below is over every type there is, so no mesh can shift it.
+     *
+     * @param key a base cell-type key as cellTypeKey() returns it, without the
+     *            construction suffix.
+     */
+    static int cellTypeOrder(const std::string& key);
+
+    /**
      * Per-cell flags (1 = the analysis solves on this cell, 0 = the mesher
      * built the mesh from it).
      *

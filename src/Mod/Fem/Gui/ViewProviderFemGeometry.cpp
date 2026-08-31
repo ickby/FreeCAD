@@ -302,6 +302,10 @@ ViewProviderFemGeometry::ViewProviderFemGeometry()
     const Base::Color toolColor = defaultToolPreviewColor();
     m_toolPreview->color.setValue(toolColor.r, toolColor.g, toolColor.b);
     m_toolPreview->transparency.setValue(0.55f);
+    m_toolPreviewSwitch = new SoSwitch();
+    m_toolPreviewSwitch->ref();
+    m_toolPreviewSwitch->whichChild = SO_SWITCH_NONE;
+    m_toolPreviewSwitch->addChild(m_toolPreview);
 
     float transparency = 0.0f;
     ParameterGrp::handle hGrp = Gui::WindowParameter::getDefaultParameter()->GetGroup("View");
@@ -355,6 +359,7 @@ ViewProviderFemGeometry::~ViewProviderFemGeometry()
     m_highlightoverlaylines->unref();
     m_highlightoverlaypoints->unref();
     m_toolPreview->unref();
+    m_toolPreviewSwitch->unref();
 }
 
 AnalysisViewState* ViewProviderFemGeometry::viewState() const
@@ -713,7 +718,7 @@ void ViewProviderFemGeometry::attach(App::DocumentObject* pcObj)
     m_highlightoverlay->addChild(m_highlightoverlaypointmaterial);
     m_highlightoverlay->addChild(m_highlightoverlaypoints);
     m_separator->addChild(m_highlightoverlay);
-    m_separator->addChild(m_toolPreview);
+    m_separator->addChild(m_toolPreviewSwitch);
 
     addDisplayMaskMode(m_separator, "Default");
     addDisplayMaskMode(m_hidden, "Hidden");
@@ -821,6 +826,10 @@ void ViewProviderFemGeometry::setToolPreview(
     if (!m_toolPreview) {
         return;
     }
+    if (shape.isNull()) {
+        clearToolPreview();
+        return;
+    }
     m_toolPreview->color.setValue(color.r, color.g, color.b);
     m_toolPreview->transparency.setValue(std::clamp(transparency, 0.0f, 1.0f));
     try {
@@ -831,6 +840,7 @@ void ViewProviderFemGeometry::setToolPreview(
             0.35
         );
         m_toolPreview->transform.setValue(Base::convertTo<SbMatrix>(shape.getTransform()));
+        m_toolPreviewSwitch->whichChild = 0;
     }
     catch (const Standard_Failure&) {
         clearToolPreview();
@@ -842,6 +852,7 @@ void ViewProviderFemGeometry::clearToolPreview()
     if (!m_toolPreview) {
         return;
     }
+    m_toolPreviewSwitch->whichChild = SO_SWITCH_NONE;
     PartGui::ViewProviderPartExt::setupCoinGeometry(TopoDS_Shape(), m_toolPreview, 0.2, 0.35);
     m_toolPreview->transform.setValue(SbMatrix::identity());
 }

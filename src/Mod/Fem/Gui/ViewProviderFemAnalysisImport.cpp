@@ -660,8 +660,68 @@ ViewProviderFemAnalysisImport::ImportRenderNode* ViewProviderFemAnalysisImport::
     return node.release();
 }
 
+void ViewProviderFemAnalysisImport::appendNodeSignature(
+    Fem::FemAnalysisImport* importObj,
+    std::vector<const Fem::FemAnalysisImport*>& chain,
+    std::ostringstream& out
+) const
+{
+    if (!importObj || std::ranges::find(chain, importObj) != chain.end()) {
+        return;
+    }
+
+    const Base::Placement& placement = importObj->Placement.getValue();
+    const Base::Vector3d& pos = placement.getPosition();
+    double qx {};
+    double qy {};
+    double qz {};
+    double qw {};
+    placement.getRotation().getValue(qx, qy, qz, qw);
+    out << importObj->getNameInDocument() << '|' << pos.x << ',' << pos.y << ',' << pos.z << ','
+        << qx << ',' << qy << ',' << qz << ',' << qw << '|';
+    for (long component : importObj->SuppressedComponents.getValues()) {
+        out << component << ',';
+    }
+
+    // The shape a source hands out is a handle to what it built, so a new one
+    // is a shape that was built again.
+    if (auto* srcGeom = importObj->sourceGeometry()) {
+        const TopoDS_Shape& shape = srcGeom->Shape.getShape().getShape();
+        out << '|' << (shape.IsNull() ? nullptr : shape.TShape().get());
+    }
+
+    auto* src = Base::freecad_cast<Fem::FemAnalysis*>(importObj->Analysis.getValue());
+    if (const auto* shared = MeshGridCache::instance().entryFor(meshGroupOf(src))) {
+        out << '|' << shared->grid.GetPointer() << ':' << shared->revision;
+    }
+    out << ';';
+
+    chain.push_back(importObj);
+    if (src) {
+        for (auto* nested : Fem::Tools::analysisImports(src)) {
+            appendNodeSignature(nested, chain, out);
+        }
+    }
+    chain.pop_back();
+}
+
+std::string ViewProviderFemAnalysisImport::renderSignature() const
+{
+    std::ostringstream out;
+    std::vector<const Fem::FemAnalysisImport*> chain;
+    appendNodeSignature(getObject<Fem::FemAnalysisImport>(), chain, out);
+    return out.str();
+}
+
 void ViewProviderFemAnalysisImport::rebuildRenderTree()
 {
+    const std::string signature = renderSignature();
+    if (!m_renderNodes.empty() && signature == m_builtFrom) {
+        return;
+    }
+    FEM_PERF_SCOPE("import.rebuildRenderTree");
+    m_builtFrom = signature;
+
     clearRenderTree();
 
     auto* importObj = getObject<Fem::FemAnalysisImport>();
@@ -971,6 +1031,16 @@ void ViewProviderFemAnalysisImport::updateData(const App::Property* prop)
         return;
     }
 
+    // Everything the source analysis holds arrives here: a change over there
+    // travels up to the analysis and along our link to it, and the recompute
+    // that follows raises this. Nested instances come with it, because they
+    // are members of that analysis too.
+    if (prop == &importObj->SourceRevision) {
+        rebuildRenderTree();
+        rebuildInheritedSymbols();
+        return;
+    }
+
     if (prop == &importObj->Analysis || prop == &importObj->SuppressedComponents
         || prop == &importObj->SuppressedMembers) {
         if (prop == &importObj->Analysis) {
@@ -1002,48 +1072,6 @@ void ViewProviderFemAnalysisImport::clearInheritedSymbols()
     }
 }
 
-bool ViewProviderFemAnalysisImport::sourceProvides(const App::DocumentObject* obj) const
-{
-    if (!obj) {
-        return false;
-    }
-    const bool renders = obj->isDerivedFrom<Fem::FemGeometry>()
-        || obj->isDerivedFrom<Fem::FemMeshObject>()
-        || obj->isDerivedFrom<Fem::FemAnalysisImport>();
-    if (!renders) {
-        return false;
-    }
-
-    std::set<const Fem::FemAnalysis*> sources;
-    std::vector<const Fem::FemAnalysisImport*> pending;
-    if (auto* importObj = getObject<Fem::FemAnalysisImport>()) {
-        pending.push_back(importObj);
-    }
-    while (!pending.empty()) {
-        const Fem::FemAnalysisImport* current = pending.back();
-        pending.pop_back();
-        auto* src = Base::freecad_cast<Fem::FemAnalysis*>(current->Analysis.getValue());
-        if (!src || !sources.insert(src).second) {
-            continue;
-        }
-        for (auto* nested : Fem::Tools::analysisImports(src)) {
-            pending.push_back(nested);
-        }
-    }
-    if (sources.empty()) {
-        return false;
-    }
-
-    for (auto* parent : obj->getInListRecursive()) {
-        if (auto* analysis = Base::freecad_cast<Fem::FemAnalysis*>(parent)) {
-            if (sources.contains(analysis)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 void ViewProviderFemAnalysisImport::connectSource()
 {
     m_connections.clear();
@@ -1057,26 +1085,19 @@ void ViewProviderFemAnalysisImport::connectSource()
         return;
     }
 
+    // What the source draws reaches us as a recompute, so the only thing left
+    // to listen for is what a recompute cannot carry: a constraint works out
+    // where its symbols go into output properties, which by design leave the
+    // constraint untouched and the dependency graph none the wiser.
     m_connections.push_back(src->getDocument()->signalChangedObject.connect(
-        [this, src](const App::DocumentObject& obj, const App::Property& prop) {
-            if (&obj == src) {
-                if (&prop == &src->Group) {
-                    rebuildInheritedSymbols();
-                    rebuildRenderTree();
-                }
+        [this](const App::DocumentObject& obj, const App::Property& prop) {
+            const auto* constraint = Base::freecad_cast<Fem::Constraint*>(&obj);
+            if (!constraint) {
                 return;
             }
-            if (const auto* constraint = Base::freecad_cast<Fem::Constraint*>(&obj)) {
-                if (&prop == &constraint->Points || &prop == &constraint->Normals
-                    || &prop == &constraint->Scale) {
-                    rebuildInheritedSymbols();
-                }
-                return;
-            }
-            // Editing the source geometry or remeshing it changes what this
-            // instance draws, and nothing about the import itself says so.
-            if (sourceProvides(&obj)) {
-                rebuildRenderTree();
+            if (&prop == &constraint->Points || &prop == &constraint->Normals
+                || &prop == &constraint->Scale) {
+                rebuildInheritedSymbols();
             }
         }
     ));

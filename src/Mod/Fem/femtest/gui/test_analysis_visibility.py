@@ -41,6 +41,7 @@ import FreeCAD
 import FreeCADGui
 import Part
 
+import FemGui
 import ObjectsFem
 
 # The scene graph checks hand out Coin nodes, which needs the pivy bindings
@@ -260,3 +261,40 @@ class TestAnalysisVisibilityGui(unittest.TestCase):
 
         self.assertTrue(container.ViewObject.hasExtension(extension))
         self.assertTrue(_draws(analysis, container))
+
+    @staticmethod
+    def _rebuilds():
+        """How often an instance has built its render tree since the last reset."""
+        for row in FemGui.perfReport():
+            if row[0] == "import.rebuildRenderTree":
+                return row[1]
+        return 0
+
+    def test_an_instance_is_drawn_again_only_for_what_it_draws(self):
+        """
+        The link that tells an instance of a change runs to the whole source
+        analysis, so editing a constraint over there arrives here as well. Every
+        placed copy of the source is rebuilt from scratch, which is far too much
+        work to do for something that is not on screen to begin with.
+        """
+        assembly, _container, placed = self._assembly("Cheap")
+        source = self.document.getObject("CheapSource")
+        FemGui.perfReset()
+        FemGui.perfEnable(True)
+        try:
+            held = ObjectsFem.makeConstraintFixed(self.document, "Held")
+            source.addObject(held)
+            self.document.recompute()
+            self.assertEqual(self._rebuilds(), 0, "a constraint is not part of the render")
+
+            held.Scale = held.Scale + 1
+            self.document.recompute()
+            self.assertEqual(self._rebuilds(), 0, "editing one is not either")
+
+            part = self.document.getObject("CheapSourcePart")
+            part.Shape = Part.makeBox(20, 10, 10)
+            self.document.recompute()
+            self.assertGreater(self._rebuilds(), 0, "the shape it draws did change")
+        finally:
+            FemGui.perfEnable(False)
+        self.assertTrue(_draws(assembly, placed))

@@ -4083,3 +4083,67 @@ class TestAnalysisImport(unittest.TestCase):
         self.assertEqual(len(materials), 2)
         self.assertTrue(meshtools.get_femelement_sets_from_group_data(mesh, materials))
         self.assertEqual(sum(len(m["FEMElements"]) for m in materials), mesh.VolumeCount)
+
+    # -- what reaches an instance, and what does not -------------------------
+
+    def _touched(self):
+        return sorted(o.Name for o in self.document.Objects if "Touched" in o.State)
+
+    def test_showing_and_hiding_in_the_source_asks_for_no_recompute(self):
+        """
+        A group is told when a member is shown or hidden, and used to pass that
+        on as a change of its own. Every instance of the analysis then had to be
+        drawn again, which for a mesh of any size is a wait for something that
+        is only a scene graph switch.
+        """
+        leg, geom, mesh_group = self._leg_analysis()
+        table, _, _ = self._table_analysis()
+        imp, _ = self._add_import(table, leg, "Leg1")
+        self.document.recompute()
+        self.assertEqual(self._touched(), [])
+
+        before = imp.SourceRevision
+        for obj in (geom.Group[0], mesh_group.Group[0], geom, mesh_group, leg):
+            obj.Visibility = not obj.Visibility
+        self.assertEqual(self._touched(), [], "showing or hiding is not a change to recompute")
+
+        self.document.recompute()
+        self.assertEqual(imp.SourceRevision, before, "the instance was drawn again for nothing")
+
+    def test_a_changed_source_reaches_every_instance_of_it(self):
+        leg, _, _ = self._leg_analysis()
+        table, _, _ = self._table_analysis()
+        first, _ = self._add_import(table, leg, "Leg1")
+        second, _ = self._add_import(table, leg, "Leg2", vector=FreeCAD.Vector(0, 0, 20))
+        self.document.recompute()
+
+        before = (first.SourceRevision, second.SourceRevision)
+        part = self.document.getObject("LegPart")
+        part.Shape = _box().scaled(2.0, FreeCAD.Vector())
+        self.document.recompute()
+
+        self.assertNotEqual(first.SourceRevision, before[0])
+        self.assertNotEqual(second.SourceRevision, before[1])
+
+    def test_a_change_at_the_bottom_of_a_chain_reaches_the_top(self):
+        """
+        The link that carries this runs to the source analysis, not to the
+        geometry and mesh it holds, so an instance nested inside that analysis
+        is on the way like everything else it keeps.
+        """
+        leg, _, _ = self._leg_analysis()
+        side = ObjectsFem.makeAnalysis(self.document, "Side")
+        ObjectsFem.makeGeometryGroup(self.document, "SideGeometry")
+        side.addObject(self.document.getObject("SideGeometry"))
+        inner, _ = self._add_import(side, leg, "LegInSide")
+        table, _, _ = self._table_analysis()
+        outer, _ = self._add_import(table, side, "SideInTable")
+        self.document.recompute()
+
+        before = (inner.SourceRevision, outer.SourceRevision)
+        part = self.document.getObject("LegPart")
+        part.Shape = _box().scaled(2.0, FreeCAD.Vector())
+        self.document.recompute()
+
+        self.assertNotEqual(inner.SourceRevision, before[0])
+        self.assertNotEqual(outer.SourceRevision, before[1], "the outer instance draws Leg too")

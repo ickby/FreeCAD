@@ -98,6 +98,11 @@ FemMeshShapeGroup::FemMeshShapeGroup()
 {
     GroupExtension::initExtension(this);
 
+    // A child being shown or hidden says nothing about the merge, and the group
+    // extension would otherwise touch us for it. What does change the merge
+    // reaches us through the Group link like any other dependency.
+    _GroupTouched.setStatus(App::Property::Output, true);
+
     // Merged mesh is rebuilt on demand; children are what get persisted.
     FemMesh.setStatus(App::Property::Transient, true);
 
@@ -213,6 +218,11 @@ void FemMeshShapeGroup::onDocumentRestored()
     // its own file in the archive is nothing. Restoring the children raises no
     // property change, so this is the only point at which that can be undone.
     invalidateMergedCache();
+
+    // The status of a transient property is written to the file, so a document
+    // saved before this was set brings the old one back with it.
+    _GroupTouched.setStatus(App::Property::Output, true);
+
     FemMeshShapeBaseObject::onDocumentRestored();
 }
 

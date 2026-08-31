@@ -97,23 +97,25 @@ def _tool_preview_node(vobj):
     The SoPreviewShape ViewProviderFemGeometry hangs under its Default mask.
 
     Exactly one is built at attach(); an empty one is still present when no
-    cutting tool is being shown.
+    cutting tool is being shown, switched out of the traversal so that the
+    point it holds at the origin stays out of every bounding box.
     """
     own = own_render(vobj)
+    # The switch it sits in counts as a place to look, not as a place it is
+    candidates = [own.getChild(i) for i in range(own.getNumChildren())]
+    for child in list(candidates):
+        if child.isOfType(coin.SoSwitch.getClassTypeId()):
+            candidates += [child.getChild(i) for i in range(child.getNumChildren())]
+
     preview_type = coin.SoType.fromName("SoPreviewShape")
     if preview_type != coin.SoType.badType():
-        matches = [
-            own.getChild(i)
-            for i in range(own.getNumChildren())
-            if own.getChild(i).getTypeId() == preview_type
-        ]
+        matches = [node for node in candidates if node.getTypeId() == preview_type]
         if matches:
             return matches[-1]
 
     # Fallback when the typed name is not registered in pivy: look for the
     # separator that carries a matrix transform and an unpickable pick style.
-    for i in range(own.getNumChildren()):
-        child = own.getChild(i)
+    for child in candidates:
         if not child.isOfType(coin.SoSeparator.getClassTypeId()):
             continue
         if not children_of_type(child, "SoMatrixTransform"):

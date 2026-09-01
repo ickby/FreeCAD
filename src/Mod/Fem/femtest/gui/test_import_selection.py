@@ -75,6 +75,23 @@ def _lit(vobj):
     return marked
 
 
+def _polylines(vobj):
+    """How many polylines every line set below a view provider draws."""
+    counts = []
+
+    def walk(node):
+        if str(node.getTypeId().getName()) == "SoBrepEdgeSet":
+            index = node.coordIndex
+            counts.append(sum(1 for i in range(index.getNum()) if index[i] < 0))
+        children = node.getChildren() if hasattr(node, "getChildren") else None
+        if children:
+            for i in range(children.getLength()):
+                walk(children[i])
+
+    walk(vobj.RootNode)
+    return counts
+
+
 class TestImportSelectionGui(unittest.TestCase):
     fcc_print("import TestImportSelectionGui")
 
@@ -206,6 +223,20 @@ class TestImportSelectionGui(unittest.TestCase):
         )
         self.assertEqual(_lit(second.ViewObject), [([0, 1, 2, 3, 4, 5], [])])
         self.assertEqual(_lit(first.ViewObject), [])
+
+    def test_an_instance_draws_every_edge_of_its_shape_once(self):
+        """
+        A face hands its own edges to the mesher a second time, tagged with the
+        id of the face rather than the one of the edge. Drawn, such a copy
+        answers a pick on the edge with the name of the face, so only the edges
+        the shape really has may reach the line set.
+        """
+        _, _, placed = self._assembly()
+
+        drawn = [count for count in _polylines(placed.ViewObject) if count]
+        self.assertTrue(drawn, "the instance draws no edges at all")
+        for count in drawn:
+            self.assertEqual(count, 12, "a box has twelve edges to draw")
 
     def test_clearing_the_selection_puts_the_instance_out(self):
         assembly, container, placed = self._assembly()

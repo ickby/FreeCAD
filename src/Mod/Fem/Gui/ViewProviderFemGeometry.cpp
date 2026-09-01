@@ -2017,6 +2017,19 @@ void ViewProviderFemGeometry::update3D()
     const bool draw_faces = !wireframe && dimMode != DimensionMode::Curve
         && dimMode != DimensionMode::Point;
 
+    // The cells arrive sorted by shape id, so one slot is enough to answer for a
+    // whole run of them.
+    vtkIdType typed_id = -1;
+    bool id_is_edge = false;
+    auto shapeIdIsEdge = [this, &typed_id, &id_is_edge](vtkIdType id) {
+        if (id != typed_id) {
+            typed_id = id;
+            id_is_edge = !m_shape.IsNull()
+                && m_shape->GetSubShape(id).ShapeType() == TopAbs_ShapeEnum::TopAbs_EDGE;
+        }
+        return id_is_edge;
+    };
+
     for (vtkIdType sort_id = 0; sort_id < sorted_indices->GetNumberOfIds(); sort_id++) {
         auto cell_id = sorted_indices->GetId(sort_id);
         auto shape_id = shape_ids->GetValue(cell_id);
@@ -2098,8 +2111,10 @@ void ViewProviderFemGeometry::update3D()
             || mesh_type == IVtk_MeshType::MT_SharedEdge || mesh_type == IVtk_MeshType::MT_SeamEdge
         ) {
 
-            auto topo_shape = m_shape->GetSubShape(shape_id);
-            if (topo_shape.ShapeType() != TopAbs_ShapeEnum::TopAbs_EDGE) {
+            // Every face repeats its own edges tagged with the face id, so
+            // without this the line set draws each edge once more per adjacent
+            // face and a pick on one of those copies names the face.
+            if (!shapeIdIsEdge(shape_id)) {
                 continue;
             }
 

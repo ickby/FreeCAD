@@ -926,7 +926,24 @@ void FemGeometryViewHelper::collectVisibleIds(
                 }
             }
 
-            if (sub_vtk_id > 0) {
+            if (sub_shape.shapeType() == TopAbs_FACE) {
+                // GetSubIds for faces do not include edges and vertices.
+                auto vertices = sub_shape.getSubShapes(TopAbs_VERTEX);
+                for (auto& vertex : vertices) {
+                    auto vid = m_shape->GetSubShapeId(vertex);
+                    if (vid > 0 && !passthrough_ids.Contains(vid)) {
+                        passthrough_ids.Append(vid);
+                    }
+                }
+                auto edges = sub_shape.getSubShapes(TopAbs_EDGE);
+                for (auto& edge : edges) {
+                    auto eid = m_shape->GetSubShapeId(edge);
+                    if (eid > 0 && !passthrough_ids.Contains(eid)) {
+                        passthrough_ids.Append(eid);
+                    }
+                }
+            }
+            else if (sub_vtk_id > 0) {
                 auto ids = m_shape->GetSubIds(sub_vtk_id);
                 for (const auto& id : ids) {
                     if (!passthrough_ids.Contains(id)) {
@@ -934,6 +951,9 @@ void FemGeometryViewHelper::collectVisibleIds(
                     }
                     addIdElement(id, name);
                 }
+            }
+
+            if (sub_vtk_id > 0) {
                 addIdElement(sub_vtk_id, name);
                 passthrough_ids.Append(sub_vtk_id);
             }
@@ -1326,6 +1346,19 @@ void FemGeometryViewHelper::update3D()
     const bool draw_faces = !wireframe && dimMode != DimensionMode::Curve
         && dimMode != DimensionMode::Point;
 
+    // The cells arrive sorted by shape id, so one slot is enough to answer for a
+    // whole run of them.
+    vtkIdType typed_id = -1;
+    bool id_is_edge = false;
+    auto shapeIdIsEdge = [this, &typed_id, &id_is_edge](vtkIdType id) {
+        if (id != typed_id) {
+            typed_id = id;
+            id_is_edge = !m_shape.IsNull()
+                && m_shape->GetSubShape(id).ShapeType() == TopAbs_ShapeEnum::TopAbs_EDGE;
+        }
+        return id_is_edge;
+    };
+
     for (vtkIdType sort_id = 0; sort_id < sorted_indices->GetNumberOfIds(); sort_id++) {
         const auto cell_id = sorted_indices->GetId(sort_id);
         const auto shape_id = shape_ids->GetValue(cell_id);
@@ -1395,6 +1428,13 @@ void FemGeometryViewHelper::update3D()
             mesh_type == IVtk_MeshType::MT_FreeEdge || mesh_type == IVtk_MeshType::MT_BoundaryEdge
             || mesh_type == IVtk_MeshType::MT_SharedEdge || mesh_type == IVtk_MeshType::MT_SeamEdge
         ) {
+            // Every face repeats its own edges tagged with the face id, so
+            // without this the line set draws each edge once more per adjacent
+            // face and a pick on one of those copies names the face.
+            if (!shapeIdIsEdge(shape_id)) {
+                continue;
+            }
+
             m_visdata->GetCellPoints(cell_id, points);
             for (vtkIdType i = 0; i < points->GetNumberOfIds(); i++) {
                 m_lines->coordIndex.set1Value(static_cast<int>(line_soidx), points->GetId(i));

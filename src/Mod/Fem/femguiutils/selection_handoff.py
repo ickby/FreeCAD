@@ -63,11 +63,11 @@ class _DocumentObserver:
 
 def stash_for(obj_name, doc_name=None):
     """
-    Snapshot Gui.Selection.getSelectionEx('', 1) against this object name.
+    Snapshot Gui.Selection.getSelectionEx('', 0) against this object name.
 
-    Resolve is on so a click reported against a GeoFeatureGroup unpacks to the
-    chain step and a plain element name. The object does not need to exist yet:
-    only the name is stored.
+    Unresolved, so a click reported against a group keeps the whole way down
+    to what was picked: resolve_pick() reads it when the panel takes the stash
+    over. The object does not need to exist yet: only the name is stored.
     """
     import FreeCADGui
 
@@ -79,7 +79,7 @@ def stash_for(obj_name, doc_name=None):
         doc_name = active.Name
 
     picks = []
-    for sel in FreeCADGui.Selection.getSelectionEx("", 1):
+    for sel in FreeCADGui.Selection.getSelectionEx("", 0):
         for sub in sel.SubElementNames or ("",):
             picks.append((sel.Object, sub))
     _STASH[_key(doc_name, obj_name)] = picks

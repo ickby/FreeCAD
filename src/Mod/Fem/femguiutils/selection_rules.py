@@ -50,6 +50,10 @@ SHAPE_KINDS = ("Vertex", "Edge", "Face", "Solid", "Shell", "CompSolid", "Compoun
 PROMOTABLE_KINDS = ("Face", "Edge")
 VOLUME_KINDS = ("Solid", "Shell", "CompSolid", "Compound")
 
+# Data::ELEMENT_MAP_PREFIX. A pick names the element twice, once mapped and
+# once plainly; a reference keeps the plain name alone.
+MAPPED_PREFIX = ";"
+
 _PLURAL = {
     "Vertex": "vertices",
     "Edge": "edges",
@@ -108,6 +112,14 @@ def with_prefix(sub, new_leaf):
     return f"{prefix}.{new_leaf}" if prefix else new_leaf
 
 
+def is_instance(obj):
+    """Whether *obj* is a placed analysis, which draws what it was given."""
+    try:
+        return obj is not None and obj.isDerivedFrom("Fem::FemAnalysisImport")
+    except (AttributeError, ReferenceError):
+        return False
+
+
 def resolve_pick(obj, sub):
     """
     Unpack a GeoFeatureGroup-encoded (obj, sub) into the child and element.
@@ -115,15 +127,21 @@ def resolve_pick(obj, sub):
     A click on a chain step is reported against the group with the step name
     encoded into the sub-element path. The gate and the observer both have to
     see the same object the slot will store.
+
+    An instance is where the way down stops. It draws a copy of everything the
+    analyses inside it hold, so a pick on a nested one belongs to the outer
+    instance and is named with the nested instances still in front of the
+    element — the same way the mesh of the assembly names it. Followed to the
+    end instead, the pick would land on the nested instance itself, which
+    stands in the analysis it was placed into and may be placed here more than
+    once: an element of it names no shape this analysis ever drew.
     """
     if obj is None:
         return None, ""
-    if not sub:
-        return obj, ""
-    parts = sub.split(".")
+    parts = [part for part in (sub or "").split(".") if part and not part.startswith(MAPPED_PREFIX)]
     current = obj
     index = 0
-    while index < len(parts):
+    while index < len(parts) and not is_instance(current):
         leaf = parts[index]
         if shape_kind(leaf):
             break

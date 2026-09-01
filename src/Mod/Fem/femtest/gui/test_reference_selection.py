@@ -166,6 +166,77 @@ class TestReferenceSelectionGui(unittest.TestCase):
         self._pick(self.source, "Face1")
         self.assertEqual(self._references(widget), [(self.source.Name, "Face1")])
 
+    # -- picking inside a placed analysis ------------------------------------
+
+    def _placed_side(self):
+        """
+        The analysis places Side, and Side places Leg: a pick on the leg comes
+        down through two instances, the way an assembly of assemblies is built.
+        """
+        from femtools import importtools
+
+        leg = ObjectsFem.makeAnalysis(self.document, "Leg")
+        geometry = ObjectsFem.makeGeometryGroup(self.document, "LegGeometry")
+        leg.addObject(geometry)
+        part = self.document.addObject("Part::Feature", "LegPart")
+        part.Shape = Part.makeBox(10, 10, 10)
+        step = ObjectsFem.makeGeometryImport(self.document)
+        step.Import = [part]
+        geometry.Group = [step]
+
+        side = ObjectsFem.makeAnalysis(self.document, "Side")
+        inner = ObjectsFem.makeAnalysisImport(self.document, "Inner")
+        inner.Analysis = leg
+        importtools.wire_import(side, inner)
+
+        outer = ObjectsFem.makeAnalysisImport(self.document, "Outer")
+        outer.Analysis = side
+        container = importtools.wire_import(self.analysis, outer)
+        self.document.recompute()
+        return container, outer, inner
+
+    def test_a_pick_on_a_placed_analysis_is_stored_on_the_instance(self):
+        container, outer, _inner = self._placed_side()
+        widget = self._picker(["Face"])
+        self._pick(self.analysis, f"{container.Name}.{outer.Name}.Face1")
+        self.assertEqual(self._references(widget), [(outer.Name, "Face1")])
+
+    def test_a_pick_on_a_nested_instance_keeps_the_way_down_to_it(self):
+        """
+        Only the outer instance stands where the pick landed — the nested one
+        stands in the analysis it was placed into, which may be placed here
+        more than once. Stored on the nested instance, the reference names an
+        element the analysis never drew, and the row reads as gone.
+        """
+        container, outer, inner = self._placed_side()
+        widget = self._picker(["Face"])
+        self._pick(self.analysis, f"{container.Name}.{outer.Name}.{inner.Name}.Face1")
+
+        self.assertEqual(self._references(widget), [(outer.Name, f"{inner.Name}.Face1")])
+        self.assertFalse(
+            widget.slot("References").list.topLevelItem(0).data(0, selection_slots.STALE_ROLE),
+            "the element the pick landed on is one the instance has",
+        )
+
+    def test_a_nested_pick_made_before_the_panel_is_handed_over_whole(self):
+        """The create-command stash goes the same way as a pick in the panel."""
+        container, outer, inner = self._placed_side()
+        constraint = ObjectsFem.makeConstraintFixed(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        FreeCADGui.Selection.clearSelection()
+        FreeCADGui.Selection.addSelection(
+            self.document.Name,
+            self.analysis.Name,
+            f"{container.Name}.{outer.Name}.{inner.Name}.Face1",
+        )
+        selection_handoff.stash_for(constraint.Name)
+
+        widget = selection_slots.for_references(constraint, ["Face"])
+        self.widgets.append(widget)
+        self.assertEqual(self._references(widget), [(outer.Name, f"{inner.Name}.Face1")])
+
     # -- picking with a C++ constraint panel ---------------------------------
 
     def test_a_constraint_panel_takes_the_analysis_geometry(self):

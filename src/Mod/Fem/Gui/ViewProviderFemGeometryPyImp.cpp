@@ -203,7 +203,7 @@ PyObject* ViewProviderFemGeometryPy::setToolPreview(PyObject* args)
 {
     PyObject* pyShape = nullptr;
     PyObject* pyColor = Py_None;
-    double transparency = 0.55;
+    double transparency = 0.85;
     if (!PyArg_ParseTuple(args, "O|Od", &pyShape, &pyColor, &transparency)) {
         return nullptr;
     }

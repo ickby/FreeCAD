@@ -72,8 +72,18 @@ def _links_to_references(links):
     return references
 
 
+def _target_rule(kind, max_count=None):
+    """Elements of one kind on the step input only, not on a placed import."""
+    return ReferenceRule(
+        types=(kind,),
+        max_count=max_count,
+        homogeneous=True,
+        scope="input",
+    )
+
+
 def _sub_element_rule(kind, max_count=None):
-    """Elements of one kind, on the geometry the step builds on."""
+    """Elements of one kind on the input shape or on a placed import."""
     return ReferenceRule(
         types=(kind,),
         max_count=max_count,
@@ -137,7 +147,7 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         self.targets = self._add_slot(
             "Targets",
             FreeCAD.Qt.translate("FEM", "Targets"),
-            _sub_element_rule("Solid"),
+            _target_rule("Solid"),
             MARK_TARGETS,
         )
         self.targets.set_picks(_links_to_references(obj.Elements))
@@ -205,6 +215,12 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
             geometry_partition.METHOD_EDGE_PARAM: self.param_page,
             geometry_partition.METHOD_SHORTEST_PATH: self.points_2,
         }
+        self.method_arm_slots = {
+            geometry_partition.METHOD_PLANE_3P: "Points3",
+            geometry_partition.METHOD_PLANE_REF: "Tool",
+            geometry_partition.METHOD_EXTEND_FACE: "ToolFace",
+            geometry_partition.METHOD_SHORTEST_PATH: "Points2",
+        }
 
         self.summary = QtGui.QLabel()
 
@@ -242,12 +258,12 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
             else:
                 self.tool_ref.set_picks([(tool[0], sub)])
 
-        self.param_spin.valueChanged.connect(self.apply_properties)
+        self.param_spin.valueChanged.connect(self._update_panel)
         # Only now, so restoring the boxes above does not write back over the
         # ones that have not been restored yet.
         self.targets.picksChanged.connect(lambda *_: self.targets_changed())
         for slot in (self.points_3, self.tool_ref, self.tool_face, self.points_2):
-            slot.picksChanged.connect(lambda *_: self.apply_properties())
+            slot.picksChanged.connect(lambda *_: self._update_panel())
         self._loading = False
 
         self._update_method_availability()
@@ -257,9 +273,7 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         self.picker.begin_selection()
         self.picker.arm("Targets")
         self.picker.consume_handoff()
-        self._update_summary()
-        self._update_marks()
-        self._update_tool_preview()
+        self._update_panel()
 
     def _add_slot(self, slot_id, title, rule, mark_role):
         return self.picker.add_slot(slot_id, title, rule, marks=False, color=MARK_COLORS[mark_role])
@@ -270,7 +284,7 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
     def apply_target_kind(self):
         """Restrict the target box to one shape kind, dropping picks of the others."""
         kind = self.kind_combo.currentData()
-        self.targets.set_rule(_sub_element_rule(kind))
+        self.targets.set_rule(_target_rule(kind))
         kept = [ref for ref in self.targets.picks if shape_kind(ref[1]) == kind]
         if kept != self.targets.picks:
             self.targets.set_picks(kept)
@@ -294,11 +308,23 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
                     ).format(old=current, new=fallback)
                 )
                 self.method_combo.setCurrentIndex(index)
-        self.apply_properties()
+        self._update_panel()
 
     def method_changed(self):
         self._update_method_page()
-        self.apply_properties()
+        if not self._loading:
+            self._arm_method_slot()
+        self._update_panel()
+
+    def _arm_method_slot(self):
+        """Arm the method's picker so a combo change is followed by a 3D pick."""
+        slot_id = self.method_arm_slots.get(self.method_combo.currentText())
+        if slot_id is None:
+            return
+        self.picker.arm(slot_id)
+        slot = self.picker.slot(slot_id)
+        if slot is not None:
+            slot.setFocus()
 
     def _method_reasons(self):
         """(available, requirement) per method for the current target list."""
@@ -339,9 +365,30 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
         if not self.method_hint.text():
             self.method_hint.setText("")
 
-    def apply_properties(self):
+    def _panel_points(self, method):
+        if method == geometry_partition.METHOD_PLANE_3P:
+            return _references_to_links(self.points_3.picks)
+        if method == geometry_partition.METHOD_SHORTEST_PATH:
+            return _references_to_links(self.points_2.picks)
+        return []
+
+    def _panel_tool(self, method):
+        if method == geometry_partition.METHOD_PLANE_REF:
+            return self._tool_link(self.tool_ref, keep_whole_object=True)
+        if method == geometry_partition.METHOD_EXTEND_FACE:
+            return self._tool_link(self.tool_face)
+        return None
+
+    def _update_panel(self):
+        """Refresh marks and the cutting-tool preview without recomputing."""
         if self._loading:
             return
+        self._update_summary()
+        self._update_marks()
+        self._update_tool_preview()
+
+    def commit_properties(self):
+        """Write the panel state to the partition object; recompute on accept."""
         method = self.method_combo.currentText()
         self.obj.Method = method
         self.obj.Elements = self._element_links()
@@ -352,21 +399,16 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
             self.obj.Tool = None
         elif method == geometry_partition.METHOD_PLANE_REF:
             self.obj.Points = []
-            self.obj.Tool = self._tool_link(self.tool_ref, keep_whole_object=True)
+            self.obj.Tool = self._panel_tool(method)
         elif method == geometry_partition.METHOD_EXTEND_FACE:
             self.obj.Points = []
-            self.obj.Tool = self._tool_link(self.tool_face)
+            self.obj.Tool = self._panel_tool(method)
         elif method == geometry_partition.METHOD_EDGE_PARAM:
             self.obj.Points = []
             self.obj.Tool = None
         elif method == geometry_partition.METHOD_SHORTEST_PATH:
             self.obj.Points = _references_to_links(self.points_2.picks)
             self.obj.Tool = None
-
-        self.obj.Document.recompute()
-        self._update_summary()
-        self._update_marks()
-        self._update_tool_preview()
 
     def _tool_link(self, slot, keep_whole_object=False):
         """The slot's single pick as a PropertyLinkSub value, or None."""
@@ -404,19 +446,26 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
             view_geometry_base.set_input_marks(self.obj, role, elements, MARK_COLORS[role])
 
     def _update_tool_preview(self):
-        preview = geometry_partition.build_tool_preview(self.obj)
+        method = self.method_combo.currentText()
+        preview = geometry_partition.build_tool_preview_config(
+            self.base_obj,
+            method,
+            self._element_links(),
+            points=self._panel_points(method),
+            tool=self._panel_tool(method),
+            parameter=self.param_spin.value(),
+        )
         view_geometry_base.set_tool_preview(self.obj, preview)
 
     def _update_summary(self):
         if not self.base_obj:
             self.summary.setText("")
             return
-        solids_after = len(self.obj.Shape.Solids) if not self.obj.Shape.isNull() else 0
         self.summary.setText(
             FreeCAD.Qt.translate(
                 "FEM",
-                "{before} solids before, {after} after the last recompute.",
-            ).format(before=self._solids_before, after=solids_after)
+                "{before} solids in the input. Accept to apply the partition.",
+            ).format(before=self._solids_before)
         )
 
     def deactivate(self):
@@ -426,7 +475,7 @@ class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
             view_geometry_base.clear_tool_preview(self.obj)
 
     def accept(self):
-        self.apply_properties()
+        self.commit_properties()
         self.deactivate()
         return super().accept()
 

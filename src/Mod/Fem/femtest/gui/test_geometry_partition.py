@@ -586,7 +586,20 @@ class TestGeometryPartitionGui(unittest.TestCase):
                 [sub for _obj, sub in panel.points_3.picks],
                 ["Vertex1", "Vertex2", "Vertex3"],
             )
-            self.assertEqual(len(self.part.Points), 1, "the picks have to reach the property")
+            self.assertEqual(len(self.part.Points), 0, "picks stay in the panel until accept")
+        finally:
+            panel.deactivate()
+
+    def test_panel_picks_reach_the_object_only_on_accept(self):
+        """Editing must not recompute or write properties on every pick."""
+        panel = task_geometry_partition._PartitionTaskPanel(self.part)
+        try:
+            panel.targets.set_picks([(self.imp, "Solid1")])
+            self.assertEqual(panel.targets.picks, [(self.imp, "Solid1")])
+            self.assertEqual(self.part.Elements, [])
+
+            panel.commit_properties()
+            self.assertEqual(self.part.Elements, [(self.imp, ("Solid1",))])
         finally:
             panel.deactivate()
 
@@ -603,6 +616,22 @@ class TestGeometryPartitionGui(unittest.TestCase):
             panel.method_combo.setCurrentIndex(index)
 
             self.assertIs(panel.picker.coordinator.armed_slot, panel.targets)
+        finally:
+            panel.deactivate()
+
+    def test_changing_the_method_arms_its_selection_box(self):
+        """After a method change the new picker is ready without an extra click."""
+        panel = task_geometry_partition._PartitionTaskPanel(self.part)
+        try:
+            self.assertIs(panel.picker.coordinator.armed_slot, panel.targets)
+
+            index = panel.method_combo.findText(geometry_partition.METHOD_EXTEND_FACE)
+            panel.method_combo.setCurrentIndex(index)
+            self.assertIs(panel.picker.coordinator.armed_slot, panel.tool_face)
+
+            index = panel.method_combo.findText(geometry_partition.METHOD_PLANE_3P)
+            panel.method_combo.setCurrentIndex(index)
+            self.assertIs(panel.picker.coordinator.armed_slot, panel.points_3)
         finally:
             panel.deactivate()
 
@@ -703,7 +732,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
         panel = task_geometry_partition._PartitionTaskPanel(self.part)
         try:
             panel.points_3.set_picks([(self.imp, "Vertex1"), (self.imp, "Vertex2")])
-            panel.apply_properties()
+            panel._update_panel()
             self.assertEqual(
                 sorted(
                     self.imp.ViewObject.getElementHighlight(task_geometry_partition.MARK_POINTS)

@@ -35,6 +35,9 @@ from femtaskpanels import task_geometry
 
 from . import view_base_femobject
 
+# Faint enough that the overlay guides without hiding the geometry underneath.
+TOOL_PREVIEW_TRANSPARENCY = 0.85
+
 
 def chain_group(obj):
     """The geometry group obj is a build step of, or None."""
@@ -110,7 +113,7 @@ def set_tool_preview(obj, preview):
     if preview is None:
         base.ViewObject.clearToolPreview()
         return
-    base.ViewObject.setToolPreview(preview.shape)
+    base.ViewObject.setToolPreview(preview.shape, None, TOOL_PREVIEW_TRANSPARENCY)
 
 
 def clear_tool_preview(obj):

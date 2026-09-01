@@ -73,6 +73,14 @@ SLOT_COLORS = (
     (0.95, 0.55, 0.10),
 )
 
+# Passive focus return must not re-arm a slot the user just left via the toggle.
+_ARM_FOCUS_REASONS = (
+    QtCore.Qt.MouseFocusReason,
+    QtCore.Qt.TabFocusReason,
+    QtCore.Qt.BacktabFocusReason,
+    QtCore.Qt.ShortcutFocusReason,
+)
+
 
 def _blend(front, back, weight):
     return QtGui.QColor(
@@ -574,7 +582,7 @@ class ReferenceSlot(QtGui.QFrame):
         self.arm_btn.setAutoRaise(True)
         self.arm_btn.setToolTip(_tr("Click to pick in the 3D view"))
         self.arm_btn.setText("◎")
-        self.arm_btn.toggled.connect(self._arm_toggled)
+        self.arm_btn.clicked.connect(self._arm_clicked)
 
         self.clear_btn = QtGui.QToolButton()
         self.clear_btn.setAutoRaise(True)
@@ -656,8 +664,9 @@ class ReferenceSlot(QtGui.QFrame):
             self.list.addAction(clear)
             layout.addWidget(self.list)
 
-        # The arm follows the focus, so clicking or tabbing into either
-        # presentation arms the slot the same way the toggle does.
+        # The arm follows focus into the pick area, or the arm toggle. Arming
+        # from the slot frame as well pre-checks the checkable arm button on
+        # the same click and Qt toggles it off again immediately afterward.
         for child in (self.field, self.list):
             if child is not None:
                 child.installEventFilter(self)
@@ -666,15 +675,13 @@ class ReferenceSlot(QtGui.QFrame):
         self.setLayout(layout)
 
     def mousePressEvent(self, event):
-        self.arm()
         super().mousePressEvent(event)
 
     def focusInEvent(self, event):
-        self.arm()
         super().focusInEvent(event)
 
     def eventFilter(self, watched, event):
-        if event.type() == QtCore.QEvent.FocusIn:
+        if event.type() == QtCore.QEvent.FocusIn and event.reason() in _ARM_FOCUS_REASONS:
             self.arm()
         return super().eventFilter(watched, event)
 
@@ -735,13 +742,12 @@ class ReferenceSlot(QtGui.QFrame):
     def _solid_toggled(self, checked):
         self.set_promotion_latched(checked)
 
-    def _arm_toggled(self, checked):
-        if checked:
-            self.arm()
-        elif self._group is not None and self._group.coordinator.armed_slot is self:
+    def _arm_clicked(self):
+        """Arm or disarm from the header toggle only — not from frame focus."""
+        if self._group is not None and self._group.coordinator.armed_slot is self:
             self._group.coordinator.disarm()
         else:
-            self.set_armed(False)
+            self.arm()
 
     def _sync_solid_visual(self):
         if self.rule.promotion == PROMOTION_UNAVAILABLE:

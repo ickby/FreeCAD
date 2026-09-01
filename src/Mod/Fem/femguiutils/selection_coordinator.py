@@ -89,6 +89,10 @@ REFUSAL_POLL_MS = 100
 # SelectionChanges::MsgSource::Any. The Python default is Internal, which
 # setPreselect takes as a reason to skip the gate entirely.
 MSG_SOURCE_ANY = 0
+# ResolveMode::NoResolve. Resolving hands out the last object of the way down
+# and drops the way itself, and an element inside a placed analysis is only
+# addressable with that way in front of it. resolve_pick() reads it instead.
+NO_RESOLVE = 0
 
 
 def pointer_is_blocked():
@@ -169,7 +173,7 @@ class SelectionCoordinator:
     def install(self):
         if self._installed:
             return
-        FreeCADGui.Selection.addObserver(self)
+        FreeCADGui.Selection.addObserver(self, NO_RESOLVE)
         self._installed = True
         self._sync_gate()
         self._refresh_preview()
@@ -196,7 +200,7 @@ class SelectionCoordinator:
         """
         wanted = self._installed and self._armed is not None
         if wanted and not self._gated:
-            FreeCADGui.Selection.addSelectionGate(self)
+            FreeCADGui.Selection.addSelectionGate(self, NO_RESOLVE)
             self._gated = True
         elif not wanted and self._gated:
             self._release_gate()
@@ -279,9 +283,9 @@ class SelectionCoordinator:
             return
         resolved = []
         try:
-            for sel in FreeCADGui.Selection.getSelectionEx("", 1):
+            for sel in FreeCADGui.Selection.getSelectionEx("", NO_RESOLVE):
                 for name in sel.SubElementNames or ("",):
-                    resolved.append((sel.Object, name))
+                    resolved.append(resolve_pick(sel.Object, name))
         except Exception:
             resolved = []
         if not resolved and doc_name and obj_name:

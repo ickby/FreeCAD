@@ -50,6 +50,7 @@ from femguiutils.selection_rules import (
     owning_solids,
     pickable_phrase,
     placeholder_text,
+    resolve_pick,
     shape_kind,
 )
 from femtest.app.support_utils import fcc_print
@@ -402,6 +403,83 @@ class TestSelectionRules(unittest.TestCase):
         self.assertTrue(
             element_exists(self.geometry, ""),
             "a whole-object reference has no element to lose",
+        )
+
+    # -- what a pick names ----------------------------------------------------
+
+    def _one_box_analysis(self, name):
+        analysis = ObjectsFem.makeAnalysis(self.document, name)
+        geometry = ObjectsFem.makeGeometryGroup(self.document, name + "Geometry")
+        analysis.addObject(geometry)
+        part = self.document.addObject("Part::Feature", name + "Part")
+        part.Shape = Part.makeBox(10, 10, 10)
+        step = ObjectsFem.makeGeometryImport(self.document)
+        step.Import = [part]
+        geometry.Group = [step]
+        return analysis
+
+    def _place(self, source, into, name):
+        from femtools import importtools
+
+        placed = ObjectsFem.makeAnalysisImport(self.document, name)
+        placed.Analysis = source
+        container = importtools.wire_import(into, placed)
+        self.document.recompute()
+        return placed, container
+
+    def _table(self):
+        """Table places Side, and Side places Leg — two instances deep."""
+        leg = self._one_box_analysis("Leg")
+        side = self._one_box_analysis("Side")
+        inner, _ = self._place(leg, side, "Inner")
+        table = self._one_box_analysis("Table")
+        outer, container = self._place(side, table, "Outer")
+        return table, container, outer, inner
+
+    def test_a_pick_on_an_instance_names_the_instance(self):
+        table, container, outer, _inner = self._table()
+        self.assertEqual(
+            resolve_pick(table, f"{container.Name}.{outer.Name}.Face1"),
+            (outer, "Face1"),
+        )
+
+    def test_a_pick_inside_a_nested_instance_names_the_outer_one(self):
+        """
+        The instance the analysis holds draws the nested ones too, and it is
+        the only one that stands where the pick landed: the nested instance
+        stands in the analysis it was placed into, which this one may place
+        more than once.
+        """
+        table, container, outer, inner = self._table()
+        self.assertEqual(
+            resolve_pick(table, f"{container.Name}.{outer.Name}.{inner.Name}.Face1"),
+            (outer, f"{inner.Name}.Face1"),
+        )
+
+    def test_an_element_named_on_an_instance_stays_as_it_is(self):
+        """What the view panel selects with comes back through here unchanged."""
+        _table, _container, outer, inner = self._table()
+        self.assertEqual(
+            resolve_pick(outer, f"{inner.Name}.Face1"),
+            (outer, f"{inner.Name}.Face1"),
+        )
+
+    def test_a_pick_on_a_geometry_step_reaches_the_step(self):
+        """No instance on the way, so the way is followed to its end."""
+        step = self.geometry.Group[0]
+        self.assertEqual(
+            resolve_pick(self.analysis, f"{self.geometry.Name}.{step.Name}.Face3"),
+            (step, "Face3"),
+        )
+
+    def test_the_mapped_name_a_pick_carries_is_left_out(self):
+        """
+        A pick names its element twice, mapped and plainly. Stored mapped, the
+        reference reads as a name no shape of the analysis has.
+        """
+        self.assertEqual(
+            resolve_pick(self.analysis, f"{self.geometry.Name}.;Face3;:H1,F.Face3"),
+            (self.geometry, "Face3"),
         )
 
     def test_a_one_pick_slot_asks_for_one_thing(self):

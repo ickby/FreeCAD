@@ -66,6 +66,12 @@ def _draws(parent, child):
     return _search(parent, child, True)
 
 
+def _selection_style(obj):
+    """What the selection root of *obj* shows of a pick on the whole of it."""
+    field = obj.ViewObject.RootNode.getField("selectionStyle")
+    return None if field is None else str(field.get())
+
+
 def _renders(parent, child):
     """The same, but only where *parent* is actually drawing, switches and all."""
     return _search(parent, child, False)
@@ -261,6 +267,43 @@ class TestAnalysisVisibilityGui(unittest.TestCase):
 
         self.assertTrue(container.ViewObject.hasExtension(extension))
         self.assertTrue(_draws(analysis, container))
+
+    def test_a_container_shows_nothing_of_a_pick_on_itself(self):
+        """
+        Drawing the contents under the container makes the container the one
+        that a pick naming the whole of it arrives at, and answering it paints
+        everything below. Clicking an analysis in the tree, or double clicking
+        it to work in it, would light up the whole model.
+        """
+        assembly, container, placed = self._assembly("Quiet")
+        geometry = self.document.getObject("QuietSourceGeometry")
+
+        self.assertEqual(_selection_style(assembly), "None")
+        self.assertEqual(_selection_style(container), "None")
+        self.assertEqual(_selection_style(placed), "Full", "an instance draws, and shows it")
+        self.assertEqual(_selection_style(geometry), "Full", "so does a chain of geometry")
+
+    def test_a_reopened_container_shows_nothing_of_a_pick_on_itself_either(self):
+        """
+        The selection style also comes off a property of the view object, which
+        a document writes and reads back, so what is set on the scene graph has
+        to be said again once a container returns from file.
+        """
+        assembly, container, _placed = self._assembly("Reopened")
+        names = (assembly.Name, container.Name)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "selection.FCStd")
+            self.document.saveAs(path)
+            FreeCAD.closeDocument(self.document.Name)
+            self.document = FreeCAD.open(path)
+
+            for name in names:
+                self.assertEqual(
+                    _selection_style(self.document.getObject(name)),
+                    "None",
+                    f"{name} came back painting what it holds",
+                )
 
     @staticmethod
     def _rebuilds():

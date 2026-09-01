@@ -77,6 +77,7 @@ public:
 
     void attach(App::DocumentObject*) override;
     void updateData(const App::Property*) override;
+    void onChanged(const App::Property*) override;
     /**
      * attach() runs before the persisted properties are read back, so the view
      * state has to pick them up once restoring is complete.

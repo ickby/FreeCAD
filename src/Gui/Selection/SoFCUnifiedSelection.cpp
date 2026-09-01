@@ -1391,6 +1391,7 @@ SoFCSelectionRoot::SoFCSelectionRoot(bool trackCacheMode, ViewProvider* vp)
     SO_NODE_DEFINE_ENUM_VALUE(SelectStyles, Full);
     SO_NODE_DEFINE_ENUM_VALUE(SelectStyles, Box);
     SO_NODE_DEFINE_ENUM_VALUE(SelectStyles, PassThrough);
+    SO_NODE_DEFINE_ENUM_VALUE(SelectStyles, None);
     SO_NODE_SET_SF_ENUM_TYPE(selectionStyle, SelectStyles);
 }
 
@@ -1758,7 +1759,8 @@ bool SoFCSelectionRoot::_renderPrivate(SoGLRenderAction* action, bool inPath)
     auto state = action->getState();
     SelContextPtr ctx = getRenderContext<SelContext>(this);
     int style = selectionStyle.getValue();
-    if ((style == SoFCSelectionRoot::Box || SoFCUnifiedSelection::getShowSelectionBoundingBox())
+    if (style != SoFCSelectionRoot::None
+        && (style == SoFCSelectionRoot::Box || SoFCUnifiedSelection::getShowSelectionBoundingBox())
         && ctx && !ctx->hideAll && (ctx->selAll || ctx->hlAll)) {
         if (style == SoFCSelectionRoot::PassThrough) {
             style = SoFCSelectionRoot::Box;
@@ -1817,6 +1819,10 @@ bool SoFCSelectionRoot::_renderPrivate(SoGLRenderAction* action, bool inPath)
         SoTextureEnabledElement::set(state, ShapeColorNode, false);
     }
 
+    // A node that shows nothing of its own selection keeps its hands off the
+    // colour as well, even for a context from before the style was set
+    const bool paintSelection = style != SoFCSelectionRoot::Box && style != SoFCSelectionRoot::None;
+
     if (!ctx) {
         if (inPath) {
             SoSeparator::GLRenderInPath(action);
@@ -1831,7 +1837,7 @@ bool SoFCSelectionRoot::_renderPrivate(SoGLRenderAction* action, bool inPath)
         if ((selPushed = ctx->selAll)) {
             SelColorStack.push_back(ctx->selColor);
 
-            if (style != SoFCSelectionRoot::Box) {
+            if (paintSelection) {
                 state->push();
                 auto& color = SelColorStack.back();
                 SoLazyElement::setEmissive(state, &color);
@@ -1860,7 +1866,7 @@ bool SoFCSelectionRoot::_renderPrivate(SoGLRenderAction* action, bool inPath)
         if (selPushed) {
             SelColorStack.pop_back();
 
-            if (style != SoFCSelectionRoot::Box) {
+            if (paintSelection) {
                 state->pop();
             }
         }
@@ -2135,6 +2141,11 @@ bool SoFCSelectionRoot::doActionPrivate(Stack& stack, SoAction* action)
             }
         }
         else if (selAction->getType() == SoSelectionElementAction::All) {
+            if (selectionStyle.getValue() == SoFCSelectionRoot::None) {
+                // Letting the action run on would paint every child instead,
+                // which draws the same picture by another way.
+                return false;
+            }
             auto ctx = getActionContext(action, this, SelContextPtr());
             assert(ctx);
             ctx->selAll = true;
@@ -2156,6 +2167,9 @@ bool SoFCSelectionRoot::doActionPrivate(Stack& stack, SoAction* action)
                 }
             }
             else {
+                if (selectionStyle.getValue() == SoFCSelectionRoot::None) {
+                    return false;
+                }
                 auto ctx = getActionContext(action, this, SelContextPtr());
                 assert(ctx);
                 ctx->hlAll = true;

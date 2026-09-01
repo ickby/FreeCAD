@@ -901,6 +901,15 @@ const Base::Color* ViewProviderFemGeometry::highlightColorForPart(
     if (const auto* color = elementHighlightColor(element)) {
         return color;
     }
+    // Classification colouring looks up toplevel names (Solid1, …). A mark on
+    // FaceN lives in m_elementHighlights under that face name, so resolve the
+    // rendered part back to its face before giving up.
+    const std::string face = elementForShapeId(id, "Face");
+    if (!face.empty() && face != element) {
+        if (const auto* color = elementHighlightColor(face)) {
+            return color;
+        }
+    }
     return idHighlightColor(id);
 }
 

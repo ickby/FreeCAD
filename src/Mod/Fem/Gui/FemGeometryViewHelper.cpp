@@ -328,21 +328,34 @@ const Base::Color* FemGeometryViewHelper::highlightColorFor(
     if (m_highlights.empty()) {
         return nullptr;
     }
-    // Marks name elements the way a reference does, relative to the instance
-    // they were picked on.
-    const std::string named = m_selectionPrefix + element;
-    // Backwards: of two roles naming the same element, the one set last wins.
-    for (auto it = m_highlights.rbegin(); it != m_highlights.rend(); ++it) {
-        if (it->elements.contains(named)) {
-            return &it->color;
+    auto match = [this, id](const std::string& name) -> const Base::Color* {
+        if (name.empty()) {
+            return nullptr;
         }
-        // A mark on a solid has to reach the faces it is built from.
-        for (const auto& mark : it->elements) {
-            if (mark.starts_with(m_selectionPrefix)
-                && idHasElement(id, mark.substr(m_selectionPrefix.size()))) {
+        // Marks name elements the way a reference does, relative to the instance
+        // they were picked on.
+        const std::string named = m_selectionPrefix + name;
+        // Backwards: of two roles naming the same element, the one set last wins.
+        for (auto it = m_highlights.rbegin(); it != m_highlights.rend(); ++it) {
+            if (it->elements.contains(named)) {
                 return &it->color;
             }
+            // A mark on a solid has to reach the faces it is built from.
+            for (const auto& mark : it->elements) {
+                if (mark.starts_with(m_selectionPrefix)
+                    && idHasElement(id, mark.substr(m_selectionPrefix.size()))) {
+                    return &it->color;
+                }
+            }
         }
+        return nullptr;
+    };
+    if (const Base::Color* color = match(element)) {
+        return color;
+    }
+    const std::string face = elementForShapeId(id, "Face");
+    if (face != element) {
+        return match(face);
     }
     return nullptr;
 }

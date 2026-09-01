@@ -37,6 +37,7 @@ import unittest
 
 import FreeCAD
 import FreeCADGui
+import FemGui
 import Part
 
 from pivy import coin
@@ -50,6 +51,7 @@ BLUE = (0.0, 0.0, 1.0)
 GREEN = (0.0, 1.0, 0.0)
 YELLOW = (1.0, 1.0, 0.0)
 DEFAULT_MARK = (0.85, 0.15, 0.85)
+REFERENCES_MARK = (0.20, 0.55, 0.95)
 
 
 def children_of_type(node, type_name):
@@ -164,6 +166,22 @@ class TestGeometryMarksGui(unittest.TestCase):
             0,
             "a face mark has no business in the edge overlay",
         )
+
+    def test_a_marked_face_overrides_component_colour(self):
+        """
+        Component colouring names toplevels only. A reference mark names a face,
+        and has to outrank the category colour anyway.
+        """
+        analysis = ObjectsFem.makeAnalysis(self.document)
+        analysis.addObject(self.group)
+        FemGui.setActiveAnalysis(analysis)
+        FemGui.getAnalysisViewState(analysis).setColorMode("Component")
+        FreeCADGui.updateGui()
+
+        self.vobj.setElementHighlight("refs", ["Face3"], REFERENCES_MARK)
+        colors = self._face_colors()
+        self.assertEqual(colors.count(REFERENCES_MARK), 1)
+        self.assertGreater(len(set(colors)), 1, "the other faces stay classified")
 
     def test_a_mark_without_a_colour_uses_the_default(self):
         self.vobj.setElementHighlight("test", ["Face1"])

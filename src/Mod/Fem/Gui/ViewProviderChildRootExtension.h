@@ -28,8 +28,25 @@
 
 class SoGroup;
 
+namespace Gui
+{
+class ViewProvider;
+}
+
 namespace FemGui
 {
+
+/**
+ * Keeps a container from lighting up everything it holds.
+ *
+ * A container that draws nothing of its own still owns the selection root its
+ * members hang under, so a click on it in the tree, or a double click to make
+ * it the active one, paints every member as if all of them had been picked.
+ * Said once on the root, the selection and the preselection of the container
+ * as a whole pass without a colour, while a pick that names an element still
+ * arrives at the member that draws it.
+ */
+void FemGuiExport paintNothingWhenSelected(Gui::ViewProvider* vp);
 
 /**
  * Draws the members of a group under the group, so that hiding it hides them.

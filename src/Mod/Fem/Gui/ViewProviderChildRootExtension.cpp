@@ -28,6 +28,7 @@
 
 #include <App/DocumentObject.h>
 #include <App/GroupExtension.h>
+#include <Gui/Selection/SoFCUnifiedSelection.h>
 #include <Gui/ViewProviderDocumentObject.h>
 
 #include "ViewProviderChildRootExtension.h"
@@ -40,6 +41,16 @@ namespace
 /// Display mask mode the child root is registered under
 constexpr const char* CHILD_ROOT_MODE = "Group";
 }  // namespace
+
+void FemGui::paintNothingWhenSelected(Gui::ViewProvider* vp)
+{
+    auto* root = vp ? vp->getRoot() : nullptr;
+    if (root && root->isOfType(Gui::SoFCSelectionRoot::getClassTypeId())) {
+        static_cast<Gui::SoFCSelectionRoot*>(root)->selectionStyle = Gui::SoFCSelectionRoot::None;
+    }
+}
+
+// ----------------------------------------------------------------------------
 
 EXTENSION_PROPERTY_SOURCE(FemGui::ViewProviderChildRootExtension, Gui::ViewProviderExtension)
 
@@ -78,6 +89,7 @@ void ViewProviderChildRootExtension::initExtension(App::ExtensionContainer* obj)
     auto* vp = getExtendedViewProvider();
     vp->addDisplayMaskMode(pcGroupChildren, CHILD_ROOT_MODE);
     vp->setDisplayMaskMode(CHILD_ROOT_MODE);
+    paintNothingWhenSelected(vp);
     if (!vp->Visibility.getValue()) {
         // Picking a mask mode draws the object whatever it was set to, and a
         // document that saved the group hidden picks one on the way in.

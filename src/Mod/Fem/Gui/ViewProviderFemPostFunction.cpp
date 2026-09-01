@@ -74,6 +74,11 @@ void ViewProviderFemPostFunctionProvider::onChanged(const App::Property* prop)
 {
     Gui::ViewProviderDocumentObject::onChanged(prop);
 
+    if (prop == &SelectionStyle) {
+        // What the property offers is read off the functions, which is what the
+        // container has instead of a shape of its own
+        paintNothingWhenSelected(this);
+    }
     updateSize();
 }
 

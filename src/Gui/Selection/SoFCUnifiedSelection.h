@@ -452,7 +452,11 @@ public:
     {
         Full,
         Box,
-        PassThrough
+        PassThrough,
+        /// Shows nothing when the selection or the preselection names this node
+        /// as a whole. For a node that draws nothing of its own and only holds
+        /// what other nodes draw, painting it means painting all of them.
+        None
     };
     SoSFEnum selectionStyle;
 

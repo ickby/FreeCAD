@@ -173,6 +173,7 @@ void ViewProviderFemAnalysis::attach(App::DocumentObject* obj)
     childRoot->setName("FemAnalysisChildren");
     addDisplayMaskMode(childRoot, "Analysis");
     setDisplayMaskMode("Analysis");
+    paintNothingWhenSelected(this);
 
     frontRoot = new SoSeparator();
     frontRoot->setName("FemAnalysisChildrenForeground");
@@ -201,8 +202,16 @@ void ViewProviderFemAnalysis::giveContainersAChildRoot()
         auto* vp = freecad_cast<Gui::ViewProviderDocumentObject*>(
             Gui::Application::Instance->getViewProvider(member)
         );
+        if (!vp) {
+            continue;
+        }
+        // Also for one that has been through this before: the style sits on the
+        // scene graph, and the property that writes it as well is read back
+        // after the extension has come in with a document.
+        paintNothingWhenSelected(vp);
+
         const auto childRootType = ViewProviderChildRootExtension::getExtensionClassTypeId();
-        if (!vp || vp->hasExtension(childRootType, true)) {
+        if (vp->hasExtension(childRootType, true)) {
             continue;
         }
         // The Python flavour, because that is the one a document can read back:
@@ -291,6 +300,18 @@ void ViewProviderFemAnalysis::updateData(const App::Property* prop)
         }
     }
     Gui::ViewProviderDocumentObjectGroup::updateData(prop);
+}
+
+void ViewProviderFemAnalysis::onChanged(const App::Property* prop)
+{
+    Gui::ViewProviderDocumentObjectGroup::onChanged(prop);
+
+    if (prop == &SelectionStyle) {
+        // Both styles the property offers are read off the members, since the
+        // analysis has no shape and no box of its own to show. A document
+        // written before this, or a hand on the property editor, says Shape.
+        paintNothingWhenSelected(this);
+    }
 }
 
 void ViewProviderFemAnalysis::finishRestoring()

@@ -697,7 +697,7 @@ class TestGeometryPartition(unittest.TestCase):
 
         _, imp, _ = self._chain(Part.makeCylinder(10, 20))
         lateral = _find_sub(imp.Shape, "Face", lambda f: isinstance(f.Surface, Part.Cylinder))
-        tool = gp._extended_face_tool(imp, (imp, (lateral,)), imp.Shape.BoundBox)
+        tool = gp._extended_face_tool((imp, (lateral,)), imp.Shape.BoundBox)
 
         self.assertIsInstance(tool.Faces[0].Surface, Part.Cylinder)
         self.assertIsNone(
@@ -705,7 +705,7 @@ class TestGeometryPartition(unittest.TestCase):
             "a curved tool must not be treated as a half-space plane",
         )
 
-    def test_extend_face_needs_a_face_of_the_input(self):
+    def test_extend_face_needs_a_face_reference(self):
         from femobjects import geometry_partition as gp
 
         _, imp, part = self._chain(_box())
@@ -714,7 +714,135 @@ class TestGeometryPartition(unittest.TestCase):
         self.document.recompute()
         self.assertInvalid(part)
 
-    # -- edge parameter -----------------------------------------------------
+    def test_extend_face_accepts_a_face_from_a_placed_import(self):
+        """
+        The cutting tool may come from a placed analysis import; only the
+        targets have to sit on the step input.
+        """
+        from femobjects import geometry_partition as gp
+        from femtools import importtools
+
+        donor = ObjectsFem.makeAnalysis(self.document, "Donor")
+        donor_geom = ObjectsFem.makeGeometryGroup(self.document)
+        donor.addObject(donor_geom)
+        donor_part = self.document.addObject("Part::Feature", "DonorPart")
+        donor_part.Shape = Part.makeBox(20, 20, 5)
+        donor_imp = ObjectsFem.makeGeometryImport(self.document)
+        donor_imp.Import = [donor_part]
+        donor_geom.Group = [donor_imp]
+        self.document.recompute()
+
+        host = ObjectsFem.makeAnalysis(self.document, "Host")
+        host_geom = ObjectsFem.makeGeometryGroup(self.document)
+        host.addObject(host_geom)
+        host_part = self.document.addObject("Part::Feature", "HostPart")
+        host_part.Shape = Part.makeBox(40, 20, 20)
+        host_imp = ObjectsFem.makeGeometryImport(self.document)
+        host_imp.Import = [host_part]
+        host_geom.Group = [host_imp]
+        self.document.recompute()
+
+        placed = ObjectsFem.makeAnalysisImport(self.document, "DonorPlaced")
+        placed.Analysis = donor
+        importtools.wire_import(host, placed)
+        self.document.recompute()
+
+        part = ObjectsFem.makeGeometryPartition(self.document)
+        host_geom.Group = [host_imp, part]
+        self.document.recompute()
+
+        part.Method = gp.METHOD_EXTEND_FACE
+        part.Tool = (placed, ("Face6",))
+        self.document.recompute()
+
+        self.assertValid(part)
+        self.assertMeasurePreserved(host_imp.Shape, part.Shape)
+
+    def test_extend_face_accepts_a_nested_import_face_path(self):
+        """
+        A face picked inside a nested placed import is stored as Inner.Face3,
+        not Face3 alone; the tool builder has to read the leaf, not the prefix.
+        """
+        from femobjects import geometry_partition as gp
+        from femtools import importtools
+
+        def _one_box(name):
+            analysis = ObjectsFem.makeAnalysis(self.document, name)
+            geometry = ObjectsFem.makeGeometryGroup(self.document, name + "Geometry")
+            analysis.addObject(geometry)
+            part = self.document.addObject("Part::Feature", name + "Part")
+            part.Shape = Part.makeBox(10, 10, 10)
+            step = ObjectsFem.makeGeometryImport(self.document)
+            step.Import = [part]
+            geometry.Group = [step]
+            return analysis
+
+        def _place(source, into, name):
+            placed = ObjectsFem.makeAnalysisImport(self.document, name)
+            placed.Analysis = source
+            container = importtools.wire_import(into, placed)
+            return placed, container
+
+        leg = _one_box("Leg")
+        side = _one_box("Side")
+        inner, _ = _place(leg, side, "Inner")
+        table = _one_box("Table")
+        outer, _ = _place(side, table, "Outer")
+        self.document.recompute()
+
+        host_geom = table.Group[0]
+        host_imp = host_geom.Group[0]
+        part = ObjectsFem.makeGeometryPartition(self.document)
+        host_geom.Group = [host_imp, part]
+        self.document.recompute()
+
+        nested_sub = f"{inner.Name}.Face1"
+        tool = gp._extended_face_tool((outer, (nested_sub,)), host_imp.Shape.BoundBox)
+        self.assertFalse(tool.isNull())
+
+        part.Method = gp.METHOD_EXTEND_FACE
+        part.Tool = (outer, (nested_sub,))
+        self.document.recompute()
+        self.assertValid(part)
+
+    def test_plane_by_three_points_accepts_nested_import_vertices(self):
+        from femobjects import geometry_partition as gp
+        from femtools import importtools
+
+        donor = ObjectsFem.makeAnalysis(self.document, "Donor")
+        donor_geom = ObjectsFem.makeGeometryGroup(self.document)
+        donor.addObject(donor_geom)
+        donor_part = self.document.addObject("Part::Feature", "DonorPart")
+        donor_part.Shape = Part.makeBox(20, 10, 10)
+        donor_imp = ObjectsFem.makeGeometryImport(self.document)
+        donor_imp.Import = [donor_part]
+        donor_geom.Group = [donor_imp]
+        self.document.recompute()
+
+        host = ObjectsFem.makeAnalysis(self.document, "Host")
+        host_geom = ObjectsFem.makeGeometryGroup(self.document)
+        host.addObject(host_geom)
+        host_part = self.document.addObject("Part::Feature", "HostPart")
+        host_part.Shape = Part.makeBox(40, 20, 20)
+        host_imp = ObjectsFem.makeGeometryImport(self.document)
+        host_imp.Import = [host_part]
+        host_geom.Group = [host_imp]
+        self.document.recompute()
+
+        placed = ObjectsFem.makeAnalysisImport(self.document, "DonorPlaced")
+        placed.Analysis = donor
+        importtools.wire_import(host, placed)
+        self.document.recompute()
+
+        part = ObjectsFem.makeGeometryPartition(self.document)
+        host_geom.Group = [host_imp, part]
+        self.document.recompute()
+
+        picks = tuple(f"Vertex{index}" for index in (1, 2, 7))
+        part.Method = gp.METHOD_PLANE_3P
+        part.Points = [(placed, picks)]
+        self.document.recompute()
+        self.assertValid(part)
 
     def test_edge_parameter_adds_a_vertex_per_target(self):
         """

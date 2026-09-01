@@ -185,6 +185,14 @@ class TestSelectionRules(unittest.TestCase):
         result = self._eval(rule, imported, "Face1")
         self.assertIsInstance(result, Accept)
 
+    def test_input_scope_takes_only_the_step_input(self):
+        imported = self.geometry.Group[0]
+        rule = ReferenceRule(types=("Face",), scope="input")
+        result = self._eval(rule, self.geometry, "Face3")
+        self.assertIsInstance(result, Accept)
+        result = self._eval(rule, imported, "Face1")
+        self.assertIsInstance(result, Refuse)
+
     def test_external_document_is_refused(self):
         other_doc = FreeCAD.newDocument("OtherDoc")
         try:

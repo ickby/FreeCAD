@@ -77,6 +77,53 @@ def _sub_shape_type(subname):
     return None
 
 
+def _leaf_sub_shape_type(sub):
+    """Shape kind of the leaf element in a possibly nested sub-name."""
+    return _sub_shape_type(sub.rsplit(".", 1)[-1]) if sub else None
+
+
+def _link_sub(link):
+    """Object and first sub-name from a PropertyLinkSub value."""
+    if link is None or link[0] is None:
+        return None, ""
+    subs = link[1] if isinstance(link[1], (list, tuple)) else (link[1],)
+    sub = subs[0] if subs else ""
+    return link[0], sub or ""
+
+
+def _resolve_sub_object(obj, sub, shape_type):
+    """
+    Sub-shape named by a reference, including nested import paths.
+
+    Import picks keep paths such as Inner.Vertex3; only the leaf names the
+    element, and getSubObject has to be called with the full path.
+    """
+    if _leaf_sub_shape_type(sub) != shape_type:
+        return None
+    shape = obj.getSubObject(sub)
+    if shape is None or shape.isNull() or shape.ShapeType != shape_type:
+        if obj.isDerivedFrom("Fem::FemAnalysisImport"):
+            try:
+                placed = obj.placedSubShape(sub)
+            except Exception:
+                placed = None
+            if placed is not None and not placed.isNull() and placed.ShapeType == shape_type:
+                shape = placed
+    if shape is None or shape.isNull() or shape.ShapeType != shape_type:
+        return None
+    return shape
+
+
+def _resolve_face(obj, sub):
+    """Face named by a sub-element reference."""
+    return _resolve_sub_object(obj, sub, "Face")
+
+
+def _resolve_vertex(obj, sub):
+    """Vertex named by a sub-element reference."""
+    return _resolve_sub_object(obj, sub, "Vertex")
+
+
 def target_types(elements):
     """Return the set of shape types referenced by Elements, or empty if all."""
     types = set()
@@ -138,8 +185,15 @@ def _resolve_elements(base_obj, elements):
 
 
 def _plane_size(bbox):
+    """
+    Side length of a square cutting face large enough to span the input.
+
+    Twice the longest box edge covers the shape's projection onto any plane
+    through its centre with margin; more than that is only visual noise in the
+    preview.
+    """
     span = max(bbox.XLength, bbox.YLength, bbox.ZLength, 1.0)
-    return span * 4.0
+    return span * 2.0
 
 
 def _in_plane_axis(normal, u_hint=None):
@@ -197,12 +251,12 @@ def _plane_from_axes(origin, normal, u_dir, bbox):
     return _square_plane(center, normal, _plane_size(bbox), u_dir)
 
 
-def _expand_vertex_links(base_obj, links):
+def _expand_vertex_links(links):
     """Expand PropertyLinkSubList entries to one vertex per link."""
     expanded = []
     for link in links:
-        if link[0] != base_obj:
-            raise ValueError("Partition points must belong to the input geometry")
+        if link[0] is None:
+            raise ValueError("Partition points need a vertex reference")
         subs = link[1] if isinstance(link[1], (list, tuple)) else (link[1],)
         for sub in subs:
             if sub:
@@ -210,24 +264,26 @@ def _expand_vertex_links(base_obj, links):
     return expanded
 
 
-def _vertex_point(base_obj, link):
-    if link[0] != base_obj:
-        raise ValueError("Partition points must belong to the input geometry")
+def _vertex_point(link):
+    obj = link[0]
+    if obj is None:
+        raise ValueError("Partition points need a vertex reference")
     if len(link[1]) != 1:
         raise ValueError("Each point pick must be a single vertex")
-    vertex = base_obj.getSubObject(link[1][0])
-    if vertex is None or vertex.isNull() or vertex.ShapeType != "Vertex":
-        raise ValueError("Point picks must be vertices of the input geometry")
+    sub = link[1][0]
+    vertex = _resolve_vertex(obj, sub)
+    if vertex is None:
+        raise ValueError("Point picks must be vertices")
     return vertex.Point
 
 
-def _tool_plane_from_points(base_obj, points, bbox):
-    point_links = _expand_vertex_links(base_obj, points)
+def _tool_plane_from_points(points, bbox):
+    point_links = _expand_vertex_links(points)
     if len(point_links) != 3:
         raise ValueError("Plane by 3 points needs exactly three vertex picks")
-    p1 = _vertex_point(base_obj, point_links[0])
-    p2 = _vertex_point(base_obj, point_links[1])
-    p3 = _vertex_point(base_obj, point_links[2])
+    p1 = _vertex_point(point_links[0])
+    p2 = _vertex_point(point_links[1])
+    p3 = _vertex_point(point_links[2])
     v1 = p2.sub(p1)
     v2 = p3.sub(p1)
     normal = v1.cross(v2)
@@ -255,10 +311,8 @@ def _tool_plane_from_reference(tool, bbox):
         normal = pl.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
         u_dir = pl.Rotation.multVec(FreeCAD.Vector(1, 0, 0))
         return _plane_from_axes(pl.Base, normal, u_dir, bbox)
-    if sub.startswith("Face"):
-        face = obj.getSubObject(sub)
-        if face is None or face.isNull() or face.ShapeType != "Face":
-            raise ValueError("Plane by reference needs a datum plane, planar face or sketch")
+    face = _resolve_face(obj, sub)
+    if face is not None:
         surf = face.Surface
         if not isinstance(surf, Part.Plane):
             raise ValueError("Reference face must be planar")
@@ -266,16 +320,18 @@ def _tool_plane_from_reference(tool, bbox):
     raise ValueError("Plane by reference needs a datum plane, planar face or sketch")
 
 
-def _extended_face_tool(base_obj, tool, bbox):
-    if tool is None or tool[0] != base_obj or not tool[1]:
-        raise ValueError("Extend face needs a face of the input geometry")
-    subs = tool[1] if isinstance(tool[1], (list, tuple)) else (tool[1],)
-    sub = subs[0] if subs else ""
-    if not sub.startswith("Face"):
-        raise ValueError("Extend face needs a face of the input geometry")
-    face = base_obj.getSubObject(sub)
-    if face is None or face.isNull() or face.ShapeType != "Face":
-        raise ValueError("Extend face needs a face of the input geometry")
+def _extended_face_tool(tool, bbox):
+    """
+    Tool face from a picked reference, which may sit on the input or on an import.
+
+    Like plane by reference, the tool is sized from bbox, the shape being cut.
+    """
+    obj, sub = _link_sub(tool)
+    if obj is None or not sub:
+        raise ValueError("Extend face needs a face reference")
+    face = _resolve_face(obj, sub)
+    if face is None:
+        raise ValueError("Extend face needs a face reference")
     surf = face.Surface
     # A planar face becomes the same tool as any other plane, which keeps the
     # sizing and centring in one place.
@@ -293,14 +349,14 @@ def _extended_face_tool(base_obj, tool, bbox):
 def _shortest_path_tool(base_obj, points, face_link):
     if face_link[0] != base_obj or len(face_link[1]) != 1:
         raise ValueError("Shortest path needs one face target on the input geometry")
-    face = base_obj.getSubObject(face_link[1][0])
-    if face is None or face.ShapeType != "Face":
+    face = _resolve_face(base_obj, face_link[1][0])
+    if face is None:
         raise ValueError("Shortest path needs one face target on the input geometry")
-    point_links = _expand_vertex_links(base_obj, points)
+    point_links = _expand_vertex_links(points)
     if len(point_links) != 2:
         raise ValueError("Shortest path needs two vertex picks on the face")
-    p1 = _vertex_point(base_obj, point_links[0])
-    p2 = _vertex_point(base_obj, point_links[1])
+    p1 = _vertex_point(point_links[0])
+    p2 = _vertex_point(point_links[1])
     tol = max(face.BoundBox.DiagonalLength * 1e-6, 1e-7)
     for point in (p1, p2):
         if face.distToShape(Part.Vertex(point))[0] > tol:
@@ -586,11 +642,26 @@ def _split_edges(base_shape, edges, parameter):
     return result
 
 
-def _point_pick_count(base_obj, points):
+def _point_pick_count(points):
     try:
-        return len(_expand_vertex_links(base_obj, points))
+        return len(_expand_vertex_links(points))
     except ValueError:
         return 0
+
+
+def _unconfigured_for(method, points, tool):
+    """
+    Whether method still lacks the picks it needs.
+
+    Used by the edit preview without touching the document object.
+    """
+    if method == METHOD_PLANE_3P:
+        return _point_pick_count(points) < 3
+    if method == METHOD_SHORTEST_PATH:
+        return _point_pick_count(points) < 2
+    if method in (METHOD_PLANE_REF, METHOD_EXTEND_FACE):
+        return tool is None or tool[0] is None
+    return False
 
 
 def _unconfigured(obj, method):
@@ -602,16 +673,10 @@ def _unconfigured(obj, method):
     through until the method has what it needs. A configuration that is present
     but wrong is still an error.
     """
-    if method == METHOD_PLANE_3P:
-        return _point_pick_count(obj.Base, obj.Points) < 3
-    if method == METHOD_SHORTEST_PATH:
-        return _point_pick_count(obj.Base, obj.Points) < 2
-    if method in (METHOD_PLANE_REF, METHOD_EXTEND_FACE):
-        return obj.Tool is None or obj.Tool[0] is None
-    return False
+    return _unconfigured_for(method, obj.Points, obj.Tool)
 
 
-def _tool_shape(obj, base_obj, base_shape, method, elements):
+def _tool_shape(base_obj, base_shape, method, elements, *, points, tool, parameter):
     """
     The cutting tool for method, or raise if the configuration is wrong.
 
@@ -627,49 +692,83 @@ def _tool_shape(obj, base_obj, base_shape, method, elements):
             raise ValueError("Edge parameter needs edge targets only")
         if not edges:
             raise ValueError("Edge parameter needs at least one edge target")
-        tools = [_edge_parameter_tool(edge, obj.Parameter) for edge in edges]
+        tools = [_edge_parameter_tool(edge, parameter) for edge in edges]
         if len(tools) == 1:
             return TOOL_MODE_EDGE_PLANE, tools[0]
         return TOOL_MODE_EDGE_PLANE, Part.makeCompound(tools)
 
     bbox = base_shape.BoundBox
     if method == METHOD_PLANE_3P:
-        return TOOL_MODE_PLANE, _tool_plane_from_points(base_obj, obj.Points, bbox)
+        return TOOL_MODE_PLANE, _tool_plane_from_points(points, bbox)
     if method == METHOD_PLANE_REF:
-        return TOOL_MODE_PLANE, _tool_plane_from_reference(obj.Tool, bbox)
+        return TOOL_MODE_PLANE, _tool_plane_from_reference(tool, bbox)
     if method == METHOD_EXTEND_FACE:
-        return TOOL_MODE_EXTENDED_FACE, _extended_face_tool(base_obj, obj.Tool, bbox)
+        return TOOL_MODE_EXTENDED_FACE, _extended_face_tool(tool, bbox)
     if method == METHOD_SHORTEST_PATH:
         if target_count(elements) != 1:
             raise ValueError("Shortest path needs exactly one face target")
-        return TOOL_MODE_PATH, _shortest_path_tool(base_obj, obj.Points, elements[0])
+        return TOOL_MODE_PATH, _shortest_path_tool(base_obj, points, elements[0])
     raise ValueError(f"Unknown partition method '{method}'")
+
+
+def build_tool_preview_config(
+    base_obj,
+    method,
+    elements,
+    *,
+    points=(),
+    tool=None,
+    parameter=0.5,
+):
+    """
+    Cutting tool to show while the partition panel is open, or None.
+
+    Builds from panel state without writing the partition object or recomputing
+    the document.
+    """
+    if base_obj is None or base_obj.Shape.isNull():
+        return None
+    elements = elements or []
+    if not method_available(method, elements):
+        return None
+    if _unconfigured_for(method, points, tool):
+        return None
+    try:
+        mode, shape = _tool_shape(
+            base_obj,
+            base_obj.Shape,
+            method,
+            elements,
+            points=points,
+            tool=tool,
+            parameter=parameter,
+        )
+    except ValueError:
+        return None
+    if shape is None or shape.isNull():
+        return None
+    return PartitionToolPreview(mode, shape)
 
 
 def build_tool_preview(obj):
     """
-    Cutting tool to show while the partition panel is open, or None.
+    Cutting tool to show from a partition object's stored properties.
 
     Returns None when the method is still unfinished or the picks are invalid,
     so the panel can drop the overlay without reporting an error on every
     keystroke of an incomplete selection.
     """
     base_obj = getattr(obj, "Base", None)
-    if base_obj is None or base_obj.Shape.isNull():
+    if base_obj is None:
         return None
-    method = obj.Method
-    elements = obj.Elements
-    if not method_available(method, elements):
-        return None
-    if _unconfigured(obj, method):
-        return None
-    try:
-        mode, shape = _tool_shape(obj, base_obj, base_obj.Shape, method, elements)
-    except ValueError:
-        return None
-    if shape is None or shape.isNull():
-        return None
-    return PartitionToolPreview(mode, shape)
+    return build_tool_preview_config(
+        base_obj,
+        obj.Method,
+        obj.Elements,
+        points=obj.Points,
+        tool=obj.Tool,
+        parameter=obj.Parameter,
+    )
 
 
 def _checked(base_shape, result):
@@ -721,14 +820,14 @@ class GeometryPartition(GeometryBase):
                 type="App::PropertyLinkSubList",
                 name="Points",
                 group="Geometry",
-                doc="Vertex picks on the input geometry",
+                doc="Vertex picks for the cutting tool",
                 value=None,
             ),
             _PropHelper(
                 type="App::PropertyLinkSubGlobal",
                 name="Tool",
                 group="Geometry",
-                doc="External plane reference or input face to extend",
+                doc="External plane reference, import face, or input face to extend",
                 value=None,
             ),
             _PropHelper(
@@ -767,7 +866,15 @@ class GeometryPartition(GeometryBase):
             obj.Shape = _checked(base_shape, _split_edges(base_shape, edges, obj.Parameter))
             return
 
-        _, tool_shape = _tool_shape(obj, base_obj, base_shape, method, elements)
+        _, tool_shape = _tool_shape(
+            base_obj,
+            base_shape,
+            method,
+            elements,
+            points=obj.Points,
+            tool=obj.Tool,
+            parameter=obj.Parameter,
+        )
 
         solids = [shape for shape in element_shapes if shape.ShapeType == "Solid"]
         sub_elements = [shape for shape in element_shapes if shape.ShapeType != "Solid"]

@@ -301,7 +301,7 @@ ViewProviderFemGeometry::ViewProviderFemGeometry()
     m_toolPreview->ref();
     const Base::Color toolColor = defaultToolPreviewColor();
     m_toolPreview->color.setValue(toolColor.r, toolColor.g, toolColor.b);
-    m_toolPreview->transparency.setValue(0.55f);
+    m_toolPreview->transparency.setValue(0.85f);
     m_toolPreviewSwitch = new SoSwitch();
     m_toolPreviewSwitch->ref();
     m_toolPreviewSwitch->whichChild = SO_SWITCH_NONE;

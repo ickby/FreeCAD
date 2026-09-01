@@ -461,6 +461,10 @@ def _in_geometry_chain(geometry, obj, seen=None):
 def _in_scope(rule, obj, geometry):
     if rule.scope == "any":
         return True
+    if rule.scope == "input":
+        if geometry is None:
+            return _has_shape(obj)
+        return obj == geometry
     if geometry is None:
         return _has_shape(obj)
     if obj == geometry:

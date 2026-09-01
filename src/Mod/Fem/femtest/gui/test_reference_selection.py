@@ -354,6 +354,45 @@ class TestReferenceSelectionGui(unittest.TestCase):
         self.assertFalse(widget.slot("faces").arm_btn.isChecked())
         self.assertTrue(widget.slot("axis").arm_btn.isChecked())
 
+    def test_the_arm_button_arms_on_the_first_click(self):
+        """Switching slots via the arm toggle must stick on the first press."""
+        constraint = ObjectsFem.makeConstraintForce(self.document)
+        self.analysis.addObject(constraint)
+        self.document.recompute()
+
+        widget = selection_slots.from_slot_specs(
+            constraint,
+            [
+                {
+                    "id": "faces",
+                    "property": "References",
+                    "title": "References",
+                    "types": ["Face"],
+                    "armed": True,
+                },
+                {
+                    "id": "Direction",
+                    "title": "Direction",
+                    "types": ["Edge"],
+                    "max_count": 1,
+                },
+            ],
+        )
+        self.widgets.append(widget)
+        widget.coordinator.install()
+        widget.show()
+        QtGui.QApplication.processEvents()
+
+        direction = widget.slot("Direction")
+        self.assertIs(widget.coordinator.armed_slot, widget.slot("faces"))
+
+        direction.arm_btn.click()
+        QtGui.QApplication.processEvents()
+
+        self.assertIs(widget.coordinator.armed_slot, direction)
+        self.assertTrue(direction.arm_btn.isChecked())
+        self.assertFalse(widget.slot("faces").arm_btn.isChecked())
+
     def test_a_refused_pick_reaches_the_status_line_not_a_message_box(self):
         widget = self._picker(["Edge"])
         with _NoMessageBox() as boxes:

@@ -21,12 +21,17 @@
 # *                                                                         *
 # ***************************************************************************
 
-"""Gui unit tests for the element edges drawn over a mesh.
+"""Gui unit tests for what a mesh draws of each dimension.
 
 Only the edges lying on the surface are drawn, taken from the element faces
 the surface is made of. A mesh of quadratic elements is the case that tells a
 sound answer from an unsound one, its outside being gathered by a route that
 straight elements do not take.
+
+An element of a lower dimension than the mesh around it is drawn as the
+element it is and not as a detail of its neighbours: coloured by its own
+category rather than dark like an element edge, and in front of the elements
+it skins rather than buried in them.
 """
 
 __title__ = "FEM mesh edge Gui tests"
@@ -46,8 +51,14 @@ from pivy import coin
 
 from femtools import importtools
 from femtest.app.support_utils import fcc_print
+from femtest.gui.test_geometry_marks import field_values, node_colors
 
 BOX_SIZE = 10.0
+
+# What an element edge is drawn in, and so what a 1D element must not be
+# drawn in, that being the whole difference between an element and a detail
+# of one. FemMeshRenderer keeps this colour in the slot past the palette.
+EDGE_GREY = (0.2, 0.2, 0.2)
 
 # Cells along each side of the block. Five, so that there are cells buried in
 # the middle of it, and edges that only they and their neighbours own. Drawing
@@ -164,15 +175,137 @@ def _shell_mesh(size):
     return mesh
 
 
-def _beam_mesh(count):
+def _beam_mesh(count, quadratic=False):
     """A row of beam elements along x, as one edge group."""
     mesh = Fem.FemMesh()
     step = BOX_SIZE / count
-    for i in range(count + 1):
-        mesh.addNode(i * step, 0, 0, i + 1)
-    edges = [mesh.addEdge([i + 1, i + 2]) for i in range(count)]
+    if not quadratic:
+        for i in range(count + 1):
+            mesh.addNode(i * step, 0, 0, i + 1)
+        edges = [mesh.addEdge([i + 1, i + 2]) for i in range(count)]
+    else:
+        # Counted in half steps, so that every beam can name the midpoint
+        # between its ends.
+        for i in range(2 * count + 1):
+            mesh.addNode(i * step / 2, 0, 0, i + 1)
+        edges = [mesh.addEdge([2 * i + 1, 2 * i + 3, 2 * i + 2]) for i in range(count)]
     mesh.addGroupElements(mesh.addGroup("Edge1", "Edge"), edges)
     return mesh
+
+
+def _skinned_tet_mesh():
+    """
+    One tetrahedron, with a triangle on the face it rests on and its edges.
+
+    The mesher builds a solid from its outside, so a mesh of one arrives with
+    the lower dimensions still in it: those are the construction elements, and
+    they lie exactly where the solid does. The triangle covers the face in the
+    z = 0 plane and no other, which is what tells the two sets of faces apart
+    afterwards.
+    """
+    mesh = Fem.FemMesh()
+    for i, point in enumerate(
+        [(0, 0, 0), (BOX_SIZE, 0, 0), (0, BOX_SIZE, 0), (0, 0, BOX_SIZE)], start=1
+    ):
+        mesh.addNode(*point, i)
+
+    mesh.addGroupElements(mesh.addGroup("Solid1", "Volume"), [mesh.addVolume([1, 2, 3, 4])])
+    mesh.addGroupElements(mesh.addGroup("Face1", "Face"), [mesh.addFace([1, 2, 3])])
+    edges = [mesh.addEdge([1, 2]), mesh.addEdge([2, 3]), mesh.addEdge([1, 3])]
+    for i, edge in enumerate(edges, start=1):
+        mesh.addGroupElements(mesh.addGroup(f"Edge{i}", "Edge"), [edge])
+    return mesh
+
+
+def _shapes_in(vobj, wanted, type_name):
+    """
+    Every shape of exactly that type a traversal from here reaches, with the
+    material, the binding and the depth bias in force at each of them.
+
+    Read as Coin reads them: what governs a shape is the last of each that the
+    separator holding it lists before it. A traversal and not a search of the
+    whole graph, since the modes that are not on show hang in the same graph.
+    """
+    search = coin.SoSearchAction()
+    search.setType(wanted.getClassTypeId())
+    search.setInterest(coin.SoSearchAction.ALL)
+    search.apply(vobj.RootNode)
+    paths = search.getPaths()
+
+    found = []
+    for i in range(paths.getLength()):
+        path = paths[i]
+        node = path.getTail()
+        # Exactly the type: SoBrepFaceSet and SoBrepEdgeSet are indexed sets
+        # too, and are how the geometry rather than the mesh is drawn.
+        if node.getTypeId().getName() != type_name:
+            continue
+
+        parent = path.getNodeFromTail(1)
+        material = binding = offset = points = None
+        for j in range(path.getIndex(path.getLength() - 1)):
+            child = parent.getChild(j)
+            if child.isOfType(coin.SoMaterial.getClassTypeId()):
+                material = child
+            elif child.isOfType(coin.SoMaterialBinding.getClassTypeId()):
+                binding = child
+            elif child.isOfType(coin.SoPolygonOffset.getClassTypeId()):
+                offset = child
+            elif child.isOfType(coin.SoCoordinate3.getClassTypeId()):
+                points = child
+
+        colours = node_colors(material) if material else []
+        if binding is None or binding.value.getValue() == coin.SoMaterialBinding.OVERALL:
+            drawn = set(colours[:1])
+        else:
+            drawn = {
+                colours[at] for at in field_values(node.materialIndex) if 0 <= at < len(colours)
+            }
+
+        cells = field_values(node.coordIndex)
+        found.append(
+            {
+                "cells": cells,
+                "colours": drawn,
+                "offset": (
+                    (offset.factor.getValue(), offset.units.getValue()) if offset else (0.0, 0.0)
+                ),
+                "zs": {
+                    round(points.point[at].getValue()[2], 3) for at in cells if at >= 0 and points
+                },
+            }
+        )
+    return found
+
+
+def _category_colour(state, key):
+    """The colour the view hands out to a category, by the key that names it."""
+    for category in state.getCategories():
+        if category["key"] == key:
+            return tuple(round(channel, 3) for channel in category["color"][:3])
+    raise AssertionError(f"no category {key!r} in {[c['key'] for c in state.getCategories()]}")
+
+
+def _drawn_line_colours(vobj):
+    """Colours the lines of a mesh are drawn in, over all the sets of them."""
+    colours = set()
+    for shape in _shapes_in(vobj, coin.SoIndexedLineSet, "IndexedLineSet"):
+        if shape["cells"]:
+            colours |= shape["colours"]
+    return colours
+
+
+def _drawn_face_sets(vobj):
+    """
+    The face sets that draw something, sorted by how far back the depth bias
+    pushes them, so that they come in the order the depth test resolves.
+    """
+    sets = [
+        {"faces": shape["cells"].count(-1), **shape}
+        for shape in _shapes_in(vobj, coin.SoIndexedFaceSet, "IndexedFaceSet")
+        if shape["cells"]
+    ]
+    return sorted(sets, key=lambda entry: entry["offset"])
 
 
 def _drawn_lines(vobj):
@@ -228,7 +361,8 @@ class TestMeshEdgesGui(unittest.TestCase):
         self.document.recompute()
 
         FemGui.setActiveAnalysis(assembly)
-        FemGui.getAnalysisViewState(assembly).setActiveStage("Mesh")
+        self.state = FemGui.getAnalysisViewState(assembly)
+        self.state.setActiveStage("Mesh")
         self.document.recompute()
         return placed
 
@@ -256,18 +390,33 @@ class TestMeshEdgesGui(unittest.TestCase):
         n = SHELL_PER_AXIS
         self.assertEqual(_drawn_lines(placed.ViewObject), 2 * n * (n + 1))
 
+    def _placed_beams(self, quadratic=False):
+        line = Part.makeLine(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(BOX_SIZE, 0, 0))
+        return self._placed(
+            "Quadratic beam" if quadratic else "Beam",
+            line,
+            _beam_mesh(BEAM_COUNT, quadratic),
+        )
+
     def test_a_beam_mesh_draws_its_elements(self):
         """
         A beam has no face and no edge of its own to report, so what is drawn
-        is the element itself.
+        is the element itself, and once.
 
-        Twice over: the surface carries a beam as a line of its own, and the
-        walk draws it again. Which is worth the one line it costs, because a
-        curved beam comes off the surface as two segments meeting at a
-        midpoint, where the drawn one is a single line that runs through it.
+        The surface hands a beam over as a line of its own, so that is the copy
+        taken. The walk over the elements claims the edge without drawing it,
+        which is what still keeps a face lying along a beam from putting a dark
+        element edge over the top of it.
         """
-        line = Part.makeLine(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(BOX_SIZE, 0, 0))
-        placed = self._placed("Beam", line, _beam_mesh(BEAM_COUNT))
+        placed = self._placed_beams()
+        self.assertEqual(_drawn_lines(placed.ViewObject), BEAM_COUNT)
+
+    def test_a_curved_beam_is_drawn_through_its_midpoint(self):
+        """
+        The one copy that is kept has to be the one that curves, so a quadratic
+        beam counts double: one line of three points, and so two segments.
+        """
+        placed = self._placed_beams(quadratic=True)
         self.assertEqual(_drawn_lines(placed.ViewObject), 2 * BEAM_COUNT)
 
     def test_a_quadratic_block_draws_the_same_edges_curved(self):
@@ -283,3 +432,70 @@ class TestMeshEdgesGui(unittest.TestCase):
         """
         placed = self._placed_block(quadratic=True)
         self.assertEqual(_drawn_lines(placed.ViewObject), 2 * _edges_of_surface_faces())
+
+    # -- the elements the mesher built the solid from ------------------------
+
+    def _placed_skinned_tet(self):
+        """
+        A meshed solid with its skin shown, and nothing ghosted over it.
+
+        The skin is what the mesher built the solid from, so it only appears
+        once the construction elements are asked for. Coloured by element type,
+        which is the mode that has anything to say about the elements a mesh is
+        made of, and without the ghost of what is left out, that being faces as
+        well and saying nothing about any of this.
+        """
+        placed = self._placed(
+            "Skinned",
+            Part.makeBox(BOX_SIZE, BOX_SIZE, BOX_SIZE),
+            _skinned_tet_mesh(),
+        )
+        self.state.setOverlay(False)
+        self.state.setColorMode("CellType")
+        self.state.setShowConstruction(True)
+        self.document.recompute()
+        FreeCADGui.updateGui()
+        return placed
+
+    def test_a_1d_element_is_drawn_in_the_colour_of_its_category(self):
+        """
+        A 1D element is an element and is coloured as one. An element edge is
+        a detail of the element it belongs to and stays dark, so the two cannot
+        be drawn out of the same material: the edges of the tetrahedron are
+        dark and the three edge elements are not.
+        """
+        placed = self._placed_skinned_tet()
+        drawn = _drawn_line_colours(placed.ViewObject)
+
+        self.assertIn(EDGE_GREY, drawn, "the element edges of the tetrahedron stay dark")
+        coloured = drawn - {EDGE_GREY}
+        self.assertTrue(
+            coloured,
+            "the edge elements have to be drawn in something other than the edge colour",
+        )
+        self.assertEqual(
+            coloured,
+            {_category_colour(self.state, "line:construction")},
+            "and in the colour of the category they belong to",
+        )
+
+    def test_the_skin_of_a_solid_is_drawn_in_front_of_it(self):
+        """
+        A skin triangle and the face of the tetrahedron under it are the same
+        triangle in the same place. Nothing about a depth test settles a tie,
+        so the two have to be told apart by a bias, and the lower dimension is
+        the one to win: the skin is what the user asked to see.
+        """
+        placed = self._placed_skinned_tet()
+        sets = _drawn_face_sets(placed.ViewObject)
+
+        self.assertEqual(len(sets), 2, "the skin and the solid are drawn apart from each other")
+        skin, solid = sets
+        self.assertLess(skin["offset"], solid["offset"], "the skin is the nearer of the two")
+
+        self.assertEqual(skin["faces"], 1, "the one triangle the mesh skins the solid with")
+        self.assertEqual(skin["zs"], {0.0}, "which is the one lying in the z = 0 plane")
+        self.assertEqual(skin["colours"], {_category_colour(self.state, "tria3:construction")})
+
+        self.assertEqual(solid["faces"], 4, "the four faces of the tetrahedron")
+        self.assertEqual(solid["colours"], {_category_colour(self.state, "tetra4")})

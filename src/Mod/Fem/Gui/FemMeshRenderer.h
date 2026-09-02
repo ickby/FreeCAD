@@ -48,6 +48,7 @@
 
 class SoCoordinate3;
 class SoSeparator;
+class SoMFInt32;
 class SoNormalBinding;
 class SoNormal;
 class SoIndexedMarkerSet;
@@ -78,6 +79,14 @@ class Classification;
  * Helper object (not a base class) so geometry and mesh view providers with
  * incompatible inheritance can compose it. Recolouring does not re-run the VTK
  * pipeline. Face materials use PER_FACE_INDEXED with a small palette.
+ *
+ * What is drawn is split by the dimension of the mesh cell each primitive came
+ * from, and the parts are kept in separate Coin shapes for two reasons. One is
+ * colour: a 1D element is an element and takes the colour of its category,
+ * while the edges of a face or a solid element are edges and stay dark. The
+ * other is depth: the faces of a shell and the boundary faces of the solid it
+ * skins are the same triangles in the same place, and the lower dimension has
+ * to win, which a polygon offset can only say per shape.
  */
 class FemGuiExport FemMeshRenderer
 {
@@ -153,10 +162,18 @@ public:
      */
     void setOverlayMask(const std::vector<unsigned char>& mask);
 
-    /** Rebuild the VTK pipeline and push geometry to Coin. Does not touch colours. */
+    /**
+     * Rebuild the VTK pipeline and push geometry to Coin.
+     *
+     * Leaves everything in one colour: what a primitive is drawn in comes from
+     * the classification, and that is updateColors(). The material indices are
+     * still written, since Coin reads one per primitive whatever they say and
+     * a set that draws more than it did before must not be left indexing past
+     * the end of the last colouring.
+     */
     void updateVTK();
 
-    /** Recolour faces from the current classification / palette. No VTK update. */
+    /** Recolour from the current classification / palette. No VTK update. */
     void updateColors();
 
     /** Run updateVTK then updateColors. */
@@ -176,8 +193,17 @@ public:
     );
 
     static void writeIndexedPolys(SoIndexedFaceSet* faces, vtkCellArray* cells);
-    static void writeIndexedLines(SoIndexedLineSet* lines, vtkCellArray* cells);
-    static void writeIndexedVerts(SoIndexedMarkerSet* markers, vtkCellArray* cells);
+
+    /**
+     * @param drawn receives, for every marker written, the index of the cell of
+     *              @a cells it stands for, so that the caller can look up what
+     *              the marker is without repeating the rules of this function.
+     */
+    static void writeIndexedVerts(
+        SoIndexedMarkerSet* markers,
+        vtkCellArray* cells,
+        std::vector<int>* drawn = nullptr
+    );
 
     /** Accessors for selection / detail mapping. */
     vtkPolyData* currentPolyData() const;
@@ -186,13 +212,24 @@ public:
         return m_vtkmesh;
     }
 
+    /** Faces of everything up to a shell; solid elements are in volumeFaces(). */
     SoIndexedFaceSet* faces() const
     {
         return m_faces;
     }
+    SoIndexedFaceSet* volumeFaces() const
+    {
+        return m_volumefaces;
+    }
+    /** Element edges, i.e. the sides of the faces of 2D and 3D elements. */
     SoIndexedLineSet* lines() const
     {
         return m_lines;
+    }
+    /** The 1D elements themselves, which are coloured and not edges. */
+    SoIndexedLineSet* cellLines() const
+    {
+        return m_celllines;
     }
     SoIndexedMarkerSet* markers() const
     {
@@ -204,6 +241,31 @@ private:
     void pushPolyDataToCoin(vtkPolyData* visdata);
     void updateOverlay();
 
+    /** Drop everything Coin holds, so that nothing stale is left drawn. */
+    void clearGeometry();
+
+    /** Push m_palette into the materials that render from it. */
+    void writePalette();
+
+    /**
+     * The slot the point and 1D-element materials carry past the palette, in
+     * the colour of the element edges. It stands for everything the current
+     * classification has nothing to say about, so that an unclassified mesh
+     * looks the way it did before there was any colouring at all.
+     */
+    int edgePaletteSlot() const
+    {
+        return static_cast<int>(m_palette.size());
+    }
+
+    /**
+     * One palette slot per drawn primitive, from the cell it came from.
+     *
+     * @param cells    the mesh cell of each primitive, -1 where none is known
+     * @param fallback the slot to use when nothing classifies the cells
+     */
+    void writeMaterialIndex(SoMFInt32& field, const std::vector<int>& cells, int fallback) const;
+
     /**
      * Fill m_realedges with the element edges of the cells the surface came
      * from, each edge as one line however many points it curves through.
@@ -213,6 +275,11 @@ private:
      * its edges are the triangulation of that face, not the elements. The
      * edges that point into the interior are drawn too and are hidden behind
      * the surface, which costs less than working out which ones those are.
+     *
+     * A 1D element is not among them. The surface filter already hands it over
+     * as a line, so it is drawn from there and coloured as the element it is;
+     * here it only claims the edge it runs along, to keep the face beside it
+     * from drawing over the top of it.
      */
     void buildBoundaryEdges();
 
@@ -225,15 +292,23 @@ private:
     SoCoordinate3* m_coordinates {nullptr};
     SoNormalBinding* m_normalBinding {nullptr};
     SoNormal* m_normals {nullptr};
-    SoMaterialBinding* m_pointlinematerialbinding {nullptr};
-    SoMaterial* m_pointlinematerial {nullptr};
     SoDrawStyle* m_pointlinestyle {nullptr};
+    SoMaterialBinding* m_markermaterialbinding {nullptr};
+    SoMaterial* m_markermaterial {nullptr};
     SoIndexedMarkerSet* m_markers {nullptr};
+    SoMaterialBinding* m_edgematerialbinding {nullptr};
+    SoMaterial* m_edgematerial {nullptr};
     SoIndexedLineSet* m_lines {nullptr};
+    SoDrawStyle* m_celllinestyle {nullptr};
+    SoMaterialBinding* m_celllinematerialbinding {nullptr};
+    SoMaterial* m_celllinematerial {nullptr};
+    SoIndexedLineSet* m_celllines {nullptr};
     SoMaterialBinding* m_facematerialbinding {nullptr};
     SoMaterial* m_facematerial {nullptr};
-    SoIndexedFaceSet* m_faces {nullptr};
     SoPolygonOffset* m_offset {nullptr};
+    SoIndexedFaceSet* m_faces {nullptr};
+    SoPolygonOffset* m_volumeoffset {nullptr};
+    SoIndexedFaceSet* m_volumefaces {nullptr};
 
     // ghost overlay of the cells removed by the display filter
     SoSeparator* m_overlayseparator {nullptr};
@@ -291,6 +366,15 @@ private:
     // table of the edges already drawn.
     std::vector<vtkIdType> m_pointmap;
     std::vector<std::uint64_t> m_edgeseen;
+
+    // The mesh cell every drawn primitive came from, one list per Coin shape,
+    // in the order the shape draws them. Worked out where the geometry is
+    // split and kept, because that is the whole of what the colouring needs
+    // and recolouring must not have to walk the pipeline output again.
+    std::vector<int> m_markercells;
+    std::vector<int> m_celllinecells;
+    std::vector<int> m_facecells;
+    std::vector<int> m_volumecells;
 };
 
 }  // namespace FemGui

@@ -117,6 +117,9 @@ namespace
 constexpr const char* ArrayFilter = "filter";
 constexpr const char* ArrayOverlayFilter = "overlayfilter";
 
+/// Element edges and anything no classification names are drawn in this.
+constexpr float EdgeGrey = 0.2f;
+
 /// One key per undirected point pair, naming an element edge by its two ends.
 inline std::uint64_t edgeKey(vtkIdType a, vtkIdType b)
 {
@@ -155,6 +158,103 @@ vtkSmartPointer<vtkThreshold> makeMaskThreshold(const char* arrayname)
     filter->SetUpperThreshold(0.5);
     filter->SetInputArrayToProcess(0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, arrayname);
     return filter;
+}
+
+/// Size a Coin index field and put the same entry in every slot.
+void fillMaterialIndex(SoMFInt32& field, std::size_t num, int value)
+{
+    field.setNum(static_cast<int>(num));
+    if (num == 0) {
+        return;
+    }
+    int32_t* indices = field.startEditing();
+    std::fill(indices, indices + num, static_cast<int32_t>(value));
+    field.finishEditing();
+}
+
+/**
+ * Deal the cells of @a cells out between two Coin index fields.
+ *
+ * Every cell is written as its point indices followed by the -1 that closes a
+ * Coin index list, and goes to the second field when @a second says so of the
+ * mesh cell @a owner names for it. @a cellbase is where the cells of this
+ * array start within the cell data of the polydata they belong to, verts,
+ * lines and polys being numbered in that order.
+ *
+ * The lists of owners, either of which may be left out, come back holding one
+ * entry per cell written to their field, in the order the field holds them:
+ * that is the whole of what colouring the result needs afterwards.
+ *
+ * Coin grows a multi-field to exactly the size asked for, so set1Value past
+ * the end reallocates and copies the whole field on every single index. Hence
+ * the two passes: the first only measures, and the second writes through the
+ * edit pointer. On a mesh of any size that is the difference between
+ * milliseconds and seconds.
+ */
+template<typename OwnerFn, typename SecondFn>
+void writeSplitCellIndices(
+    SoMFInt32& firstfield,
+    std::vector<int>* firstcells,
+    SoMFInt32& secondfield,
+    std::vector<int>* secondcells,
+    vtkCellArray* cells,
+    vtkIdType cellbase,
+    OwnerFn owner,
+    SecondFn second
+)
+{
+    if (firstcells) {
+        firstcells->clear();
+    }
+    if (secondcells) {
+        secondcells->clear();
+    }
+
+    vtkIdType firstnum = 0;
+    vtkIdType secondnum = 0;
+    vtkIdType at = 0;
+    vtkIdType npts = 0;
+    const vtkIdType* indx = nullptr;
+    for (cells->InitTraversal(); cells->GetNextCell(npts, indx); ++at) {
+        const int from = owner(cellbase + at);
+        if (second(from)) {
+            secondnum += npts + 1;
+            if (secondcells) {
+                secondcells->push_back(from);
+            }
+        }
+        else {
+            firstnum += npts + 1;
+            if (firstcells) {
+                firstcells->push_back(from);
+            }
+        }
+    }
+
+    firstfield.setNum(static_cast<int>(firstnum));
+    secondfield.setNum(static_cast<int>(secondnum));
+    int32_t* firstat = firstnum > 0 ? firstfield.startEditing() : nullptr;
+    int32_t* secondat = secondnum > 0 ? secondfield.startEditing() : nullptr;
+    int firstwrite = 0;
+    int secondwrite = 0;
+
+    at = 0;
+    for (cells->InitTraversal(); cells->GetNextCell(npts, indx); ++at) {
+        const bool tosecond = second(owner(cellbase + at));
+        int32_t* target = tosecond ? secondat : firstat;
+        int& write = tosecond ? secondwrite : firstwrite;
+        for (vtkIdType i = 0; i < npts; ++i) {
+            target[write++] = static_cast<int32_t>(indx[i]);
+        }
+        target[write++] = -1;
+    }
+
+    if (firstat) {
+        firstfield.finishEditing();
+    }
+    if (secondat) {
+        secondfield.finishEditing();
+    }
 }
 
 /// Write a per-cell 0/1 mask onto the grid; missing entries default to visible.
@@ -247,20 +347,38 @@ FemMeshRenderer::~FemMeshRenderer()
     if (m_normals) {
         m_normals->unref();
     }
-    if (m_pointlinematerialbinding) {
-        m_pointlinematerialbinding->unref();
-    }
-    if (m_pointlinematerial) {
-        m_pointlinematerial->unref();
-    }
     if (m_pointlinestyle) {
         m_pointlinestyle->unref();
+    }
+    if (m_markermaterialbinding) {
+        m_markermaterialbinding->unref();
+    }
+    if (m_markermaterial) {
+        m_markermaterial->unref();
     }
     if (m_markers) {
         m_markers->unref();
     }
+    if (m_edgematerialbinding) {
+        m_edgematerialbinding->unref();
+    }
+    if (m_edgematerial) {
+        m_edgematerial->unref();
+    }
     if (m_lines) {
         m_lines->unref();
+    }
+    if (m_celllinestyle) {
+        m_celllinestyle->unref();
+    }
+    if (m_celllinematerialbinding) {
+        m_celllinematerialbinding->unref();
+    }
+    if (m_celllinematerial) {
+        m_celllinematerial->unref();
+    }
+    if (m_celllines) {
+        m_celllines->unref();
     }
     if (m_facematerialbinding) {
         m_facematerialbinding->unref();
@@ -268,11 +386,17 @@ FemMeshRenderer::~FemMeshRenderer()
     if (m_facematerial) {
         m_facematerial->unref();
     }
+    if (m_offset) {
+        m_offset->unref();
+    }
     if (m_faces) {
         m_faces->unref();
     }
-    if (m_offset) {
-        m_offset->unref();
+    if (m_volumeoffset) {
+        m_volumeoffset->unref();
+    }
+    if (m_volumefaces) {
+        m_volumefaces->unref();
     }
     if (m_overlayseparator) {
         m_overlayseparator->unref();
@@ -310,18 +434,21 @@ void FemMeshRenderer::buildSceneGraph()
     m_coordinates = new SoCoordinate3();
     m_coordinates->ref();
 
-    m_pointlinematerialbinding = new SoMaterialBinding();
-    m_pointlinematerialbinding->ref();
-    m_pointlinematerialbinding->value = SoMaterialBinding::OVERALL;
-
-    m_pointlinematerial = new SoMaterial();
-    m_pointlinematerial->ref();
-    m_pointlinematerial->diffuseColor.setValue(0.2f, 0.2f, 0.2f);
-
     m_pointlinestyle = new SoDrawStyle();
     m_pointlinestyle->ref();
     m_pointlinestyle->lineWidth.setValue(2);
     m_pointlinestyle->pointSize.setValue(4);
+
+    // A marker stands for a 0D element and takes the colour of its category.
+    // Coin reads the material index of every marker with no release-build
+    // bounds check, exactly as it reads the marker index, so the field has to
+    // hold one valid entry per drawn marker at all times.
+    m_markermaterialbinding = new SoMaterialBinding();
+    m_markermaterialbinding->ref();
+    m_markermaterialbinding->value = SoMaterialBinding::PER_VERTEX_INDEXED;
+
+    m_markermaterial = new SoMaterial();
+    m_markermaterial->ref();
 
     m_markers = new SoIndexedMarkerSet();
     m_markers->ref();
@@ -334,12 +461,40 @@ void FemMeshRenderer::buildSceneGraph()
                              .GetParameterGroupByPath("User parameter:BaseApp/Preferences/View")
                              ->GetInt("MarkerSize", 7))
     ));
+
+    // The element edges, which are the bulk of everything drawn as a line and
+    // are all one colour. Coin only renders an indexed line set through vertex
+    // arrays while its material binding is OVERALL, so this set keeps that
+    // binding and the handful of lines that are elements get their own.
+    m_edgematerialbinding = new SoMaterialBinding();
+    m_edgematerialbinding->ref();
+    m_edgematerialbinding->value = SoMaterialBinding::OVERALL;
+
+    m_edgematerial = new SoMaterial();
+    m_edgematerial->ref();
+    m_edgematerial->diffuseColor.setValue(EdgeGrey, EdgeGrey, EdgeGrey);
+
     m_lines = new SoIndexedLineSet();
     m_lines->ref();
 
-    m_offset = new SoPolygonOffset();
-    m_offset->ref();
-    m_offset->factor.setValue(1);
+    // The 1D elements. Drawn after the edges and a little wider, because a beam
+    // along the edge of a shell is the same line in the same place: the depth
+    // test lets an equal value through, so the last one drawn is the one seen,
+    // and no polygon offset can help here as it does not reach line primitives.
+    m_celllinestyle = new SoDrawStyle();
+    m_celllinestyle->ref();
+    m_celllinestyle->lineWidth.setValue(3);
+
+    m_celllinematerialbinding = new SoMaterialBinding();
+    m_celllinematerialbinding->ref();
+    // What an indexed line set reads as PER_LINE_INDEXED.
+    m_celllinematerialbinding->value = SoMaterialBinding::PER_FACE_INDEXED;
+
+    m_celllinematerial = new SoMaterial();
+    m_celllinematerial->ref();
+
+    m_celllines = new SoIndexedLineSet();
+    m_celllines->ref();
 
     m_normalBinding = new SoNormalBinding();
     m_normalBinding->ref();
@@ -353,22 +508,47 @@ void FemMeshRenderer::buildSceneGraph()
     m_facematerial = new SoMaterial();
     m_facematerial->ref();
 
+    // Faces up to a shell sit in front of the faces of the solid elements they
+    // may be skinning, and the lines in front of both. Both terms of the offset
+    // have to separate the two: the factor alone says nothing about a surface
+    // facing the camera, where the depth across a polygon hardly changes.
+    m_offset = new SoPolygonOffset();
+    m_offset->ref();
+    m_offset->factor.setValue(1);
+    m_offset->units.setValue(1);
+
     m_faces = new SoIndexedFaceSet();
     m_faces->ref();
 
+    m_volumeoffset = new SoPolygonOffset();
+    m_volumeoffset->ref();
+    m_volumeoffset->factor.setValue(2);
+    m_volumeoffset->units.setValue(2);
+
+    m_volumefaces = new SoIndexedFaceSet();
+    m_volumefaces->ref();
+
     m_separator->addChild(m_shapehints);
     m_separator->addChild(m_coordinates);
-    m_separator->addChild(m_pointlinematerialbinding);
-    m_separator->addChild(m_pointlinematerial);
     m_separator->addChild(m_pointlinestyle);
+    m_separator->addChild(m_markermaterialbinding);
+    m_separator->addChild(m_markermaterial);
     m_separator->addChild(m_markers);
+    m_separator->addChild(m_edgematerialbinding);
+    m_separator->addChild(m_edgematerial);
     m_separator->addChild(m_lines);
-    m_separator->addChild(m_offset);
+    m_separator->addChild(m_celllinestyle);
+    m_separator->addChild(m_celllinematerialbinding);
+    m_separator->addChild(m_celllinematerial);
+    m_separator->addChild(m_celllines);
     m_separator->addChild(m_normals);
     m_separator->addChild(m_normalBinding);
     m_separator->addChild(m_facematerialbinding);
     m_separator->addChild(m_facematerial);
+    m_separator->addChild(m_offset);
     m_separator->addChild(m_faces);
+    m_separator->addChild(m_volumeoffset);
+    m_separator->addChild(m_volumefaces);
 
     m_overlayseparator = new SoSeparator();
     m_overlayseparator->ref();
@@ -377,7 +557,9 @@ void FemMeshRenderer::buildSceneGraph()
     auto* overlaypick = new SoPickStyle();
     overlaypick->style.setValue(SoPickStyle::Style::UNPICKABLE);
     auto* overlayoffset = new SoPolygonOffset();
-    overlayoffset->factor.setValue(2);
+    // Behind every real face, the solid elements included.
+    overlayoffset->factor.setValue(3);
+    overlayoffset->units.setValue(3);
 
     m_overlaymaterialbinding = new SoMaterialBinding();
     m_overlaymaterialbinding->ref();
@@ -404,11 +586,28 @@ void FemMeshRenderer::buildSceneGraph()
     m_overlayseparator->addChild(m_overlaynormals);
     m_overlayseparator->addChild(m_overlayfaces);
 
-    // Seed palette into SoMaterial for PER_FACE_INDEXED
-    m_facematerial->diffuseColor.setNum(static_cast<int>(m_palette.size()));
-    for (size_t i = 0; i < m_palette.size(); ++i) {
+    writePalette();
+}
+
+void FemMeshRenderer::writePalette()
+{
+    const int num = static_cast<int>(m_palette.size());
+
+    m_facematerial->diffuseColor.setNum(num);
+    for (int i = 0; i < num; ++i) {
         const auto& c = m_palette[i];
-        m_facematerial->diffuseColor.set1Value(static_cast<int>(i), c.r, c.g, c.b);
+        m_facematerial->diffuseColor.set1Value(i, c.r, c.g, c.b);
+    }
+
+    // Points and 1D elements carry one slot past the palette, in the colour of
+    // the element edges, for everything the classification does not name.
+    for (SoMaterial* material : {m_markermaterial, m_celllinematerial}) {
+        material->diffuseColor.setNum(num + 1);
+        for (int i = 0; i < num; ++i) {
+            const auto& c = m_palette[i];
+            material->diffuseColor.set1Value(i, c.r, c.g, c.b);
+        }
+        material->diffuseColor.set1Value(num, EdgeGrey, EdgeGrey, EdgeGrey);
     }
 }
 
@@ -522,11 +721,7 @@ void FemMeshRenderer::setPalette(const std::vector<Base::Color>& colors)
     else {
         m_palette = colors;
     }
-    m_facematerial->diffuseColor.setNum(static_cast<int>(m_palette.size()));
-    for (size_t i = 0; i < m_palette.size(); ++i) {
-        const auto& c = m_palette[i];
-        m_facematerial->diffuseColor.set1Value(static_cast<int>(i), c.r, c.g, c.b);
-    }
+    writePalette();
 }
 
 void FemMeshRenderer::setWireframe(bool wireframe)
@@ -553,13 +748,29 @@ void FemMeshRenderer::setOverlayMask(const std::vector<unsigned char>& mask)
     m_overlayMask = mask;
 }
 
+void FemMeshRenderer::clearGeometry()
+{
+    m_markers->coordIndex.setNum(0);
+    m_markers->markerIndex.setNum(0);
+    m_markers->materialIndex.setNum(0);
+    m_lines->coordIndex.setNum(0);
+    m_celllines->coordIndex.setNum(0);
+    m_celllines->materialIndex.setNum(0);
+    m_faces->coordIndex.setNum(0);
+    m_faces->materialIndex.setNum(0);
+    m_volumefaces->coordIndex.setNum(0);
+    m_volumefaces->materialIndex.setNum(0);
+
+    m_markercells.clear();
+    m_celllinecells.clear();
+    m_facecells.clear();
+    m_volumecells.clear();
+}
+
 void FemMeshRenderer::updateVTK()
 {
     if (!m_vtkmesh) {
-        m_faces->coordIndex.setNum(0);
-        m_lines->coordIndex.setNum(0);
-        m_markers->coordIndex.setNum(0);
-        m_markers->markerIndex.setNum(0);
+        clearGeometry();
         m_overlayfaces->coordIndex.setNum(0);
         forgetPipelineState();
         return;
@@ -753,13 +964,22 @@ void FemMeshRenderer::buildBoundaryEdges()
     // meeting at a midpoint leave it to chance whether the midpoint is drawn,
     // and OpenGL tends to decide that it is not; within one line there is no
     // such question.
-    auto emit = [&](vtkIdType owner) {
+    //
+    // A 1D element is claimed without being drawn. It is not an element edge:
+    // the surface filter hands it over as a line of its own, through the same
+    // points, and that copy is the one coloured as the element it is. Claiming
+    // it here is still what keeps a face lying along it from drawing a dark
+    // edge over the top of it.
+    auto emit = [&](vtkIdType owner, bool draw = true) {
         // An edge that ends where it starts has no key of its own, zero being
         // the one the table reads as an empty slot, and nothing to draw either.
         if (chain.size() < 2 || chain.front() == chain.back()) {
             return;
         }
         if (!unseen(edgeKey(chain.front(), chain.back()))) {
+            return;
+        }
+        if (!draw) {
             return;
         }
         mapped.clear();
@@ -796,10 +1016,10 @@ void FemMeshRenderer::buildBoundaryEdges()
             const int numedges = cell->GetNumberOfEdges();
 
             // A point or a beam has no edges of its own to report; its own
-            // points are the element edge.
+            // points are where an element edge would run.
             if (numedges == 0) {
                 chainOf(cell->GetPointIds());
-                emit(owner);
+                emit(owner, false);
                 continue;
             }
             for (int e = 0; e < numedges; ++e) {
@@ -817,11 +1037,15 @@ void FemMeshRenderer::buildBoundaryEdges()
         const vtkIdType numlines = poly->GetNumberOfLines();
         auto ids = vtkSmartPointer<vtkIdList>::New();
 
+        // Claimed before the faces are walked, so that a beam always wins the
+        // edge it shares with one. The grid is written in rising dimension,
+        // and the filters keep that order, so the curved branch above meets
+        // them in the same order for the same reason.
         auto* beams = poly->GetLines();
         for (vtkIdType at = 0; at < numlines; ++at) {
             beams->GetCellAtId(at, ids);
             chain.assign(ids->begin(), ids->end());
-            emit(origin->GetValue(numverts + at));
+            emit(origin->GetValue(numverts + at), false);
         }
 
         auto* faces = poly->GetPolys();
@@ -888,10 +1112,7 @@ void FemMeshRenderer::updateOverlay()
 void FemMeshRenderer::pushPolyDataToCoin(vtkPolyData* visdata)
 {
     if (!visdata || visdata->GetNumberOfCells() == 0) {
-        m_faces->coordIndex.setNum(0);
-        m_lines->coordIndex.setNum(0);
-        m_markers->coordIndex.setNum(0);
-        m_markers->markerIndex.setNum(0);
+        clearGeometry();
         return;
     }
 
@@ -910,30 +1131,137 @@ void FemMeshRenderer::pushPolyDataToCoin(vtkPolyData* visdata)
         );
     }
 
+    // Which mesh cell each drawn cell came from, and of what dimension. The
+    // first is carried through the whole pipeline as ordinary cell data, the
+    // second is baked on the input grid once, so both are a single array read.
+    // A wireframe answers neither -- its edges belong to no one cell -- and
+    // then everything falls into the group it would have been in before any
+    // of this: the edges dark, the faces under the nearer of the two offsets.
+    auto* origin = vtkIntArray::SafeDownCast(
+        visdata->GetCellData()->GetArray(FemVisibilityMask::ArrayOrigCell)
+    );
+    auto* celldim = m_vtkmesh ? vtkIntArray::SafeDownCast(
+                        m_vtkmesh->GetCellData()->GetArray(FemVisibilityMask::ArrayCellDim)
+                    )
+                              : nullptr;
+    const vtkIdType numorigin = origin ? origin->GetNumberOfTuples() : 0;
+    const vtkIdType numdim = celldim ? celldim->GetNumberOfTuples() : 0;
+
+    auto ownerOf = [&](vtkIdType cell) {
+        return (cell < numorigin) ? origin->GetValue(cell) : -1;
+    };
+    auto dimensionOf = [&](int owner) {
+        return (owner >= 0 && owner < numdim) ? celldim->GetValue(owner) : -1;
+    };
+
+    // Verts, lines and polys are numbered in that order within the cell data
+    // of a polydata, which is what the cell of a drawn one has to be found by.
+    const vtkIdType numverts = visdata->GetNumberOfVerts();
+    const vtkIdType numlines = visdata->GetNumberOfLines();
+
     if (visdata->GetNumberOfPolys() > 0) {
         FEM_PERF_SCOPE("mesh.toCoin.faces");
-        writeIndexedPolys(m_faces, visdata->GetPolys());
+        writeSplitCellIndices(
+            m_faces->coordIndex,
+            &m_facecells,
+            m_volumefaces->coordIndex,
+            &m_volumecells,
+            visdata->GetPolys(),
+            numverts + numlines,
+            ownerOf,
+            [&](int owner) {
+                return dimensionOf(owner) == 3;
+            }
+        );
     }
     else {
         m_faces->coordIndex.setNum(0);
+        m_volumefaces->coordIndex.setNum(0);
+        m_facecells.clear();
+        m_volumecells.clear();
     }
 
-    if (visdata->GetNumberOfLines() > 0) {
+    if (numlines > 0) {
         FEM_PERF_SCOPE("mesh.toCoin.lines");
-        writeIndexedLines(m_lines, visdata->GetLines());
+        // The element edges are all one colour, so which cell each of them
+        // came from is of no further interest and the list of that is the one
+        // list here that would run to the size of the surface.
+        writeSplitCellIndices(
+            m_lines->coordIndex,
+            nullptr,
+            m_celllines->coordIndex,
+            &m_celllinecells,
+            visdata->GetLines(),
+            numverts,
+            ownerOf,
+            [&](int owner) {
+                return dimensionOf(owner) == 1;
+            }
+        );
     }
     else {
         m_lines->coordIndex.setNum(0);
+        m_celllines->coordIndex.setNum(0);
+        m_celllinecells.clear();
     }
 
-    if (visdata->GetNumberOfVerts() > 0) {
+    if (numverts > 0) {
         FEM_PERF_SCOPE("mesh.toCoin.markers");
-        writeIndexedVerts(m_markers, visdata->GetVerts());
+        writeIndexedVerts(m_markers, visdata->GetVerts(), &m_markercells);
+        for (int& cell : m_markercells) {
+            cell = ownerOf(cell);
+        }
     }
     else {
         m_markers->coordIndex.setNum(0);
         m_markers->markerIndex.setNum(0);
+        m_markercells.clear();
     }
+
+    // Nothing may be left indexing a material that is not there: Coin reads
+    // the index of every primitive of an indexed binding and only clamps it
+    // when it was built for debugging. The colours themselves come later.
+    const int edge = edgePaletteSlot();
+    fillMaterialIndex(m_markers->materialIndex, m_markercells.size(), edge);
+    fillMaterialIndex(m_celllines->materialIndex, m_celllinecells.size(), edge);
+    fillMaterialIndex(m_faces->materialIndex, m_facecells.size(), 0);
+    fillMaterialIndex(m_volumefaces->materialIndex, m_volumecells.size(), 0);
+}
+
+void FemMeshRenderer::writeMaterialIndex(
+    SoMFInt32& field,
+    const std::vector<int>& cells,
+    int fallback
+) const
+{
+    const int num = static_cast<int>(cells.size());
+    field.setNum(num);
+    if (num == 0) {
+        return;
+    }
+
+    const int categories = m_classification
+        ? static_cast<int>(m_classification->categories().size())
+        : 0;
+
+    int32_t* indices = field.startEditing();
+    if (categories <= 0) {
+        std::fill(indices, indices + num, static_cast<int32_t>(fallback));
+    }
+    else {
+        for (int i = 0; i < num; ++i) {
+            // categoryOfCell uses the classification built from input-grid
+            // cells (with FaceN→SolidN resolution). The cell ids here come
+            // from the origcell array, which survives the VTK threshold and
+            // clip; do not fall back to vtkOriginalCellIds.
+            int category = cells[i] >= 0 ? m_classification->categoryOfCell(cells[i]) : 0;
+            if (category < 0) {
+                category = 0;
+            }
+            indices[i] = static_cast<int32_t>(category % categories);
+        }
+    }
+    field.finishEditing();
 }
 
 void FemMeshRenderer::updateColors()
@@ -942,52 +1270,15 @@ void FemMeshRenderer::updateColors()
 
     m_facematerialbinding->value.setValue(SoMaterialBinding::PER_FACE_INDEXED);
 
-    auto visdata = m_vtkcurrentalgorithm ? m_vtkcurrentalgorithm->GetOutput() : nullptr;
-    if (!visdata) {
-        return;
-    }
-
-    const vtkIdType nFaces = visdata->GetNumberOfPolys();
-    m_faces->materialIndex.setNum(static_cast<int>(nFaces));
-
-    if (nFaces == 0) {
-        return;
-    }
-
-    // Poly cells sit after verts and lines in the appended polydata cell array.
-    const vtkIdType polyOffset = visdata->GetNumberOfVerts() + visdata->GetNumberOfLines();
-
-    const int nCats = m_classification
-        ? static_cast<int>(m_classification->categories().size())
-        : 0;
-
-    auto* origcell = vtkIntArray::SafeDownCast(
-        visdata->GetCellData()->GetArray(FemVisibilityMask::ArrayOrigCell)
-    );
-
-    int32_t* indices = m_faces->materialIndex.startEditing();
-    for (vtkIdType i = 0; i < nFaces; ++i) {
-        int category = 0;
-        if (m_classification && nCats > 0) {
-            const vtkIdType polyCell = polyOffset + i;
-            vtkIdType orig = polyCell;
-            if (origcell && polyCell < origcell->GetNumberOfTuples()) {
-                orig = origcell->GetValue(polyCell);
-            }
-            // categoryOfCell uses the classification built from input-grid
-            // cells (with FaceN→SolidN resolution). origcell survives the VTK
-            // threshold/clip pipeline; do not fall back to vtkOriginalCellIds.
-            if (orig >= 0) {
-                category = m_classification->categoryOfCell(orig);
-            }
-            if (category < 0) {
-                category = 0;
-            }
-            category = category % nCats;
-        }
-        indices[i] = category;
-    }
-    m_faces->materialIndex.finishEditing();
+    // A face of an element the classification says nothing about keeps the
+    // first palette entry, as it did before there were categories. A point or
+    // a 1D element falls back to the colour of the element edges instead, so
+    // that an unclassified mesh is drawn in one colour and its edges.
+    const int edge = edgePaletteSlot();
+    writeMaterialIndex(m_markers->materialIndex, m_markercells, edge);
+    writeMaterialIndex(m_celllines->materialIndex, m_celllinecells, edge);
+    writeMaterialIndex(m_faces->materialIndex, m_facecells, 0);
+    writeMaterialIndex(m_volumefaces->materialIndex, m_volumecells, 0);
 }
 
 void FemMeshRenderer::update()
@@ -1086,17 +1377,15 @@ void FemMeshRenderer::writeIndexedPolys(SoIndexedFaceSet* faces, vtkCellArray* c
     writeCellIndices(faces->coordIndex, cells);
 }
 
-void FemMeshRenderer::writeIndexedLines(SoIndexedLineSet* lines, vtkCellArray* cells)
+void FemMeshRenderer::writeIndexedVerts(
+    SoIndexedMarkerSet* markers,
+    vtkCellArray* cells,
+    std::vector<int>* drawn
+)
 {
-    if (!lines || !cells) {
-        return;
+    if (drawn) {
+        drawn->clear();
     }
-
-    writeCellIndices(lines->coordIndex, cells);
-}
-
-void FemMeshRenderer::writeIndexedVerts(SoIndexedMarkerSet* markers, vtkCellArray* cells)
-{
     if (!markers || !cells) {
         return;
     }
@@ -1116,19 +1405,26 @@ void FemMeshRenderer::writeIndexedVerts(SoIndexedMarkerSet* markers, vtkCellArra
     if (nCells == 0) {
         return;
     }
+    if (drawn) {
+        drawn->reserve(static_cast<std::size_t>(nCells));
+    }
 
     int32_t* coords = markers->coordIndex.startEditing();
     int32_t* ids = markers->markerIndex.startEditing();
     int soidx = 0;
+    vtkIdType at = 0;
     vtkIdType npts = 0;
     const vtkIdType* indx = nullptr;
-    for (cells->InitTraversal(); cells->GetNextCell(npts, indx);) {
+    for (cells->InitTraversal(); cells->GetNextCell(npts, indx); ++at) {
         if (npts < 1) {
             continue;
         }
         coords[soidx] = static_cast<int32_t>(indx[0]);
         ids[soidx] = markerId;
         ++soidx;
+        if (drawn) {
+            drawn->push_back(static_cast<int>(at));
+        }
     }
     markers->coordIndex.finishEditing();
     markers->markerIndex.finishEditing();

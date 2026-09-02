@@ -78,6 +78,38 @@ _ImportPlace = collections.namedtuple(
 )
 
 
+def _drawn_analyses(analysis):
+    """
+    Every analysis an analysis draws, itself included, one per placement.
+
+    Yields (analysis, suppressed) pairs, where suppressed names the components
+    that placement leaves out. A source placed twice is yielded twice: what is
+    drawn is one copy per placement, and counting it once would describe
+    something other than what is on screen.
+    """
+    if analysis is None:
+        return
+
+    def walk(current, suppressed, chain):
+        yield current, suppressed
+        for imp in importmembers.collect_imports(current):
+            if imp in chain:
+                continue
+            try:
+                source = imp.Analysis
+            except (AttributeError, ReferenceError, RuntimeError):
+                continue
+            if source is None:
+                continue
+            yield from walk(
+                source,
+                frozenset(getattr(imp, "SuppressedComponents", ()) or ()),
+                chain + [imp],
+            )
+
+    yield from walk(analysis, frozenset(), [])
+
+
 def _ui_path(name):
     return FreeCAD.getHomePath() + "Mod/Fem/Resources/ui/" + name
 
@@ -1900,6 +1932,7 @@ class ViewSettings(QtGui.QWidget):
         self._edit_obj = None
         self._edit_stage = None
         self._counts = None
+        self._geometry_counts = None
         self.setup_analysis()
 
         self.widget.GeometryButton.clicked.connect(self.geometry_button_checked)
@@ -1979,6 +2012,7 @@ class ViewSettings(QtGui.QWidget):
 
         self._connect_view_state()
         self._counts = self._read_element_counts()
+        self._geometry_counts = self._read_geometry_counts()
 
         # setup_analysis() also runs on every geometry or mesh change, where
         # the planes stay put and only their indicators need re-fitting to a
@@ -1993,45 +2027,100 @@ class ViewSettings(QtGui.QWidget):
 
     def _read_element_counts(self):
         """
-        Elements per dimension, counted once per change of the mesh.
+        Mesh elements per dimension, counted once per change of the mesh.
 
         Two tallies: what the analysis solves, taken from the classification the
         merge leaves behind, and what the mesh holds altogether. The difference
         between them is the construction elements. Walking every element is too
         much to do from setup_widgets(), which runs on every change of the view
         state, so the numbers are kept until the mesh itself moves.
-        """
-        mesh = self.mesh_obj
-        if mesh is None:
-            return None
-        try:
-            # The merged mesh first: it is what fills the classification, and
-            # asking the other way round reads yesterday's answer.
-            femmesh = mesh.FemMesh
-            topology = {
-                1: femmesh.EdgeCount,
-                2: femmesh.FaceCount,
-                3: femmesh.VolumeCount,
-            }
-            cell_dim = mesh.CellDimension
-        except (AttributeError, ReferenceError, RuntimeError):
-            return None
 
-        total = len(cell_dim)
+        Over every mesh drawn rather than the one the analysis owns: an assembly
+        draws the mesh of all it places, and its own is a part of that view
+        being described as though it were the whole of it.
+        """
+        total = 0
+        analysis = {0: 0, 1: 0, 2: 0, 3: 0}
+        topology = {0: 0, 1: 0, 2: 0, 3: 0}
+        # A placement that leaves components out still has them in its mesh,
+        # which knows nothing of the components; the elements can only be told
+        # apart by the geometry they were built on, and that is more work than
+        # a count of what is available is worth.
+        for placed, _ in _drawn_analyses(self.active_analysis):
+            for mesh in mt.get_member(placed, "Fem::FemMeshShapeGroup"):
+                try:
+                    # The merged mesh first: it is what fills the
+                    # classification, and asking the other way round reads
+                    # yesterday's answer.
+                    femmesh = mesh.FemMesh
+                    edges = femmesh.EdgeCount
+                    faces = femmesh.FaceCount
+                    volumes = femmesh.VolumeCount
+                    cell_dim = mesh.CellDimension
+                except (AttributeError, ReferenceError, RuntimeError):
+                    continue
+
+                cells = len(cell_dim)
+                total += cells
+                # Counted in one step rather than element by element: an
+                # assembly reaches this with everything it places at once.
+                tally = collections.Counter(cell_dim)
+                for dim in analysis:
+                    analysis[dim] += tally[dim]
+                topology[1] += edges
+                topology[2] += faces
+                topology[3] += volumes
+                # SMESH keeps no count of the 0D elements of its own; whatever
+                # the other three leave over is what they are.
+                topology[0] += max(0, cells - edges - faces - volumes)
+
         if not total:
             return None
-
-        analysis = {0: 0, 1: 0, 2: 0, 3: 0}
-        for dim in cell_dim:
-            if 0 <= dim <= 3:
-                analysis[dim] += 1
-        # SMESH keeps no count of the 0D elements of its own; whatever the other
-        # three leave over is what they are.
-        topology[0] = max(0, total - topology[1] - topology[2] - topology[3])
         return {"total": total, "analysis": analysis, "topology": topology}
 
+    def _read_geometry_counts(self):
+        """
+        Toplevel elements per declared dimension, over every geometry drawn.
+
+        What the geometry stage draws is geometry, so this and not the mesh is
+        what its dimension entries have to be judged by: a solid is one element
+        of dimension three whether or not anything has meshed it yet, and a
+        shell placed in an assembly of solids is the 2D of that view however
+        the assembly meshed itself.
+        """
+        counts = {0: 0, 1: 0, 2: 0, 3: 0}
+        found = False
+        for placed, suppressed in _drawn_analyses(self.active_analysis):
+            for geom in mt.get_member(placed, "Fem::FemGeometry"):
+                try:
+                    components = geom.getComponentCount()
+                except (AttributeError, ReferenceError, RuntimeError):
+                    continue
+                for i in range(components):
+                    # A component a placement leaves out is not drawn, so it is
+                    # not among the dimensions on offer either.
+                    if (i + 1) in suppressed:
+                        continue
+                    for sub in geom.getToplevelElements(i):
+                        try:
+                            dim = geom.getAnalysisDimension(sub)
+                        except Exception:
+                            continue
+                        if 0 <= dim <= 3:
+                            counts[dim] += 1
+                            found = True
+
+        return counts if found else None
+
     def _dimension_counts(self, construction):
-        """Elements per dimension that the given construction setting shows."""
+        """
+        Elements per dimension of whatever the active stage draws.
+
+        Only a mesh is made of elements a mesher built, so the construction
+        setting has something to say about the mesh stage alone.
+        """
+        if self.view_state and self.view_state.getActiveStage() == "Geometry":
+            return self._geometry_counts
         if not self._counts:
             return None
         return self._counts["topology"] if construction else self._counts["analysis"]
@@ -2085,7 +2174,7 @@ class ViewSettings(QtGui.QWidget):
 
             construction = self.view_state.getShowConstruction()
             self.widget.Construction.setChecked(construction)
-            self.setup_dimension_entries(construction)
+            self.setup_dimension_entries(stage, construction)
             self.setup_element_count(stage, construction)
 
             dim = self.view_state.getDimensionMode()
@@ -2100,14 +2189,14 @@ class ViewSettings(QtGui.QWidget):
         finally:
             self._updating = False
 
-    def setup_dimension_entries(self, construction):
+    def setup_dimension_entries(self, stage, construction):
         """
         Grey out the dimensions that nothing would be drawn in.
 
         This is where the two kinds of element are told apart without a word of
         prose: a solid meshed with tetrahedra offers 3D and nothing else, and
         the 2D entry comes alive the moment the construction elements are taken
-        in. What the greying leaves out is exactly what the analysis leaves out.
+        in. What the greying leaves out is exactly what the stage leaves out.
         """
         counts = self._dimension_counts(construction)
         combo = self.widget.Dimension
@@ -2121,14 +2210,24 @@ class ViewSettings(QtGui.QWidget):
             item.setEnabled(counts is None or shown > 0)
             combo.setItemData(
                 index,
-                self._dimension_tooltip(mode, shown, construction),
+                self._dimension_tooltip(mode, shown, stage, construction),
                 QtCore.Qt.ItemDataRole.ToolTipRole,
             )
 
     @staticmethod
-    def _dimension_tooltip(mode, shown, construction):
+    def _dimension_tooltip(mode, shown, stage, construction):
         if shown is None or mode == _ALL_DIMENSIONS:
             return None
+        if stage == "Geometry":
+            # Counted in solids and shells here, not in the elements a mesher
+            # would fill them with, so say which of the two the number is.
+            if shown > 0:
+                return QtCore.QCoreApplication.translate(
+                    "FEM_ViewPanel", "{} geometry elements"
+                ).format(_thousands(shown))
+            return QtCore.QCoreApplication.translate(
+                "FEM_ViewPanel", "The geometry has nothing of this dimension"
+            )
         if shown > 0:
             return QtCore.QCoreApplication.translate("FEM_ViewPanel", "{} elements").format(
                 _thousands(shown)
@@ -2389,7 +2488,16 @@ class ViewSettings(QtGui.QWidget):
         """
         if self._updating or not self.view_state:
             return
-        self.view_state.setActiveStage(stage if checked else _NO_STAGE)
+        self.view_state.beginUpdate()
+        try:
+            self.view_state.setActiveStage(stage if checked else _NO_STAGE)
+            # The stages are counted in different things, so a dimension one of
+            # them holds can be one the other has nothing in, and the entry
+            # greys out under the very selection that is standing on it.
+            if not self._dimension_available(self.view_state.getDimensionMode()):
+                self.view_state.setDimensionMode(_ALL_DIMENSIONS)
+        finally:
+            self.view_state.endUpdate()
 
     def geometry_button_checked(self, value):
         self._stage_button_clicked("Geometry", value)

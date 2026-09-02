@@ -77,6 +77,7 @@
 #include "AnalysisViewState.h"
 #include "Classification.h"
 #include "FemMeshRenderer.h"
+#include "FemVisibilityMask.h"
 #include "ViewProviderFemGeometry.h"
 #include "ViewProviderFemGeometryPy.h"
 
@@ -1572,9 +1573,16 @@ void ViewProviderFemGeometry::updateVTK()
     // Hiding applies to the previewed input too: while a step is edited the
     // view panel describes that shape, and switching parts off is how the user
     // reaches what is buried inside.
-    const auto& filtered = state ? state->hiddenElements() : empty_hidden;
+    auto filtered = state ? state->hiddenElements() : empty_hidden;
     const auto clipper = state ? state->activeClipPlanes() : empty_clips;
     const DimensionMode dimMode = state ? state->dimensionMode() : DimensionMode::Highest;
+    // An element of a dimension that was not asked for is left out the way a
+    // hidden one is. The mode picks out whole elements: a solid met while 2D is
+    // wanted is not a bag of faces to be opened, it is simply not what was
+    // asked for, and the edges bounding it are not 1D elements either.
+    for (const auto& name : FemVisibilityMask::excludedToplevels(geom_obj, dimMode)) {
+        filtered.insert(name);
+    }
 
     IVtk_ShapeIdList passthrough_ids;
 
@@ -2012,10 +2020,11 @@ void ViewProviderFemGeometry::update3D()
 
     ensureViewStateConnection();
     auto* state = m_boundViewState;
-    const DimensionMode dimMode = state ? state->dimensionMode() : DimensionMode::Highest;
     const bool wireframe = state ? state->wireframe() : (DisplayMode.getValue() == 1);
-    const bool draw_faces = !wireframe && dimMode != DimensionMode::Curve
-        && dimMode != DimensionMode::Point;
+    // Whatever is left is drawn as what it is. The dimension mode has already
+    // left out the elements it does not name, so there is nothing here to strip
+    // a solid down to its edges for: that is what the wireframe is.
+    const bool draw_faces = !wireframe;
 
     // The cells arrive sorted by shape id, so one slot is enough to answer for a
     // whole run of them.
@@ -2167,8 +2176,14 @@ void ViewProviderFemGeometry::updateGeometryOverlay()
     const auto& hidden = state ? state->hiddenElements() : empty_hidden;
     const bool wireframe = state ? state->wireframe() : (DisplayMode.getValue() == 1);
     const bool overlay_enabled = !state || state->overlay();
-    const bool show_geometry_overlay =
-        overlay_enabled && (wireframe || !clipper.empty() || !hidden.empty());
+    // A dimension mode that leaves elements out leaves them missing from the
+    // view in the same way hiding them does, and the ghost is what still says
+    // where they were.
+    const auto dimMode = state ? state->dimensionMode() : DimensionMode::Highest;
+    const bool dimension_leaves_out =
+        !FemVisibilityMask::excludedToplevels(getObject<Fem::FemGeometry>(), dimMode).empty();
+    const bool show_geometry_overlay = overlay_enabled
+        && (wireframe || !clipper.empty() || !hidden.empty() || dimension_leaves_out);
     if (!show_geometry_overlay || !m_visgeometryoverlay) {
         m_geometryoverlay->coordIndex.setNum(0);
         return;

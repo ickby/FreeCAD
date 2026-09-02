@@ -143,6 +143,21 @@ public:
         std::map<std::string, int>* underAchieved = nullptr
     );
 
+    /**
+     * Toplevel elements of @a geometry that @a dimMode leaves out.
+     *
+     * The geometry counterpart to the dimension half of evaluate(), and the
+     * same reading of a mode: it names the elements whose declared analysis
+     * dimension it is. So asking for 1D leaves a solid out whole rather than
+     * baring the edges bounding it — those are where a volume element ends,
+     * not elements in their own right, and only a free edge is 1D. Highest
+     * leaves nothing out.
+     */
+    static std::set<std::string> excludedToplevels(
+        const Fem::FemGeometry* geometry,
+        DimensionMode dimMode
+    );
+
     /** Resolve entity name for a cell from CellEntityIds / group cell data. */
     static std::string entityOfCell(vtkDataSet* grid, vtkIdType cell);
 

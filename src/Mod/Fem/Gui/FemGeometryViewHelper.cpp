@@ -73,6 +73,7 @@
 #include "Classification.h"
 #include "FemMeshRenderer.h"
 #include "FemPerfLog.h"
+#include "FemVisibilityMask.h"
 
 using namespace FemGui;
 
@@ -860,6 +861,13 @@ void FemGeometryViewHelper::updateVTK()
     const auto clipper = state ? localClipPlanes(state->clipPlanes())
                                : std::map<std::string, ClippingPlane> {};
     const DimensionMode dimMode = state ? state->dimensionMode() : DimensionMode::Highest;
+    // An element of a dimension that was not asked for is left out the way a
+    // hidden one is. The mode picks out whole elements: a solid met while 2D is
+    // wanted is not a bag of faces to be opened, it is simply not what was
+    // asked for, and the edges bounding it are not 1D elements either.
+    for (const auto& name : FemVisibilityMask::excludedToplevels(m_metadata, dimMode)) {
+        hidden.insert(name);
+    }
 
     IVtk_ShapeIdList passthrough_ids;
     collectVisibleIds(hidden, passthrough_ids);
@@ -1211,10 +1219,13 @@ void FemGeometryViewHelper::colorFromPalette()
 void FemGeometryViewHelper::updateGhostOverlay()
 {
     auto* state = m_boundViewState;
+    const auto dimMode = state ? state->dimensionMode() : DimensionMode::Highest;
     // A ghost of what is drawn anyway says nothing, so it only appears once
     // something is missing from the instance. A suppressed component is
-    // missing in the same way a hidden element is.
+    // missing in the same way a hidden element is, and so is an element of a
+    // dimension that was not asked for.
     const bool anythingMissing = !suppressedToplevels(m_metadata).empty()
+        || !FemVisibilityMask::excludedToplevels(m_metadata, dimMode).empty()
         || (state
             && (state->wireframe() || !localClipPlanes(state->clipPlanes()).empty()
                 || !localHiddenElements(state->hiddenElements()).empty()));
@@ -1341,10 +1352,11 @@ void FemGeometryViewHelper::update3D()
     }
 
     auto* state = m_boundViewState;
-    const DimensionMode dimMode = state ? state->dimensionMode() : DimensionMode::Highest;
     const bool wireframe = state ? state->wireframe() : false;
-    const bool draw_faces = !wireframe && dimMode != DimensionMode::Curve
-        && dimMode != DimensionMode::Point;
+    // Whatever is left is drawn as what it is. The dimension mode has already
+    // left out the elements it does not name, so there is nothing here to strip
+    // a solid down to its edges for: that is what the wireframe is.
+    const bool draw_faces = !wireframe;
 
     // The cells arrive sorted by shape id, so one slot is enough to answer for a
     // whole run of them.

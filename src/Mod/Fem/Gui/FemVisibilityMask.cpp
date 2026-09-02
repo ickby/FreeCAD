@@ -280,6 +280,32 @@ std::vector<std::string> FemVisibilityMask::ownersOfEntity(
     return owners;
 }
 
+std::set<std::string> FemVisibilityMask::excludedToplevels(
+    const Fem::FemGeometry* geometry,
+    DimensionMode dimMode
+)
+{
+    std::set<std::string> excluded;
+    if (!geometry || dimMode == DimensionMode::Highest) {
+        return excluded;
+    }
+
+    const unsigned requested = requestedDimensions(dimMode);
+    const auto count = geometry->getComponents().size();
+    for (Fem::componentIdType i = 0; i < count; ++i) {
+        for (const auto& name : geometry->getToplevelElements(i)) {
+            // The declared dimension of the element itself, not the mask of an
+            // entity: a shell sharing its faces with a solid is a shell, and
+            // the faces answering for the solid too says nothing about that.
+            const unsigned bit = dimensionBit(geometry->getAnalysisDimension(name));
+            if ((requested & bit) == 0) {
+                excluded.insert(name);
+            }
+        }
+    }
+    return excluded;
+}
+
 std::string FemVisibilityMask::entityOfCell(vtkDataSet* grid, vtkIdType cell)
 {
     if (!grid || cell < 0 || cell >= grid->GetNumberOfCells()) {

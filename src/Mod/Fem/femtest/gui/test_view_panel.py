@@ -136,6 +136,23 @@ def _two_solid_tet_mesh():
     return mesh
 
 
+def _shell_face_mesh():
+    """
+    Two triangles of a shell, with the edges around them.
+
+    The 2D counterpart of the tetrahedra above: the triangles are what the
+    analysis solves and the edges are what the mesher built them from.
+    """
+    mesh = Fem.FemMesh()
+    mesh.addNode(0, 0, 0, 1)
+    mesh.addNode(10, 0, 0, 2)
+    mesh.addNode(10, 10, 0, 3)
+    mesh.addNode(0, 10, 0, 4)
+    group = mesh.addGroup("Face1", "Face")
+    mesh.addGroupElements(group, [mesh.addFace([1, 2, 3]), mesh.addFace([1, 3, 4])])
+    return mesh
+
+
 def _cell_type_groups(model):
     """Element type rows under the head that says what they are for."""
     groups = {}
@@ -574,6 +591,102 @@ class TestViewPanelGui(unittest.TestCase):
         state.setDimensionMode("3D")
         self.settings.widget.Construction.click()
         self.assertEqual(state.getDimensionMode(), "3D")
+
+    # -- the dimensions of an assembly, and of the two stages ----------------
+
+    def _import_a_shell(self, name="Side1", meshed=False):
+        """
+        A shell analysis, placed in the one the panel describes.
+
+        Two dimensions in one view: the analysis meshes solids and what it
+        places is a shell, which is the case the counting has to be right
+        about.
+        """
+        from femtools import importtools
+
+        source = self.document.addObject("Part::Feature", "SidePart")
+        source.Shape = Part.makePlane(10, 10)
+        side = ObjectsFem.makeAnalysis(self.document, "SideAnalysis")
+        side_geom = ObjectsFem.makeGeometryGroup(self.document, "SideGeometry")
+        side.addObject(side_geom)
+        side_step = ObjectsFem.makeGeometryImport(self.document)
+        side_step.Import = [source]
+        side_geom.Group = [side_step]
+        group = ObjectsFem.makeMeshShapeGroup(self.document, geometry=side_geom, analysis=side)
+        if meshed:
+            child = self.document.addObject("Fem::FemMeshObject", "SideMesh")
+            child.FemMesh = _shell_face_mesh()
+            group.Group = [child]
+        self.document.recompute()
+
+        imp = ObjectsFem.makeAnalysisImport(self.document, name)
+        imp.Analysis = side
+        importtools.wire_import(self.analysis, imp)
+        self.document.recompute()
+        self.settings.setup_analysis()
+        return imp
+
+    def test_the_dimensions_of_an_assembly_are_the_ones_it_draws(self):
+        """
+        An assembly draws the mesh of everything it places, so a shell put into
+        an analysis of solids is the 2D of that view whatever the assembly
+        meshed itself with. Going by its own mesh greys out a dimension the
+        user is looking at.
+        """
+        self._add_meshed_mesh()
+        self.assertEqual(_enabled_dimensions(self.settings.widget.Dimension), ["All", "3D"])
+        self._import_a_shell(meshed=True)
+        self.assertEqual(_enabled_dimensions(self.settings.widget.Dimension), ["All", "3D", "2D"])
+
+    def test_the_count_of_an_assembly_takes_in_what_it_places(self):
+        """Two tetrahedra of its own and the two triangles it places."""
+        self._add_meshed_mesh()
+        self.assertEqual(self.settings.widget.ElementCount.text(), "2 / 10")
+        self._import_a_shell(meshed=True)
+        self.assertEqual(self.settings.widget.ElementCount.text(), "4 / 12")
+
+    def test_the_geometry_stage_is_judged_by_the_geometry(self):
+        """
+        The geometry stage draws geometry, so a shell nothing has meshed yet is
+        still the 2D of that view, and it is the mesh stage that has no 2D to
+        show for it.
+        """
+        self._add_meshed_mesh()
+        self._import_a_shell(meshed=False)
+        state = FemGui.getAnalysisViewState(self.analysis)
+        self.assertEqual(
+            _enabled_dimensions(self.settings.widget.Dimension),
+            ["All", "3D"],
+            "nothing has meshed the shell, so the mesh stage has no 2D",
+        )
+        state.setActiveStage("Geometry")
+        self.assertEqual(_enabled_dimensions(self.settings.widget.Dimension), ["All", "3D", "2D"])
+
+    def test_the_construction_elements_say_nothing_about_the_geometry(self):
+        """
+        The skin triangles of the tetrahedra are 2D elements of the mesh, and
+        the geometry they were built on is two solids. Taking them in opens up
+        2D where they are drawn and nowhere else.
+        """
+        self._add_meshed_mesh()
+        self.settings.widget.Construction.click()
+        self.assertEqual(_enabled_dimensions(self.settings.widget.Dimension), ["All", "3D", "2D"])
+        FemGui.getAnalysisViewState(self.analysis).setActiveStage("Geometry")
+        self.assertEqual(_enabled_dimensions(self.settings.widget.Dimension), ["All", "3D"])
+
+    def test_a_dimension_the_other_stage_has_nothing_in_is_left_behind(self):
+        """
+        2D is the construction elements of the mesh here and the geometry has
+        none of it, so carrying the mode over would stand on a greyed entry,
+        which is no way back off it.
+        """
+        self._add_meshed_mesh()
+        state = FemGui.getAnalysisViewState(self.analysis)
+        self.settings.widget.Construction.click()
+        state.setDimensionMode("2D")
+        self.settings.widget.GeometryButton.click()
+        self.assertEqual(state.getActiveStage(), "Geometry")
+        self.assertEqual(state.getDimensionMode(), "All")
 
     def test_only_a_mesh_has_construction_elements(self):
         """The faces of a solid are the solid, not scaffolding around it."""

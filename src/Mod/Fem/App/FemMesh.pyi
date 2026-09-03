@@ -252,6 +252,11 @@ class FemMesh(ComplexGeoData):
         ...
 
     @constmethod
+    def getGroupIdByName(self, name: str, /) -> int:
+        """Return the group ID for a given name, or -1 if not found."""
+        ...
+
+    @constmethod
     def getGroupElementType(self, elem_id: int, /) -> str:
         """Return a string of group element type to a given group ID"""
         ...

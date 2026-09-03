@@ -24,7 +24,7 @@
 
 #include "FemPerfLog.h"
 
-using namespace FemGui;
+using namespace Fem;
 
 namespace
 {

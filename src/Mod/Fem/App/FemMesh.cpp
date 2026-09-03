@@ -134,12 +134,26 @@ FemMesh::~FemMesh()
 FemMesh& FemMesh::operator=(const FemMesh& mesh)
 {
     if (this != &mesh) {
+        // The generator hands out a fresh mesh rather than reusing ours, so the
+        // one being replaced has to be released here or every assignment leaks
+        // a whole mesh -- tens of megabytes each on a model of any size.
+        SMESH_Mesh* replaced = myMesh;
 #if SMESH_VERSION_MAJOR >= 9
         myMesh = getGenerator()->CreateMesh(true);
 #else
         myMesh = getGenerator()->CreateMesh(myStudyId, true);
 #endif
         copyMeshData(mesh);
+        if (replaced) {
+            try {
+                TopoDS_Shape aNull;
+                replaced->ShapeToMesh(aNull);
+                replaced->Clear();
+                delete replaced;
+            }
+            catch (...) {
+            }
+        }
     }
     return *this;
 }

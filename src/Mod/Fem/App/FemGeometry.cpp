@@ -33,6 +33,8 @@
 
 #include "FemGeometry.h"
 #include "FemGeometryPy.h"
+#include "FemPerfLog.h"
+#include "FemTopology.h"
 
 #include <App/FeaturePythonPyImp.h>
 #include <Base/Console.h>
@@ -190,58 +192,6 @@ App::DocumentObject* FemGeometry::getSubObject(
 
 namespace
 {
-/// Union-find over the free candidates of a shape, joined by the vertices they share.
-class ComponentUnion
-{
-public:
-    explicit ComponentUnion(std::size_t count)
-        : m_parent(count)
-    {
-        std::iota(m_parent.begin(), m_parent.end(), 0);
-    }
-
-    /// Put the candidates that share vertex @a hash in the same component.
-    void shareVertex(std::size_t hash, std::size_t candidate)
-    {
-        auto [it, inserted] = m_owner.try_emplace(hash, candidate);
-        if (!inserted) {
-            join(candidate, it->second);
-        }
-    }
-
-    /// The component a candidate ended up in, numbered in candidate order.
-    std::size_t componentOf(std::size_t candidate)
-    {
-        auto [it, inserted] = m_number.try_emplace(root(candidate), m_number.size());
-        return it->second;
-    }
-
-private:
-    std::size_t root(std::size_t candidate)
-    {
-        while (m_parent[candidate] != candidate) {
-            m_parent[candidate] = m_parent[m_parent[candidate]];
-            candidate = m_parent[candidate];
-        }
-        return candidate;
-    }
-
-    void join(std::size_t first, std::size_t second)
-    {
-        first = root(first);
-        second = root(second);
-        if (first != second) {
-            // The smaller index stays the root, which keeps the components
-            // numbered in the order their first candidate appears.
-            m_parent[std::max(first, second)] = std::min(first, second);
-        }
-    }
-
-    std::vector<std::size_t> m_parent;
-    std::unordered_map<std::size_t, std::size_t> m_owner;
-    std::unordered_map<std::size_t, std::size_t> m_number;
-};
-
 int dimensionOfShapeType(TopAbs_ShapeEnum type)
 {
     switch (type) {
@@ -264,10 +214,13 @@ int dimensionOfShapeType(TopAbs_ShapeEnum type)
 
 void FemGeometry::build_components()
 {
+    FEM_PERF_SCOPE("geometry.components");
+
     ++m_revision;
     m_components_cache.clear();
     m_geometric_dimension.clear();
     m_entity_owners.clear();
+    m_entities_of_toplevel.clear();
 
     auto& shape = Shape.getShape();
     if (shape.isNull()) {
@@ -312,7 +265,7 @@ void FemGeometry::build_components()
     for (std::size_t i = 0; i < free_candidate.size(); ++i) {
         explorer.Init(free_candidate[i], TopAbs_VERTEX, TopAbs_SHAPE);
         for (; explorer.More(); explorer.Next()) {
-            candidate_union.shareVertex(hasher(explorer.Current()), i);
+            candidate_union.shareKey(hasher(explorer.Current()), i);
         }
     }
 
@@ -329,13 +282,21 @@ void FemGeometry::build_components()
 
 void FemGeometry::rebuildDimensionCache()
 {
+    FEM_PERF_SCOPE("geometry.dimensionCache");
+
     m_geometric_dimension.clear();
     m_entity_owners.clear();
+    m_entities_of_toplevel.clear();
 
     auto shape = Shape.getShape();
     if (shape.isNull()) {
         return;
     }
+
+    auto recordOwned = [this](const std::string& entity, const std::string& owner) {
+        m_entity_owners[entity].push_back(owner);
+        m_entities_of_toplevel[owner].push_back(entity);
+    };
 
     // For each toplevel element, record geometric dimension and entity ownership.
     for (auto& component : m_components_cache) {
@@ -355,21 +316,21 @@ void FemGeometry::rebuildDimensionCache()
                 for (; ex.More(); ex.Next()) {
                     auto idx = shape.findShape(ex.Current());
                     if (idx > 0) {
-                        m_entity_owners["Face" + std::to_string(idx)].push_back(name);
+                        recordOwned("Face" + std::to_string(idx), name);
                     }
                 }
                 ex.Init(sub, TopAbs_EDGE);
                 for (; ex.More(); ex.Next()) {
                     auto idx = shape.findShape(ex.Current());
                     if (idx > 0) {
-                        m_entity_owners["Edge" + std::to_string(idx)].push_back(name);
+                        recordOwned("Edge" + std::to_string(idx), name);
                     }
                 }
                 ex.Init(sub, TopAbs_VERTEX);
                 for (; ex.More(); ex.Next()) {
                     auto idx = shape.findShape(ex.Current());
                     if (idx > 0) {
-                        m_entity_owners["Vertex" + std::to_string(idx)].push_back(name);
+                        recordOwned("Vertex" + std::to_string(idx), name);
                     }
                 }
             }
@@ -378,14 +339,14 @@ void FemGeometry::rebuildDimensionCache()
                 for (; ex.More(); ex.Next()) {
                     auto idx = shape.findShape(ex.Current());
                     if (idx > 0) {
-                        m_entity_owners["Edge" + std::to_string(idx)].push_back(name);
+                        recordOwned("Edge" + std::to_string(idx), name);
                     }
                 }
                 ex.Init(sub, TopAbs_VERTEX);
                 for (; ex.More(); ex.Next()) {
                     auto idx = shape.findShape(ex.Current());
                     if (idx > 0) {
-                        m_entity_owners["Vertex" + std::to_string(idx)].push_back(name);
+                        recordOwned("Vertex" + std::to_string(idx), name);
                     }
                 }
             }
@@ -394,7 +355,7 @@ void FemGeometry::rebuildDimensionCache()
                 for (; ex.More(); ex.Next()) {
                     auto idx = shape.findShape(ex.Current());
                     if (idx > 0) {
-                        m_entity_owners["Vertex" + std::to_string(idx)].push_back(name);
+                        recordOwned("Vertex" + std::to_string(idx), name);
                     }
                 }
             }
@@ -497,6 +458,45 @@ std::vector<std::string> FemGeometry::getEntityOwners(const std::string& entity)
         return {};
     }
     return it->second;
+}
+
+std::size_t FemGeometry::componentCount() const
+{
+    return m_components_cache.size();
+}
+
+std::vector<std::string> FemGeometry::toplevelElements(componentIdType component) const
+{
+    return getToplevelElements(component);
+}
+
+std::vector<std::string> FemGeometry::entities(const std::string& toplevel) const
+{
+    auto it = m_entities_of_toplevel.find(toplevel);
+    if (it == m_entities_of_toplevel.end()) {
+        return {};
+    }
+    return it->second;
+}
+
+std::vector<std::string> FemGeometry::entityOwners(const std::string& entity) const
+{
+    return getEntityOwners(entity);
+}
+
+int FemGeometry::analysisDimension(const std::string& toplevel) const
+{
+    return getAnalysisDimension(toplevel);
+}
+
+int FemGeometry::entityDimensionMask(const std::string& entity) const
+{
+    return getEntityDimensionMask(entity);
+}
+
+std::size_t FemGeometry::topologyRevision() const
+{
+    return m_revision;
 }
 
 int FemGeometry::getEntityDimensionMask(const std::string& entity) const

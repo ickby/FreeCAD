@@ -33,6 +33,11 @@
 #include <Precision.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include <SMDS_MeshElement.hxx>
+#include <SMESHDS_GroupBase.hxx>
+#include <SMESH_Group.hxx>
+#include <SMESH_Mesh.hxx>
+
 #include <App/Document.h>
 #include <App/FeaturePythonPyImp.h>
 #include <App/GeoFeaturePy.h>
@@ -45,6 +50,8 @@
 #include "FemMeshDimension.h"
 #include "FemMeshShapeGroup.h"
 #include "FemMeshShapeGroupPy.h"
+#include "FemMeshTopology.h"
+#include "FemPerfLog.h"
 
 
 using namespace Fem;
@@ -155,6 +162,7 @@ void FemMeshShapeGroup::invalidateMergedCache()
         return;
     }
     m_mergedValid = false;
+    m_topologyValid = false;
 }
 
 void FemMeshShapeGroup::reconnectChildSignals()
@@ -485,7 +493,10 @@ const ::Fem::FemMesh& FemMeshShapeGroup::getMergedMesh()
 
 void FemMeshShapeGroup::rebuildMergedMesh()
 {
+    FEM_PERF_SCOPE("merge");
+
     m_merging = true;
+    m_topologyValid = false;
 
     Fem::FemMesh merged;
     std::vector<std::string> sources;
@@ -523,7 +534,6 @@ void FemMeshShapeGroup::rebuildMergedMesh()
         SilentPropertyWrite silentSources(CellSources);
         SilentPropertyWrite silentDims(CellDimension);
         SilentPropertyWrite silentEntities(EntityDimension);
-        FemMesh.setValue(merged);
         CellSources.setValues(sources);
 
         FemGeometry* geometry = nullptr;
@@ -542,10 +552,169 @@ void FemMeshShapeGroup::rebuildMergedMesh()
             entityMap[name] = std::to_string(dim);
         }
         EntityDimension.setValues(entityMap);
+
+        m_topology = buildMeshTopology(merged, classification);
+        m_topologyValid = true;
+
+        // After the topology, because that is what names them, and before the
+        // property takes the mesh over.
+        {
+            FEM_PERF_SCOPE("merge.catchAllGroups");
+            materialiseCatchAllGroups(merged);
+        }
+
+        // Bumped before the write, because the write is what tells the view
+        // to read the merge back, and a view that recorded the old number
+        // there believes the merge to be stale ever after and rebuilds its
+        // whole grid on the next thing that asks it to look.
+        ++m_mergeRevision;
+        m_mergedValid = true;
+        FemMesh.setValue(merged);
     }
-    ++m_mergeRevision;
-    m_mergedValid = true;
     m_merging = false;
+}
+
+void FemMeshShapeGroup::materialiseCatchAllGroups(Fem::FemMesh& mesh) const
+{
+    // A catch-all names the top-dimension elements of a component that no group
+    // claims. Derived, it exists only in the topology, and everything that reads
+    // element names off the mesh itself -- the colouring of the view, references
+    // into the mesh, the solver writers -- passes those elements by as unnamed.
+    // Writing the group makes the derived name as real as one a mesher left
+    // behind, so the leftovers of a component are addressable like anything else.
+    static const std::map<int, const char*> typeOfDimension =
+        {{3, "Volume"}, {2, "Face"}, {1, "Edge"}, {0, "Node"}};
+
+    for (const auto& [name, elements] : m_topology.elementsOfToplevel) {
+        if (elements.empty() || !isCatchAllGroupName(name)) {
+            continue;
+        }
+        auto dim = m_topology.dimensionOfToplevel.find(name);
+        if (dim == m_topology.dimensionOfToplevel.end()) {
+            continue;
+        }
+        auto type = typeOfDimension.find(dim->second);
+        if (type == typeOfDimension.end()) {
+            continue;
+        }
+        try {
+            const int gid = mesh.addGroup(type->second, name);
+            mesh.addGroupElements(gid, std::set<int>(elements.begin(), elements.end()));
+        }
+        catch (const std::exception& e) {
+            Base::Console().warning(
+                "FemMeshShapeGroup: could not write catch-all group %s: %s\n",
+                name.c_str(),
+                e.what()
+            );
+        }
+    }
+}
+
+void FemMeshShapeGroup::ensureTopology() const
+{
+    if (m_topologyValid) {
+        return;
+    }
+    // The topology is filled by the merge, and a merge that is still valid
+    // would return before filling it, so the cache has to be dropped first.
+    auto* self = const_cast<FemMeshShapeGroup*>(this);
+    self->m_mergedValid = false;
+    self->ensureMergedMesh();
+}
+
+const MeshTopology& FemMeshShapeGroup::getMeshTopology()
+{
+    ensureTopology();
+    return m_topology;
+}
+
+std::vector<int> FemMeshShapeGroup::groupElementsByName(const std::string& name) const
+{
+    ensureTopology();
+
+    if (auto* smesh = const_cast<Fem::FemMesh&>(FemMesh.getValue()).getSMesh()) {
+        for (int gid : smesh->GetGroupIds()) {
+            SMESH_Group* group = smesh->GetGroup(gid);
+            if (!group || !group->GetName() || name != group->GetName() || !group->GetGroupDS()) {
+                continue;
+            }
+            std::vector<int> ids;
+            SMDS_ElemIteratorPtr eIt = group->GetGroupDS()->GetElements();
+            while (eIt->more()) {
+                if (const SMDS_MeshElement* elem = eIt->next()) {
+                    ids.push_back(elem->GetID());
+                }
+            }
+            return ids;
+        }
+    }
+
+    auto it = m_topology.elementsOfToplevel.find(name);
+    if (it != m_topology.elementsOfToplevel.end()) {
+        return it->second;
+    }
+    return {};
+}
+
+std::size_t FemMeshShapeGroup::componentCount() const
+{
+    ensureTopology();
+    return m_topology.componentCount();
+}
+
+std::vector<std::string> FemMeshShapeGroup::toplevelElements(componentIdType component) const
+{
+    ensureTopology();
+    if (component >= m_topology.componentToplevels.size()) {
+        return {};
+    }
+    return m_topology.componentToplevels[component];
+}
+
+std::vector<std::string> FemMeshShapeGroup::entities(const std::string& toplevel) const
+{
+    ensureTopology();
+    auto it = m_topology.entitiesOfToplevel.find(toplevel);
+    if (it == m_topology.entitiesOfToplevel.end()) {
+        return {};
+    }
+    return it->second;
+}
+
+std::vector<std::string> FemMeshShapeGroup::entityOwners(const std::string& entity) const
+{
+    ensureTopology();
+    auto it = m_topology.ownersOfEntity.find(entity);
+    if (it == m_topology.ownersOfEntity.end()) {
+        return {};
+    }
+    return it->second;
+}
+
+int FemMeshShapeGroup::analysisDimension(const std::string& toplevel) const
+{
+    ensureTopology();
+    auto it = m_topology.dimensionOfToplevel.find(toplevel);
+    if (it == m_topology.dimensionOfToplevel.end()) {
+        return -1;
+    }
+    return it->second;
+}
+
+int FemMeshShapeGroup::entityDimensionMask(const std::string& entity) const
+{
+    ensureTopology();
+    auto it = m_topology.dimensionMaskOfEntity.find(entity);
+    if (it == m_topology.dimensionMaskOfEntity.end()) {
+        return 0;
+    }
+    return it->second;
+}
+
+std::size_t FemMeshShapeGroup::topologyRevision() const
+{
+    return m_mergeRevision;
 }
 
 

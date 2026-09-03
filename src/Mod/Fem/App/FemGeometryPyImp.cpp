@@ -104,6 +104,53 @@ PyObject* FemGeometryPy::getAnalysisDimension(PyObject* args)
     );
 }
 
+PyObject* FemGeometryPy::getEntityOwners(PyObject* args)
+{
+    const char* name = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &name)) {
+        return nullptr;
+    }
+    Py::List owners;
+    for (const auto& owner : this->getFemGeometryPtr()->getEntityOwners(name)) {
+        owners.append(Py::String(owner));
+    }
+    return Py::new_reference_to(owners);
+}
+
+PyObject* FemGeometryPy::getEntities(PyObject* args)
+{
+    const char* name = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &name)) {
+        return nullptr;
+    }
+    Py::List entities;
+    for (const auto& entity : this->getFemGeometryPtr()->entities(name)) {
+        entities.append(Py::String(entity));
+    }
+    return Py::new_reference_to(entities);
+}
+
+PyObject* FemGeometryPy::getEntityDimensionMask(PyObject* args)
+{
+    const char* name = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &name)) {
+        return nullptr;
+    }
+    return Py::new_reference_to(
+        Py::Int(this->getFemGeometryPtr()->getEntityDimensionMask(name))
+    );
+}
+
+PyObject* FemGeometryPy::getTopologyRevision(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    return Py::new_reference_to(
+        Py::Int(static_cast<long>(this->getFemGeometryPtr()->topologyRevision()))
+    );
+}
+
 PyObject* FemGeometryPy::getCustomAttributes(const char* /*attr*/) const
 {
     return nullptr;

@@ -32,16 +32,16 @@
 #include <Mod/Fem/FemGlobal.h>
 #include <Mod/Part/App/PropertyTopoShape.h>
 
+#include "FemTopology.h"
+
 namespace Fem
 {
-
-using componentIdType = unsigned int;
 
 /**
  * Analysis geometry container: Shape plus connected-component cache and
  * per-toplevel-element declared analysis dimension.
  */
-class FemExport FemGeometry: public App::GeoFeature
+class FemExport FemGeometry: public App::GeoFeature, public AnalysisTopology
 {
     PROPERTY_HEADER_WITH_OVERRIDE(Fem::FemGeometry);
 
@@ -93,6 +93,15 @@ public:
         return m_revision;
     }
 
+    // AnalysisTopology
+    std::size_t componentCount() const override;
+    std::vector<std::string> toplevelElements(componentIdType component) const override;
+    std::vector<std::string> entities(const std::string& toplevel) const override;
+    std::vector<std::string> entityOwners(const std::string& entity) const override;
+    int analysisDimension(const std::string& toplevel) const override;
+    int entityDimensionMask(const std::string& entity) const override;
+    std::size_t topologyRevision() const override;
+
     std::vector<std::vector<Part::TopoShape>> getComponents() const;
     std::vector<Part::TopoShape> getComponent(componentIdType) const;
     std::vector<std::string> getToplevelElements(componentIdType component_idx) const;
@@ -139,6 +148,7 @@ private:
     std::vector<std::vector<Part::TopoShape>> m_components_cache;
     std::map<std::string, int> m_geometric_dimension;           ///< toplevel -> dim
     std::map<std::string, std::vector<std::string>> m_entity_owners;  ///< entity -> owners
+    std::map<std::string, std::vector<std::string>> m_entities_of_toplevel;  ///< toplevel -> entities
 };
 
 using FemGeometryPython = App::FeaturePythonT<FemGeometry>;

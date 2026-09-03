@@ -40,6 +40,7 @@
 #include "FemGeometry.h"
 #include "FemMesh.h"
 #include "FemMeshDimension.h"
+#include "FemPerfLog.h"
 
 using namespace Fem;
 
@@ -191,6 +192,8 @@ DimensionClassification Fem::classifyDimensions(
     const FemGeometry* geometry
 )
 {
+    FEM_PERF_SCOPE("merge.classifyDimensions");
+
     DimensionClassification result;
     SMESH_Mesh* smesh = const_cast<FemMesh&>(mesh).getSMesh();
     if (!smesh) {

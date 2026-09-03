@@ -51,3 +51,27 @@ class FemGeometry(GeoFeature):
         Analysis dimension: DimensionOverride if set, else geometric dimension.
         """
         ...
+
+    def getEntityOwners(self, entity: str, /) -> list:
+        """
+        Owners of an entity (e.g. Face7 owned by Solid3). Empty if free.
+        """
+        ...
+
+    def getEntities(self, toplevel: str, /) -> list:
+        """
+        Entities owned by a toplevel element (faces/edges/vertices of a solid).
+        """
+        ...
+
+    def getEntityDimensionMask(self, entity: str, /) -> int:
+        """
+        Dimension bitmask for highest-element filtering of an entity.
+        """
+        ...
+
+    def getTopologyRevision(self) -> int:
+        """
+        Counter bumped when the component/dimension cache is rebuilt.
+        """
+        ...

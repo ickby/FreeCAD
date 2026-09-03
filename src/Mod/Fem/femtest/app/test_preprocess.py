@@ -1811,6 +1811,127 @@ class TestMeshMerge(unittest.TestCase):
         self.assertEqual(meshes[0].Name, group.Name)
 
 
+def _make_groupless_tet_mesh():
+    """Tetrahedron without SMESH groups — triggers catch-all toplevels."""
+    mesh = Fem.FemMesh()
+    mesh.addNode(0, 0, 0, 1)
+    mesh.addNode(1, 0, 0, 2)
+    mesh.addNode(0, 1, 0, 3)
+    mesh.addNode(0, 0, 1, 4)
+    vol = mesh.addVolume([1, 2, 3, 4])
+    return mesh, vol
+
+
+class TestMeshTopology(unittest.TestCase):
+    fcc_print("import TestMeshTopology")
+
+    def setUp(self):
+        self.document = FreeCAD.newDocument(self.__class__.__name__)
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.document.Name)
+
+    def test_00print(self):
+        fcc_print(
+            "\n{0}\n{1} run FEM TestMeshTopology tests {2}\n{0}".format(100 * "*", 10 * "*", 54 * "*")
+        )
+
+    def test_catchall_for_groupless_mesh(self):
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        mesh, vol = _make_groupless_tet_mesh()
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+
+        _ = group.FemMesh  # trigger merge + topology
+        self.assertEqual(group.getComponentCount(), 1)
+        toplevels = group.getToplevelElements(0)
+        self.assertEqual(toplevels, ["Component1_Volume"])
+        self.assertEqual(group.getAnalysisDimension("Component1_Volume"), 3)
+
+    def test_two_disconnected_solids_are_two_components(self):
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        child.FemMesh = _make_two_solid_tet_mesh()
+        group.Group = [child]
+        self.document.recompute()
+        _ = group.FemMesh
+        self.assertEqual(group.getComponentCount(), 2)
+
+    def test_the_catchall_is_written_onto_the_mesh(self):
+        """
+        A catch-all is derived, so nothing on the mesh named the elements behind
+        it and everything reading names off the mesh -- the colouring, the
+        solver writers -- passed them by. The container writes the group.
+        """
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        mesh, vol = _make_groupless_tet_mesh()
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+
+        merged = group.FemMesh
+        gid = merged.getGroupIdByName("Component1_Volume")
+        self.assertGreaterEqual(gid, 0)
+        self.assertEqual(list(merged.getGroupElements(gid)), [vol])
+        self.assertEqual(merged.getGroupElementType(gid), "Volume")
+
+    def test_a_catchall_carried_in_by_a_mesh_is_not_read_back(self):
+        """
+        A deck exported from us and imported again carries our catch-all names.
+        They describe the leftovers of the build that wrote them, so reading one
+        back would let it stand in for elements it no longer covers.
+        """
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+
+        mesh, vol = _make_groupless_tet_mesh()
+        # A stale catch-all, naming a component number this mesh does not have.
+        gid = mesh.addGroup("Component7_Volume", "Volume")
+        mesh.addGroupElements(gid, [vol])
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+
+        _ = group.FemMesh
+        self.assertEqual(group.getToplevelElements(0), ["Component1_Volume"])
+
+    def test_entity_is_owned_only_by_the_toplevel_it_touches(self):
+        """
+        Two named volume groups on disconnected bodies are a toplevel each. A
+        face group on one of them belongs to that one, not to both.
+        """
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+
+        mesh = Fem.FemMesh()
+        volumes = []
+        first_face = None
+        for body, offset in enumerate((0, 10)):
+            base = body * 4 + 1
+            for i, (x, y, z) in enumerate([(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)]):
+                mesh.addNode(x + offset, y, z, base + i)
+            volumes.append(mesh.addVolume([base, base + 1, base + 2, base + 3]))
+            face = mesh.addFace([base, base + 1, base + 2])
+            if first_face is None:
+                first_face = face
+            gid = mesh.addGroup(f"Body{body + 1}", "Volume")
+            mesh.addGroupElements(gid, [volumes[-1]])
+        gid = mesh.addGroup("Skin", "Face")
+        mesh.addGroupElements(gid, [first_face])
+
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+
+        self.assertEqual(group.getComponentCount(), 2)
+        self.assertEqual(group.getEntityOwners("Skin"), ["Body1"])
+        self.assertEqual(group.getEntities("Body1"), ["Skin"])
+        self.assertEqual(group.getEntities("Body2"), [])
+
+
 class TestExportHighest(unittest.TestCase):
     fcc_print("import TestExportHighest")
 

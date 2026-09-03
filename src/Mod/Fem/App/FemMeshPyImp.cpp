@@ -34,6 +34,7 @@
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
 #include <algorithm>
+#include <cstring>
 #include <stdexcept>
 
 
@@ -1707,6 +1708,25 @@ PyObject* FemMeshPy::getGroupName(PyObject* args) const
         return nullptr;
     }
     return PyUnicode_FromString(group->GetName());
+}
+
+PyObject* FemMeshPy::getGroupIdByName(PyObject* args) const
+{
+    const char* name = nullptr;
+    if (!PyArg_ParseTuple(args, "s", &name)) {
+        return nullptr;
+    }
+    SMESH_Mesh* smesh = getFemMeshPtr()->getSMesh();
+    if (!smesh || !name) {
+        return PyLong_FromLong(-1);
+    }
+    for (int gid : smesh->GetGroupIds()) {
+        SMESH_Group* group = smesh->GetGroup(gid);
+        if (group && group->GetName() && std::strcmp(group->GetName(), name) == 0) {
+            return PyLong_FromLong(gid);
+        }
+    }
+    return PyLong_FromLong(-1);
 }
 
 PyObject* FemMeshPy::getGroupElementType(PyObject* args) const

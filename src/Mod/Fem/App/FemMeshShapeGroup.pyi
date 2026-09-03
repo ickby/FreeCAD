@@ -27,3 +27,40 @@ class FemMeshShapeGroup(GeoFeature):
         missing from the dict.
         """
         ...
+
+    def getComponentCount(self) -> int:
+        """Number of connected components of the result mesh."""
+        ...
+
+    def getToplevelElements(self, component: int, /) -> list:
+        """Toplevel element names of a component (0-based index)."""
+        ...
+
+    def getEntities(self, toplevel: str, /) -> list:
+        """Entity group names owned by a toplevel."""
+        ...
+
+    def getEntityOwners(self, entity: str, /) -> list:
+        """Toplevel names that own an entity."""
+        ...
+
+    def getAnalysisDimension(self, toplevel: str, /) -> int:
+        """Analysis dimension of a toplevel, or -1."""
+        ...
+
+    def getEntityDimensionMask(self, entity: str, /) -> int:
+        """Dimension bitmask for an entity."""
+        ...
+
+    def getTopologyRevision(self) -> int:
+        """Counter bumped when the result mesh is rebuilt."""
+        ...
+
+    def getGroupElementsByName(self, name: str, /) -> list:
+        """
+        Model element ids the named group or toplevel stands for.
+
+        A catch-all toplevel has no SMESH group behind it, so looking the name
+        up on the mesh alone would find nothing.
+        """
+        ...

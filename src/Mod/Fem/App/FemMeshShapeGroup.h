@@ -30,6 +30,8 @@
 #include <App/PropertyStandard.h>
 
 #include "FemMeshShapeObject.h"
+#include "FemMeshTopology.h"
+#include "FemTopology.h"
 
 
 namespace Fem
@@ -40,9 +42,12 @@ namespace Fem
  *
  * Holds per-object mesh children (never listed in analysis.Group). execute()
  * validates component assignment only; the merged FemMesh is built lazily by
- * getMergedMesh() and kept transient.
+ * getMergedMesh() and kept transient. The container implements AnalysisTopology
+ * over the result mesh.
  */
-class FemExport FemMeshShapeGroup: public FemMeshShapeBaseObject, public App::GroupExtension
+class FemExport FemMeshShapeGroup: public FemMeshShapeBaseObject,
+                                   public App::GroupExtension,
+                                   public AnalysisTopology
 {
     PROPERTY_HEADER_WITH_EXTENSIONS(Fem::FemMeshShapeGroup);
 
@@ -113,6 +118,18 @@ public:
      */
     std::map<int, App::DocumentObject*> getComponentOwners() const;
 
+    // AnalysisTopology
+    std::size_t componentCount() const override;
+    std::vector<std::string> toplevelElements(componentIdType component) const override;
+    std::vector<std::string> entities(const std::string& toplevel) const override;
+    std::vector<std::string> entityOwners(const std::string& entity) const override;
+    int analysisDimension(const std::string& toplevel) const override;
+    int entityDimensionMask(const std::string& entity) const override;
+    std::size_t topologyRevision() const override;
+
+    const MeshTopology& getMeshTopology();
+    std::vector<int> groupElementsByName(const std::string& name) const;
+
     PyObject* getPyObject() override;
 
 protected:
@@ -149,11 +166,15 @@ private:
     void reconnectChildSignals();
     void slotChildChanged(const App::DocumentObject& obj, const App::Property& prop);
     std::string validateComponents(bool* hasOverlap = nullptr) const;
+    void materialiseCatchAllGroups(Fem::FemMesh& mesh) const;
     void rebuildMergedMesh();
+    void ensureTopology() const;
 
     bool m_mergedValid {false};
     bool m_merging {false};
     std::size_t m_mergeRevision {0};
+    mutable MeshTopology m_topology;
+    mutable bool m_topologyValid {false};
     std::map<const App::DocumentObject*, fastsignals::scoped_connection> m_childConns;
 };
 

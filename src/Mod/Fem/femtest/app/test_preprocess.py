@@ -1931,6 +1931,48 @@ class TestMeshTopology(unittest.TestCase):
         self.assertEqual(group.getEntities("Body1"), ["Skin"])
         self.assertEqual(group.getEntities("Body2"), [])
 
+    def test_group_elements_by_name(self):
+        """
+        getGroupElementsByName returns the element ids behind a named group,
+        including catch-alls the merge wrote onto the mesh.
+        """
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        mesh, vol = _make_groupless_tet_mesh()
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+
+        _ = group.FemMesh
+        self.assertEqual(group.getGroupElementsByName("Component1_Volume"), [vol])
+        self.assertEqual(group.getGroupElementsByName("NoSuchGroup"), [])
+
+    def test_topology_reads_merge_only_once(self):
+        """
+        Repeated topology queries after a single invalidation must not re-merge.
+        The panel rebuilds on every view-state notify; without this the merge
+        would run once per notify.
+        """
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        mesh, _ = _make_groupless_tet_mesh()
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+
+        Fem.perfReset()
+        Fem.perfEnable(True)
+        try:
+            # First read forces the merge; the rest must reuse the cache.
+            for _ in range(5):
+                self.assertEqual(group.getComponentCount(), 1)
+                self.assertEqual(group.getToplevelElements(0), ["Component1_Volume"])
+        finally:
+            Fem.perfEnable(False)
+
+        report = {name: count for name, count, _total, _self in Fem.perfReport()}
+        self.assertEqual(report.get("merge", 0), 1)
+
 
 class TestExportHighest(unittest.TestCase):
     fcc_print("import TestExportHighest")

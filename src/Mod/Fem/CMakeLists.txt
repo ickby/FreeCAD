@@ -410,6 +410,11 @@ SET(FemTestsApp_SRCS
     femtest/app/test_netgen.py
 )
 
+SET(FemBenchmarks_SRCS
+    femtest/perf/__init__.py
+    femtest/perf/mesh_merge.py
+)
+
 SET(FemTestsFiles_SRCS
     femtest/data/__init__.py
 )
@@ -634,6 +639,7 @@ SET(FemAllScripts
     ${FemSolverZ88_SRCS}
     ${FemTests_SRCS}
     ${FemTestsApp_SRCS}
+    ${FemBenchmarks_SRCS}
     ${FemTestsFiles_SRCS}
     ${FemTestsCcx_SRCS}
     ${FemTestsElmer_SRCS}
@@ -674,6 +680,7 @@ INSTALL(FILES ${FemSolverMystran_SRCS} DESTINATION Mod/Fem/femsolver/mystran)
 INSTALL(FILES ${FemSolverZ88_SRCS} DESTINATION Mod/Fem/femsolver/z88)
 INSTALL(FILES ${FemTests_SRCS} DESTINATION Mod/Fem/femtest)
 INSTALL(FILES ${FemTestsApp_SRCS} DESTINATION Mod/Fem/femtest/app)
+INSTALL(FILES ${FemBenchmarks_SRCS} DESTINATION Mod/Fem/femtest/perf)
 INSTALL(FILES ${FemTestsFiles_SRCS} DESTINATION Mod/Fem/femtest/data)
 INSTALL(FILES ${FemTestsCcx_SRCS} DESTINATION Mod/Fem/femtest/data/calculix)
 INSTALL(FILES ${FemTestsElmer_SRCS} DESTINATION Mod/Fem/femtest/data/elmer)
@@ -758,7 +765,6 @@ if(BUILD_FEM_VTK_PYTHON)
 endif(BUILD_FEM_VTK_PYTHON)
 
 SET(FemGuiBenchmarks_SRCS
-    femtest/perf/__init__.py
     femtest/perf/view_pipeline.py
 )
 

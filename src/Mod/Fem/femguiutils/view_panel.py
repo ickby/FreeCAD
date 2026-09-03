@@ -68,13 +68,14 @@ _ELEMENT_NAME = re.compile(r"^(Component|CompSolid|Compound|Solid|Shell|Face|Wir
 # One placed instance in the tree of an analysis:
 #   imp          the FemAnalysisImport object
 #   geom         the geometry it draws, or None while its source has none
+#   mesh         the mesh container it draws, or None while its source has none
 #   parent_path  analysis-relative path of the instance it sits in
 #   path_prefix  analysis-relative path of this instance
 #   outer        outermost instance, the one a pick is reported on
 #   sub_prefix   path of this instance as *outer* names it
 #   suppressed   component ids this instance leaves out
 _ImportPlace = collections.namedtuple(
-    "_ImportPlace", "imp geom parent_path path_prefix outer sub_prefix suppressed"
+    "_ImportPlace", "imp geom mesh parent_path path_prefix outer sub_prefix suppressed"
 )
 
 
@@ -313,11 +314,16 @@ class ElementNode:
         is_category=False,
         cell_type=False,
         construction_group=False,
+        selectable=True,
     ):
         self.name = name
         self.children = []
         self._parent = parent
         self.element = element  # analysis-relative path for hide/select, if any
+        # Whether the row stands for something Selection can be told about. A
+        # mesh toplevel hides and shows like any other row but names nothing the
+        # 3D view can pick, so it carries an element without being selectable.
+        self.selectable = selectable
         self.target_obj = target_obj  # document object to select on
         # Subname as target_obj names it, which for an import is the path
         # without its own name; Selection and the 3D view expect that form.
@@ -433,17 +439,23 @@ class GeometryModel(QAbstractItemModel):
         super().__init__()
         self.root = None
         self.geom_obj = None
+        self.mesh_obj = None
         self.view_state = None
         self.geometry_only = False
         self.analysis = None
 
-    def set_context(self, geom_obj, view_state, geometry_only=False, analysis=None):
+    def set_context(
+        self, geom_obj, view_state, geometry_only=False, analysis=None, mesh_obj=None
+    ):
         """
         Describe geom_obj. With geometry_only the colour modes that group by
         category are passed over: their categories are keyed by the elements of
         the analysis geometry, which say nothing about a chain step's input.
+        mesh_obj is the analysis mesh container; the Mesh stage builds its tree
+        from that topology instead of the geometry.
         """
         self.geom_obj = geom_obj
+        self.mesh_obj = mesh_obj
         self.view_state = view_state
         self.geometry_only = geometry_only
         self.analysis = analysis
@@ -451,6 +463,7 @@ class GeometryModel(QAbstractItemModel):
 
     def clear(self):
         self.geom_obj = None
+        self.mesh_obj = None
         self.view_state = None
         self.geometry_only = False
         self.analysis = None
@@ -464,25 +477,31 @@ class GeometryModel(QAbstractItemModel):
     def update_model(self):
         # An analysis that only places others has no geometry of its own, and
         # the instances it places are all there is to describe.
-        if not self.view_state or (not self.geom_obj and not self.analysis):
+        if not self.view_state or (
+            not self.geom_obj and not self.mesh_obj and not self.analysis
+        ):
             self.root = None
             return
 
         color_mode = self.view_state.getColorMode()
         under = self.view_state.getUnderAchievedElements() or {}
+        mesh_stage = self.view_state.getActiveStage() == "Mesh"
 
         if color_mode in ("Material", "CellType") and not self.geometry_only:
+            # Materials are assigned to geometry references and CellType lists
+            # no topology, so both stay geometry-based in every stage.
             self.root = self._build_category_tree(color_mode, under)
         else:
-            self.root = self._build_geometry_tree(color_mode, under)
+            self.root = self._build_geometry_tree(color_mode, under, mesh_stage=mesh_stage)
 
         if self.root:
             self._attach_state(self.root)
 
-    def _import_places(self):
+    def _import_places(self, need_mesh=False):
         """
         Every instance reachable from the analysis, outer ones before the
-        instances nested in them.
+        instances nested in them. need_mesh also resolves the mesh container
+        each instance draws, which only the Mesh stage has a use for.
 
         An import draws its nested imports itself, so a pick anywhere in the
         subtree is reported on the outermost import; that is the object to hand
@@ -502,10 +521,17 @@ class GeometryModel(QAbstractItemModel):
                 src = None
             # sourceGeometry() is C++ only; an import has no Python type.
             src_geom = femutils.get_reference_geometry(src) if src is not None else None
+            src_meshes = (
+                mt.get_member(src, "Fem::FemMeshShapeGroup")
+                if need_mesh and src is not None
+                else []
+            )
+            src_mesh = src_meshes[0] if src_meshes else None
             places.append(
                 _ImportPlace(
                     imp,
                     src_geom,
+                    src_mesh,
                     parent_path,
                     path_prefix,
                     outer,
@@ -528,46 +554,91 @@ class GeometryModel(QAbstractItemModel):
             walk(imp, "", imp, "", [])
         return places
 
-    def _root_node(self):
+    def _root_node(self, mesh_stage=False):
         """
-        Head of the tree: the geometry it describes, or the analysis itself when
-        that has none of its own and only places other analyses.
+        Head of the tree: the geometry or mesh it describes, or the analysis
+        itself when that has none of its own and only places other analyses.
         """
-        owner = self.geom_obj if self.geom_obj is not None else self.analysis
-        return ElementNode(owner.Label, target_obj=self.geom_obj)
+        if mesh_stage and self.mesh_obj is not None:
+            owner = self.mesh_obj
+        elif self.geom_obj is not None:
+            owner = self.geom_obj
+        else:
+            owner = self.analysis
+        target = None if mesh_stage else self.geom_obj
+        return ElementNode(owner.Label if owner is not None else "", target_obj=target)
 
-    def _build_geometry_tree(self, color_mode, under):
-        root = self._root_node()
+    def _build_geometry_tree(self, color_mode, under, mesh_stage=False):
+        root = self._root_node(mesh_stage=mesh_stage)
         categories = {c["key"]: c for c in (self.view_state.getCategories() or [])}
-        if self.geom_obj is not None:
-            self._append_geometry_components(
-                self.geom_obj, root, "", self.geom_obj, "", categories, color_mode, under
+        if mesh_stage:
+            if self.mesh_obj is not None:
+                self._append_topology_components(
+                    self.mesh_obj,
+                    root,
+                    "",
+                    None,
+                    "",
+                    categories,
+                    color_mode,
+                    under=None,
+                    selectable=False,
+                )
+        elif self.geom_obj is not None:
+            self._append_topology_components(
+                self.geom_obj,
+                root,
+                "",
+                self.geom_obj,
+                "",
+                categories,
+                color_mode,
+                under,
             )
         if self.analysis and not self.geometry_only:
             nodes = {"": root}
-            for place in self._import_places():
+            for place in self._import_places(need_mesh=mesh_stage):
                 parent = nodes.get(place.parent_path, root)
-                imp_node = ElementNode(place.imp.Label, parent, target_obj=place.outer)
+                # Mesh rows carry no 3D selection link: the preprocess mesh VP
+                # returns no subelement names.
+                target = None if mesh_stage else place.outer
+                imp_node = ElementNode(place.imp.Label, parent, target_obj=target)
                 parent.children.append(imp_node)
                 nodes[place.path_prefix] = imp_node
-                if place.geom is None:
-                    continue
-                self._append_geometry_components(
-                    place.geom,
-                    imp_node,
-                    place.path_prefix,
-                    place.outer,
-                    place.sub_prefix,
-                    categories,
-                    color_mode,
-                    under,
-                    suppressed=set(place.suppressed),
-                )
+                if mesh_stage:
+                    if place.mesh is None:
+                        continue
+                    self._append_topology_components(
+                        place.mesh,
+                        imp_node,
+                        place.path_prefix,
+                        None,
+                        "",
+                        categories,
+                        color_mode,
+                        under=None,
+                        selectable=False,
+                        suppressed=set(place.suppressed),
+                    )
+                else:
+                    if place.geom is None:
+                        continue
+                    self._append_topology_components(
+                        place.geom,
+                        imp_node,
+                        place.path_prefix,
+                        place.outer,
+                        place.sub_prefix,
+                        categories,
+                        color_mode,
+                        under,
+                        suppressed=set(place.suppressed),
+                    )
         return root
 
-    def _append_geometry_components(
+    def _append_topology_components(
         self,
-        geom_obj,
+        provider,
         root,
         path_prefix,
         target,
@@ -576,13 +647,19 @@ class GeometryModel(QAbstractItemModel):
         color_mode,
         under,
         suppressed=(),
+        selectable=True,
     ):
         # Which row carries the swatch is the colour mode itself. Colouring by
         # component makes one statement about the whole component, and painting
         # it again on every element under it repeats that statement without
         # adding to it — worse, it reads as if the elements had been told apart.
+        #
+        # provider is either FemGeometry or FemMeshShapeGroup: both expose
+        # getComponentCount / getToplevelElements / getAnalysisDimension. The
+        # mesh group answers these from the merge cache, which rebuilds only
+        # when a child mesh changed, so reading it per rebuild costs nothing.
         per_component = color_mode == "Component"
-        for i in range(geom_obj.getComponentCount()):
+        for i in range(provider.getComponentCount()):
             # A component an instance leaves out is neither drawn nor solved
             # with, so it has nothing to say in the tree either.
             if (i + 1) in suppressed:
@@ -595,10 +672,10 @@ class GeometryModel(QAbstractItemModel):
                 color=_color_tuple(component_cat["color"]) if component_cat else None,
             )
             root.children.append(geometry_node)
-            for sub in geom_obj.getToplevelElements(i):
+            for sub in provider.getToplevelElements(i):
                 dim = None
                 try:
-                    dim = geom_obj.getAnalysisDimension(sub)
+                    dim = provider.getAnalysisDimension(sub)
                 except Exception:
                     pass
                 element_path = f"{path_prefix}{sub}"
@@ -606,12 +683,15 @@ class GeometryModel(QAbstractItemModel):
                 node = ElementNode(
                     sub,
                     geometry_node,
+                    # Kept even where the row is not selectable: element is also
+                    # the key the row hides and shows itself by.
                     element=element_path,
                     target_obj=target,
-                    sub_name=f"{sub_prefix}{sub}",
+                    sub_name=f"{sub_prefix}{sub}" if selectable else None,
                     color=_color_tuple(cat["color"]) if cat else None,
                     dim_badge=dim if dim is not None and dim >= 0 else None,
-                    mesh_achieved=under.get(element_path),
+                    mesh_achieved=under.get(element_path) if under else None,
+                    selectable=selectable,
                 )
                 geometry_node.children.append(node)
 
@@ -906,6 +986,7 @@ class GeometryExplorer(QtGui.QTreeView):
         super().__init__(parent)
         self.active_analysis = None
         self.geom_obj = None
+        self.mesh_obj = None
         self.view_state = None
         self._vs_callback = None
         self._suspend_vs_rebuild = False
@@ -1121,16 +1202,20 @@ class GeometryExplorer(QtGui.QTreeView):
         self._model.beginResetModel()
         self.view_state = None
         self.geom_obj = None
+        self.mesh_obj = None
 
         if self.active_analysis:
             self.view_state = FemGui.getAnalysisViewState(self.active_analysis)
             geom_list = mt.get_member(self.active_analysis, "Fem::FemGeometry")
             self.geom_obj = geom_list[0] if geom_list else None
+            mesh_list = mt.get_member(self.active_analysis, "Fem::FemMeshShapeGroup")
+            self.mesh_obj = mesh_list[0] if mesh_list else None
             self._model.set_context(
                 self._tree_object(),
                 self.view_state,
                 geometry_only=self.edit_obj is not None,
                 analysis=self.active_analysis,
+                mesh_obj=self.mesh_obj,
             )
         else:
             self._forget_edit_session()
@@ -1168,15 +1253,19 @@ class GeometryExplorer(QtGui.QTreeView):
 
     def _app_created_object(self, obj):
         obj = _app_document_object(obj)
-        if self.active_analysis and obj and obj.isDerivedFrom("Fem::FemGeometry"):
+        if not self.active_analysis or not obj:
+            return
+        if obj.isDerivedFrom("Fem::FemGeometry") or obj.isDerivedFrom("Fem::FemMeshShapeGroup"):
             self.setup_analysis()
 
     def _app_changed_object(self, obj, prop=None):
         if not self.active_analysis or prop is None:
             return
         # An import contributes rows of its own, so what it places and what it
-        # leaves out change the tree just like a geometry change does.
-        if prop not in ("Shape", "Group", "Analysis", "SuppressedComponents"):
+        # leaves out change the tree just like a geometry change does. The mesh
+        # container's Group is what the Mesh-stage tree is built from, and a
+        # child that re-meshes changes that tree without the Group moving.
+        if prop not in ("Shape", "Group", "Analysis", "SuppressedComponents", "FemMesh"):
             return
         obj = _app_document_object(obj)
         if not obj:
@@ -1186,6 +1275,19 @@ class GeometryExplorer(QtGui.QTreeView):
                 self.setup_analysis()
                 return
             if obj.isDerivedFrom("Fem::FemGeometry") and prop in ("Shape", "Group"):
+                self.setup_analysis()
+                return
+            if obj.isDerivedFrom("Fem::FemMeshShapeGroup") and prop in ("Group", "Shape"):
+                self.setup_analysis()
+                return
+            # A child that re-meshes rebuilds the merged topology the Mesh stage
+            # reads. The group derives from FemMeshObject too, but its own
+            # FemMesh is that merge and is written without notifying.
+            if (
+                prop == "FemMesh"
+                and obj.isDerivedFrom("Fem::FemMeshObject")
+                and not obj.isDerivedFrom("Fem::FemMeshShapeGroup")
+            ):
                 self.setup_analysis()
                 return
             if _changes_imports(self.active_analysis, obj, prop):
@@ -1440,13 +1542,13 @@ class GeometryExplorer(QtGui.QTreeView):
             names = []
 
             def walk(node):
-                if node.element and (node.target_obj or target):
+                if node.element and node.selectable and (node.target_obj or target):
                     names.append((node.target_obj or target, node.sub_name or node.element))
                 for child in node.children:
                     walk(child)
 
             if item.element:
-                if item.target_obj or target:
+                if item.selectable and (item.target_obj or target):
                     names.append((item.target_obj or target, item.sub_name or item.element))
                 return names
 

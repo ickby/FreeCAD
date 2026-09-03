@@ -616,6 +616,13 @@ void FemMeshShapeGroup::ensureTopology() const
     if (m_topologyValid) {
         return;
     }
+    // An accessor called re-entrantly during a merge would clear the flag the
+    // merge is about to set and then return before filling anything, leaving
+    // the caller reading an empty topology. Unreachable today; the panel is
+    // about to become the first external caller of these accessors.
+    if (m_merging) {
+        return;
+    }
     // The topology is filled by the merge, and a merge that is still valid
     // would return before filling it, so the cache has to be dropped first.
     auto* self = const_cast<FemMeshShapeGroup*>(this);
@@ -631,6 +638,9 @@ const MeshTopology& FemMeshShapeGroup::getMeshTopology()
 
 std::vector<int> FemMeshShapeGroup::groupElementsByName(const std::string& name) const
 {
+    if (m_merging) {
+        return {};
+    }
     ensureTopology();
 
     if (auto* smesh = const_cast<Fem::FemMesh&>(FemMesh.getValue()).getSMesh()) {
@@ -659,12 +669,18 @@ std::vector<int> FemMeshShapeGroup::groupElementsByName(const std::string& name)
 
 std::size_t FemMeshShapeGroup::componentCount() const
 {
+    if (m_merging) {
+        return 0;
+    }
     ensureTopology();
     return m_topology.componentCount();
 }
 
 std::vector<std::string> FemMeshShapeGroup::toplevelElements(componentIdType component) const
 {
+    if (m_merging) {
+        return {};
+    }
     ensureTopology();
     if (component >= m_topology.componentToplevels.size()) {
         return {};
@@ -674,6 +690,9 @@ std::vector<std::string> FemMeshShapeGroup::toplevelElements(componentIdType com
 
 std::vector<std::string> FemMeshShapeGroup::entities(const std::string& toplevel) const
 {
+    if (m_merging) {
+        return {};
+    }
     ensureTopology();
     auto it = m_topology.entitiesOfToplevel.find(toplevel);
     if (it == m_topology.entitiesOfToplevel.end()) {
@@ -684,6 +703,9 @@ std::vector<std::string> FemMeshShapeGroup::entities(const std::string& toplevel
 
 std::vector<std::string> FemMeshShapeGroup::entityOwners(const std::string& entity) const
 {
+    if (m_merging) {
+        return {};
+    }
     ensureTopology();
     auto it = m_topology.ownersOfEntity.find(entity);
     if (it == m_topology.ownersOfEntity.end()) {
@@ -694,6 +716,9 @@ std::vector<std::string> FemMeshShapeGroup::entityOwners(const std::string& enti
 
 int FemMeshShapeGroup::analysisDimension(const std::string& toplevel) const
 {
+    if (m_merging) {
+        return -1;
+    }
     ensureTopology();
     auto it = m_topology.dimensionOfToplevel.find(toplevel);
     if (it == m_topology.dimensionOfToplevel.end()) {
@@ -704,6 +729,9 @@ int FemMeshShapeGroup::analysisDimension(const std::string& toplevel) const
 
 int FemMeshShapeGroup::entityDimensionMask(const std::string& entity) const
 {
+    if (m_merging) {
+        return 0;
+    }
     ensureTopology();
     auto it = m_topology.dimensionMaskOfEntity.find(entity);
     if (it == m_topology.dimensionMaskOfEntity.end()) {

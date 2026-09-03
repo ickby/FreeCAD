@@ -38,6 +38,7 @@
 #include "FemMeshObject.h"
 #include "FemMeshPy.h"
 #include "FemAnalysis.h"
+#include "FemPerfLog.h"
 #include "FemSolveAssembly.h"
 #include <Mod/Part/App/PartPyCXX.h>
 #ifdef FC_USE_VTK
@@ -125,6 +126,24 @@ public:
             "buildSolveAssembly",
             &Module::buildSolveAssembly,
             "buildSolveAssembly(analysis) -- Merge native and imported meshes for solving."
+        );
+        add_varargs_method(
+            "perfEnable",
+            &Module::perfEnable,
+            "perfEnable(bool) -- Switch the timing of FEM stages on or off. "
+            "Off costs nothing, so leave it off outside a measurement."
+        );
+        add_varargs_method(
+            "perfReset",
+            &Module::perfReset,
+            "perfReset() -- Forget what has been timed so far."
+        );
+        add_varargs_method(
+            "perfReport",
+            &Module::perfReport,
+            "perfReport() -- What the timed stages spent, as a list of "
+            "(name, count, total_seconds, self_seconds) in the order the stages were first "
+            "seen. total counts the stages nested in one, self does not."
         );
         initialize("This module is the Fem module.");  // register with Python
     }
@@ -477,6 +496,42 @@ private:
         }
         tuple.setItem(5, entityDimensions);
         return tuple;
+    }
+
+    Py::Object perfEnable(const Py::Tuple& args)
+    {
+        PyObject* on = Py_True;
+        if (!PyArg_ParseTuple(args.ptr(), "|O", &on)) {
+            throw Py::Exception();
+        }
+        PerfLog::instance().setEnabled(PyObject_IsTrue(on) == 1);
+        return Py::None();
+    }
+
+    Py::Object perfReset(const Py::Tuple& args)
+    {
+        if (!PyArg_ParseTuple(args.ptr(), "")) {
+            throw Py::Exception();
+        }
+        PerfLog::instance().clear();
+        return Py::None();
+    }
+
+    Py::Object perfReport(const Py::Tuple& args)
+    {
+        if (!PyArg_ParseTuple(args.ptr(), "")) {
+            throw Py::Exception();
+        }
+        Py::List result;
+        for (const auto& entry : PerfLog::instance().report()) {
+            Py::Tuple row(4);
+            row.setItem(0, Py::String(entry.name));
+            row.setItem(1, Py::Long(static_cast<long>(entry.count)));
+            row.setItem(2, Py::Float(entry.total));
+            row.setItem(3, Py::Float(entry.self));
+            result.append(row);
+        }
+        return result;
     }
 };
 

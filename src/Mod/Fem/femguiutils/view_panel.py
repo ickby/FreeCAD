@@ -618,7 +618,12 @@ class GeometryModel(QAbstractItemModel):
                         color_mode,
                         under=None,
                         selectable=False,
-                        suppressed=set(place.suppressed),
+                        # SuppressedComponents are geometry ids; resolve to
+                        # names so a fused mesh component is only dropped when
+                        # every toplevel it holds was suppressed.
+                        suppressed_names=self._suppressed_toplevels(
+                            place.geom, place.suppressed
+                        ),
                     )
                 else:
                     if place.geom is None:
@@ -636,6 +641,19 @@ class GeometryModel(QAbstractItemModel):
                     )
         return root
 
+    @staticmethod
+    def _suppressed_toplevels(geom, suppressed_ids):
+        """Toplevel names of the geometry components listed in suppressed_ids."""
+        names = set()
+        if geom is None or not suppressed_ids:
+            return names
+        for cid in suppressed_ids:
+            try:
+                names.update(geom.getToplevelElements(cid - 1))
+            except Exception:
+                pass
+        return names
+
     def _append_topology_components(
         self,
         provider,
@@ -648,6 +666,7 @@ class GeometryModel(QAbstractItemModel):
         under,
         suppressed=(),
         selectable=True,
+        suppressed_names=(),
     ):
         # Which row carries the swatch is the colour mode itself. Colouring by
         # component makes one statement about the whole component, and painting
@@ -659,11 +678,18 @@ class GeometryModel(QAbstractItemModel):
         # mesh group answers these from the merge cache, which rebuilds only
         # when a child mesh changed, so reading it per rebuild costs nothing.
         per_component = color_mode == "Component"
+        hidden = set(suppressed_names) if suppressed_names else set()
         for i in range(provider.getComponentCount()):
             # A component an instance leaves out is neither drawn nor solved
-            # with, so it has nothing to say in the tree either.
+            # with, so it has nothing to say in the tree either. Geometry ids
+            # index geometry components; mesh rows pass suppressed_names instead.
             if (i + 1) in suppressed:
                 continue
+            tops = list(provider.getToplevelElements(i))
+            if hidden:
+                tops = [t for t in tops if t not in hidden]
+                if not tops:
+                    continue
             component_cat = categories.get(f"{path_prefix}Component{i + 1}")
             geometry_node = ElementNode(
                 f"Component{i + 1}",
@@ -672,7 +698,7 @@ class GeometryModel(QAbstractItemModel):
                 color=_color_tuple(component_cat["color"]) if component_cat else None,
             )
             root.children.append(geometry_node)
-            for sub in provider.getToplevelElements(i):
+            for sub in tops:
                 dim = None
                 try:
                     dim = provider.getAnalysisDimension(sub)

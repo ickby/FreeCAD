@@ -53,7 +53,12 @@ class FemMeshShapeGroup(GeoFeature):
         ...
 
     def getTopologyRevision(self) -> int:
-        """Counter bumped when the result mesh is rebuilt."""
+        """
+        Counter bumped when the result mesh is rebuilt.
+
+        Merges first if the result mesh is out of date, so the number describes
+        the topology the next read will see rather than the previous one.
+        """
         ...
 
     def getGroupElementsByName(self, name: str, /) -> list:

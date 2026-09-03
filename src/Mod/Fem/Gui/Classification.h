@@ -38,6 +38,7 @@
 
 namespace Fem
 {
+class AnalysisTopology;
 class FemGeometry;
 class FemAnalysis;
 }
@@ -103,13 +104,20 @@ public:
      * Build the classification for the active colour mode.
      * @param meshGrid Optional; required for CellType (and cell lookups for mesh modes).
      * @param gridSource Where the element names of @a meshGrid come from.
+     * @param meshTopology The mesh group, when the Mesh stage is colouring by
+     *                     its partition rather than the geometry's. Null in
+     *                     every other stage, and it is the null that says so.
+     * @param paletteOrder Analysis-wide key -> palette index, so geometry and
+     *                     mesh classifications of the same mode agree on colour.
      */
     static std::unique_ptr<Classification> create(
         ColorMode mode,
         Fem::FemAnalysis* analysis,
         Fem::FemGeometry* geometry,
         vtkUnstructuredGrid* meshGrid = nullptr,
-        const GridSource& gridSource = {}
+        const GridSource& gridSource = {},
+        const Fem::AnalysisTopology* meshTopology = nullptr,
+        const std::map<std::string, int>* paletteOrder = nullptr
     );
 };
 
@@ -121,7 +129,9 @@ public:
         Fem::FemAnalysis* analysis,
         Fem::FemGeometry* geometry,
         vtkUnstructuredGrid* meshGrid,
-        const GridSource& gridSource = {}
+        const GridSource& gridSource = {},
+        const Fem::AnalysisTopology* meshTopology = nullptr,
+        const std::map<std::string, int>* paletteOrder = nullptr
     );
 
     std::vector<Category> categories() const override;
@@ -133,7 +143,9 @@ private:
         Fem::FemAnalysis* analysis,
         Fem::FemGeometry* geometry,
         vtkUnstructuredGrid* meshGrid,
-        const GridSource& gridSource
+        const GridSource& gridSource,
+        const Fem::AnalysisTopology* meshTopology,
+        const std::map<std::string, int>* paletteOrder
     );
 
     Fem::FemGeometry* m_geometry {nullptr};
@@ -145,10 +157,16 @@ private:
 /**
  * One colour per component, shared by everything the component is made of.
  *
- * A component is the piece of geometry that hangs together, and it is the
- * unit the user assembles an analysis from, so its faces and edges are the
- * one thing that must not be told apart here: a shell of forty faces is one
- * colour, and the next component is the next colour.
+ * A component is the piece of geometry (or mesh connectivity) that hangs
+ * together, and it is the unit the user assembles an analysis from, so its
+ * faces and edges are the one thing that must not be told apart here: a shell
+ * of forty faces is one colour, and the next component is the next colour.
+ *
+ * In the Mesh stage the components come from the mesh topology. Where that
+ * partition differs from the geometry (a mesher fusing touching parts), each
+ * mesh component inherits the colour of the geometry component it shares the
+ * most toplevels with, so as many elements as possible keep the colour they
+ * had in the Geometry stage.
  */
 class FemGuiExport ComponentClassification: public Classification
 {
@@ -157,7 +175,9 @@ public:
         Fem::FemAnalysis* analysis,
         Fem::FemGeometry* geometry,
         vtkUnstructuredGrid* meshGrid,
-        const GridSource& gridSource = {}
+        const GridSource& gridSource = {},
+        const Fem::AnalysisTopology* meshTopology = nullptr,
+        const std::map<std::string, int>* paletteOrder = nullptr
     );
 
     std::vector<Category> categories() const override;
@@ -169,7 +189,9 @@ private:
         Fem::FemAnalysis* analysis,
         Fem::FemGeometry* geometry,
         vtkUnstructuredGrid* meshGrid,
-        const GridSource& gridSource
+        const GridSource& gridSource,
+        const Fem::AnalysisTopology* meshTopology,
+        const std::map<std::string, int>* paletteOrder
     );
 
     Fem::FemGeometry* m_geometry {nullptr};
@@ -190,16 +212,26 @@ class FemGuiExport MaterialClassification: public Classification
 public:
     static constexpr const char* NoMaterialKey = "__no_material__";
 
-    MaterialClassification(Fem::FemAnalysis* analysis, Fem::FemGeometry* geometry,
-                           vtkUnstructuredGrid* meshGrid, const GridSource& gridSource = {});
+    MaterialClassification(
+        Fem::FemAnalysis* analysis,
+        Fem::FemGeometry* geometry,
+        vtkUnstructuredGrid* meshGrid,
+        const GridSource& gridSource = {},
+        const std::map<std::string, int>* paletteOrder = nullptr
+    );
 
     std::vector<Category> categories() const override;
     int categoryOfElement(const std::string& element) const override;
     int categoryOfCell(vtkIdType cell) const override;
 
 private:
-    void build(Fem::FemAnalysis* analysis, Fem::FemGeometry* geometry,
-               vtkUnstructuredGrid* meshGrid, const GridSource& gridSource);
+    void build(
+        Fem::FemAnalysis* analysis,
+        Fem::FemGeometry* geometry,
+        vtkUnstructuredGrid* meshGrid,
+        const GridSource& gridSource,
+        const std::map<std::string, int>* paletteOrder
+    );
 
     Fem::FemGeometry* m_geometry {nullptr};
     std::vector<Category> m_categories;

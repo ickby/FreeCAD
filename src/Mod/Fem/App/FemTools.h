@@ -60,6 +60,7 @@ namespace Fem
 class FemAnalysis;
 class FemAnalysisImport;
 class FemGeometry;
+class FemMeshShapeGroup;
 
 class FemExport Tools
 {
@@ -155,6 +156,22 @@ public:
     static std::vector<std::pair<std::string, std::vector<std::string>>> importedComponents(
         const Fem::FemAnalysis* analysis
     );
+    /*!
+     Like importedComponents(), but grouped by the source mesh topology.
+
+     A mesher may fuse geometry components (Gmsh CoherenceMesh), so the Mesh
+     stage colours and names components from the mesh. SuppressedComponents
+     still hold geometry component ids: those resolve to toplevel names via the
+     source geometry, and any mesh component left empty after dropping them is
+     omitted.
+    */
+    static std::vector<std::pair<std::string, std::vector<std::string>>> importedMeshComponents(
+        const Fem::FemAnalysis* analysis
+    );
+    /*!
+     The mesh container of an analysis, or nullptr.
+    */
+    static Fem::FemMeshShapeGroup* getAnalysisMeshGroup(const Fem::FemAnalysis* analysis);
     /*!
      Whether *member* is switched off for the instance chain leading to it.
 

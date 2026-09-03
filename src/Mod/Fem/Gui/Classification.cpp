@@ -45,6 +45,7 @@
 #include <Mod/Fem/App/FemAnalysis.h>
 #include <Mod/Fem/App/FemAnalysisImport.h>
 #include <Mod/Fem/App/FemGeometry.h>
+#include <Mod/Fem/App/FemTopology.h>
 #include <Mod/Fem/App/FemTools.h>
 
 using namespace FemGui;
@@ -56,7 +57,9 @@ int ensureCategory(
     std::vector<Category>& categories,
     std::map<std::string, int>& keyToIndex,
     const std::string& key,
-    const std::string& label
+    const std::string& label,
+    const std::map<std::string, int>* paletteOrder = nullptr,
+    int forcedPaletteIndex = -1
 )
 {
     auto it = keyToIndex.find(key);
@@ -67,7 +70,17 @@ int ensureCategory(
     cat.key = key;
     cat.label = label.empty() ? key : label;
     const int idx = static_cast<int>(categories.size());
-    cat.color = Classification::colorForIndex(idx);
+    int palette = forcedPaletteIndex;
+    if (palette < 0 && paletteOrder) {
+        auto pit = paletteOrder->find(key);
+        if (pit != paletteOrder->end()) {
+            palette = pit->second;
+        }
+    }
+    if (palette < 0) {
+        palette = idx;
+    }
+    cat.color = Classification::colorForIndex(palette);
     categories.push_back(std::move(cat));
     keyToIndex[key] = idx;
     return idx;
@@ -317,7 +330,9 @@ std::unique_ptr<Classification> Classification::create(
     Fem::FemAnalysis* analysis,
     Fem::FemGeometry* geometry,
     vtkUnstructuredGrid* meshGrid,
-    const GridSource& gridSource
+    const GridSource& gridSource,
+    const Fem::AnalysisTopology* meshTopology,
+    const std::map<std::string, int>* paletteOrder
 )
 {
     FEM_PERF_SCOPE("classification.build");
@@ -328,14 +343,17 @@ std::unique_ptr<Classification> Classification::create(
                 analysis,
                 geometry,
                 meshGrid,
-                gridSource
+                gridSource,
+                meshTopology,
+                paletteOrder
             );
         case ColorMode::Material:
             return std::make_unique<MaterialClassification>(
                 analysis,
                 geometry,
                 meshGrid,
-                gridSource
+                gridSource,
+                paletteOrder
             );
         case ColorMode::CellType:
             return std::make_unique<CellTypeClassification>(meshGrid, geometry, gridSource);
@@ -345,7 +363,11 @@ std::unique_ptr<Classification> Classification::create(
                 analysis,
                 geometry,
                 meshGrid,
-                gridSource
+                gridSource,
+                // Mesh catch-alls belong in the key set so a mesh-only name
+                // cannot shift the colours of the geometry elements around it.
+                meshTopology,
+                paletteOrder
             );
     }
 }
@@ -358,18 +380,22 @@ SubelementClassification::SubelementClassification(
     Fem::FemAnalysis* analysis,
     Fem::FemGeometry* geometry,
     vtkUnstructuredGrid* meshGrid,
-    const GridSource& gridSource
+    const GridSource& gridSource,
+    const Fem::AnalysisTopology* meshTopology,
+    const std::map<std::string, int>* paletteOrder
 )
     : m_geometry(geometry)
 {
-    build(analysis, geometry, meshGrid, gridSource);
+    build(analysis, geometry, meshGrid, gridSource, meshTopology, paletteOrder);
 }
 
 void SubelementClassification::build(
     Fem::FemAnalysis* analysis,
     Fem::FemGeometry* geometry,
     vtkUnstructuredGrid* meshGrid,
-    const GridSource& gridSource
+    const GridSource& gridSource,
+    const Fem::AnalysisTopology* meshTopology,
+    const std::map<std::string, int>* paletteOrder
 )
 {
     m_categories.clear();
@@ -393,6 +419,23 @@ void SubelementClassification::build(
         entities.insert(path);
     }
 
+    // Mesh catch-alls (ComponentN_Volume, …) that geometry never names. Asking
+    // the topology rather than scanning the grid keeps the category set stable
+    // without a VTK walk, and puts them in the shared palette order so they
+    // cannot shove Solid1 onto a different colour.
+    if (meshTopology) {
+        const auto n = meshTopology->componentCount();
+        for (Fem::componentIdType i = 0; i < n; ++i) {
+            for (const auto& name : meshTopology->toplevelElements(i)) {
+                entities.insert(name);
+            }
+        }
+        for (const auto& [component, elements] : Fem::Tools::importedMeshComponents(analysis)) {
+            (void)component;
+            entities.insert(elements.begin(), elements.end());
+        }
+    }
+
     if (meshGrid) {
         const vtkIdType n = meshGrid->GetNumberOfCells();
         for (vtkIdType i = 0; i < n; ++i) {
@@ -410,7 +453,7 @@ void SubelementClassification::build(
     std::vector<std::string> sorted(entities.begin(), entities.end());
     std::sort(sorted.begin(), sorted.end());
     for (const auto& key : sorted) {
-        ensureCategory(m_categories, m_keyToIndex, key, key);
+        ensureCategory(m_categories, m_keyToIndex, key, key, paletteOrder);
     }
 
     if (meshGrid) {
@@ -461,18 +504,22 @@ ComponentClassification::ComponentClassification(
     Fem::FemAnalysis* analysis,
     Fem::FemGeometry* geometry,
     vtkUnstructuredGrid* meshGrid,
-    const GridSource& gridSource
+    const GridSource& gridSource,
+    const Fem::AnalysisTopology* meshTopology,
+    const std::map<std::string, int>* paletteOrder
 )
     : m_geometry(geometry)
 {
-    build(analysis, geometry, meshGrid, gridSource);
+    build(analysis, geometry, meshGrid, gridSource, meshTopology, paletteOrder);
 }
 
 void ComponentClassification::build(
     Fem::FemAnalysis* analysis,
     Fem::FemGeometry* geometry,
     vtkUnstructuredGrid* meshGrid,
-    const GridSource& gridSource
+    const GridSource& gridSource,
+    const Fem::AnalysisTopology* meshTopology,
+    const std::map<std::string, int>* paletteOrder
 )
 {
     m_categories.clear();
@@ -480,25 +527,162 @@ void ComponentClassification::build(
     m_elementCategory.clear();
     m_cellCategory.clear();
 
-    auto addComponent = [this](const std::string& key, const std::vector<std::string>& elements) {
-        const int index = ensureCategory(m_categories, m_keyToIndex, key, key);
+    auto addComponent = [this, paletteOrder](
+                            const std::string& key,
+                            const std::vector<std::string>& elements,
+                            int forcedPalette = -1
+                        ) {
+        const int index =
+            ensureCategory(m_categories, m_keyToIndex, key, key, paletteOrder, forcedPalette);
         for (const auto& element : elements) {
             m_elementCategory[element] = index;
         }
+        return index;
     };
 
-    // In component order rather than sorted by name, which is also the order
-    // the panel tree lists them in: Component10 sorts before Component2, and
-    // the colours would then run in an order nothing else in the UI follows.
+    // Geometry toplevel -> 0-based geometry component id, for anchoring a mesh
+    // component onto the colour of the geometry piece it mostly overlaps.
+    std::map<std::string, Fem::componentIdType> geomTopToComp;
     if (geometry) {
-        const auto n = geometry->getComponents().size();
+        const auto n = geometry->componentCount();
         for (Fem::componentIdType i = 0; i < n; ++i) {
-            addComponent("Component" + std::to_string(i + 1), geometry->getToplevelElements(i));
+            for (const auto& name : geometry->toplevelElements(i)) {
+                geomTopToComp[name] = i;
+            }
         }
     }
 
-    for (const auto& [component, elements] : Fem::Tools::importedComponents(analysis)) {
-        addComponent(component, elements);
+    // Past everything the analysis-wide order has spoken for, so a component the
+    // geometry knows nothing about cannot land on a colour that is already
+    // meaningful. Indices a whole palette apart are the same colour, so the
+    // search compares hues; once every hue is taken it has to repeat one.
+    const int paletteSize = static_cast<int>(FemMeshRenderer::distinctColors().size());
+    auto nextFreePalette = [paletteOrder, paletteSize](const std::set<int>& used) {
+        int candidate = 0;
+        if (paletteOrder) {
+            for (const auto& [key, idx] : *paletteOrder) {
+                (void)key;
+                candidate = std::max(candidate, idx + 1);
+            }
+        }
+        if (paletteSize <= 0) {
+            return candidate;
+        }
+        const auto hue = [paletteSize](int idx) {
+            return ((idx % paletteSize) + paletteSize) % paletteSize;
+        };
+        std::set<int> usedHues;
+        for (int idx : used) {
+            usedHues.insert(hue(idx));
+        }
+        for (int step = 0; step < paletteSize && usedHues.contains(hue(candidate)); ++step) {
+            ++candidate;
+        }
+        return candidate;
+    };
+
+    if (meshTopology) {
+        // Mesh components first, anchored onto the geometry colours they share
+        // the most toplevels with. Ties go to the lowest geometry component id.
+        // An already-claimed geometry colour, or no overlap at all, takes the
+        // next free palette slot.
+        std::set<int> claimedPalette;
+        const auto n = meshTopology->componentCount();
+        for (Fem::componentIdType i = 0; i < n; ++i) {
+            const auto tops = meshTopology->toplevelElements(i);
+            std::map<Fem::componentIdType, int> overlap;
+            for (const auto& name : tops) {
+                auto it = geomTopToComp.find(name);
+                if (it != geomTopToComp.end()) {
+                    ++overlap[it->second];
+                }
+            }
+            int forced = -1;
+            if (!overlap.empty()) {
+                Fem::componentIdType best = overlap.begin()->first;
+                int bestCount = overlap.begin()->second;
+                for (const auto& [comp, count] : overlap) {
+                    if (count > bestCount || (count == bestCount && comp < best)) {
+                        best = comp;
+                        bestCount = count;
+                    }
+                }
+                const std::string geomKey = "Component" + std::to_string(best + 1);
+                if (paletteOrder) {
+                    auto pit = paletteOrder->find(geomKey);
+                    if (pit != paletteOrder->end() && !claimedPalette.count(pit->second)) {
+                        forced = pit->second;
+                    }
+                }
+                else if (!claimedPalette.count(static_cast<int>(best))) {
+                    forced = static_cast<int>(best);
+                }
+            }
+            if (forced < 0) {
+                forced = nextFreePalette(claimedPalette);
+            }
+            claimedPalette.insert(forced);
+            addComponent("Component" + std::to_string(i + 1), tops, forced);
+        }
+
+        // The same anchoring for the imports, whose elements carry the path of
+        // the instance they came from ("Import.Solid1") and whose component keys
+        // carry it too ("Import.Component1"). One pass over the geometry side
+        // names the owner of every element; the path makes each one unique, so
+        // there is no need to match import against import afterwards.
+        std::map<std::string, std::string> geomImportOwner;
+        for (const auto& [geomComp, geomElements] : Fem::Tools::importedComponents(analysis)) {
+            for (const auto& path : geomElements) {
+                geomImportOwner.emplace(path, geomComp);
+            }
+        }
+
+        for (const auto& [component, elements] : Fem::Tools::importedMeshComponents(analysis)) {
+            std::map<std::string, int> overlap;
+            for (const auto& path : elements) {
+                auto it = geomImportOwner.find(path);
+                if (it != geomImportOwner.end()) {
+                    ++overlap[it->second];
+                }
+            }
+            int forced = -1;
+            if (!overlap.empty()) {
+                std::string best = overlap.begin()->first;
+                int bestCount = overlap.begin()->second;
+                for (const auto& [comp, count] : overlap) {
+                    if (count > bestCount || (count == bestCount && comp < best)) {
+                        best = comp;
+                        bestCount = count;
+                    }
+                }
+                if (paletteOrder) {
+                    auto pit = paletteOrder->find(best);
+                    if (pit != paletteOrder->end() && !claimedPalette.count(pit->second)) {
+                        forced = pit->second;
+                    }
+                }
+            }
+            if (forced < 0) {
+                forced = nextFreePalette(claimedPalette);
+            }
+            claimedPalette.insert(forced);
+            addComponent(component, elements, forced);
+        }
+    }
+    else {
+        // Geometry stage: components in geometry order, which is also the order
+        // the panel tree lists them in. Component10 sorts before Component2, and
+        // the colours would then run in an order nothing else in the UI follows.
+        if (geometry) {
+            const auto n = geometry->componentCount();
+            for (Fem::componentIdType i = 0; i < n; ++i) {
+                addComponent("Component" + std::to_string(i + 1), geometry->toplevelElements(i));
+            }
+        }
+
+        for (const auto& [component, elements] : Fem::Tools::importedComponents(analysis)) {
+            addComponent(component, elements);
+        }
     }
 
     if (meshGrid) {
@@ -559,18 +743,20 @@ MaterialClassification::MaterialClassification(
     Fem::FemAnalysis* analysis,
     Fem::FemGeometry* geometry,
     vtkUnstructuredGrid* meshGrid,
-    const GridSource& gridSource
+    const GridSource& gridSource,
+    const std::map<std::string, int>* paletteOrder
 )
     : m_geometry(geometry)
 {
-    build(analysis, geometry, meshGrid, gridSource);
+    build(analysis, geometry, meshGrid, gridSource, paletteOrder);
 }
 
 void MaterialClassification::build(
     Fem::FemAnalysis* analysis,
     Fem::FemGeometry* geometry,
     vtkUnstructuredGrid* meshGrid,
-    const GridSource& gridSource
+    const GridSource& gridSource,
+    const std::map<std::string, int>* paletteOrder
 )
 {
     m_categories.clear();
@@ -658,11 +844,11 @@ void MaterialClassification::build(
                 break;
             }
         }
-        ensureCategory(m_categories, m_keyToIndex, key, label);
+        ensureCategory(m_categories, m_keyToIndex, key, label, paletteOrder);
     }
 
     if (!missed.empty()) {
-        ensureCategory(m_categories, m_keyToIndex, NoMaterialKey, "no material");
+        ensureCategory(m_categories, m_keyToIndex, NoMaterialKey, "no material", paletteOrder);
         for (const auto& e : missed) {
             elementToMatKey[e] = NoMaterialKey;
         }

@@ -25,6 +25,7 @@
 #ifndef _PreComp_
 # include <algorithm>
 # include <functional>
+# include <set>
 # include <sstream>
 #endif
 
@@ -43,6 +44,7 @@
 #include <Mod/Fem/App/FemAnalysisImport.h>
 #include <Mod/Fem/App/FemGeometry.h>
 #include <Mod/Fem/App/FemMeshShapeGroup.h>
+#include <Mod/Fem/App/FemTopology.h>
 #include <Mod/Fem/App/FemTools.h>
 
 using namespace FemGui;
@@ -486,6 +488,7 @@ std::size_t AnalysisViewState::importRevision() const
 const Classification* AnalysisViewState::classification(vtkUnstructuredGrid* meshGrid)
 {
     const ColorMode mode = colorMode();
+    const ActiveStage stage = activeStage();
 
     // Categories are keyed by the toplevel element names of the geometry, so a
     // geometry that gained or lost elements outdates all of them, and an element
@@ -498,6 +501,7 @@ const Classification* AnalysisViewState::classification(vtkUnstructuredGrid* mes
     const std::size_t revision = geometry ? geometry->revision() : 0;
     if (m_classificationRevision != revision) {
         m_classifications.clear();
+        m_paletteOrder.clear();
         m_classificationRevision = revision;
     }
 
@@ -507,21 +511,147 @@ const Classification* AnalysisViewState::classification(vtkUnstructuredGrid* mes
     const std::size_t importRevision = this->importRevision();
     if (m_classificationImportRevision != importRevision) {
         m_classifications.clear();
+        m_paletteOrder.clear();
         m_classificationImportRevision = importRevision;
     }
 
-    auto& entry = m_classifications[{mode, meshGrid}];
+    // Mesh topology only matters while the Mesh stage is colouring by it. Asking
+    // topologyRevision() forces the merge, so stay off it in the Geometry stage;
+    // paletteOrder() leaves the mesh alone there for the same reason.
+    auto* meshGroup = findMeshGroup();
+    if (stage == ActiveStage::Mesh && meshGroup) {
+        const std::size_t meshRevision = meshGroup->topologyRevision();
+        if (m_classificationMeshRevision != meshRevision) {
+            m_classifications.clear();
+            m_paletteOrder.clear();
+            m_classificationMeshRevision = meshRevision;
+        }
+    }
+
+    auto& entry = m_classifications[{mode, stage, meshGrid}];
     if (!entry) {
         const auto source = m_meshGrids.find(meshGrid);
+        const bool useMesh = (stage == ActiveStage::Mesh && meshGroup);
+        const auto& order = paletteOrder(mode, useMesh);
         entry = Classification::create(
             mode,
             m_analysis,
             geometry,
             meshGrid,
-            source != m_meshGrids.end() ? source->second : GridSource {}
+            source != m_meshGrids.end() ? source->second : GridSource {},
+            useMesh ? static_cast<const Fem::AnalysisTopology*>(meshGroup) : nullptr,
+            &order
         );
     }
     return entry.get();
+}
+
+const std::map<std::string, int>& AnalysisViewState::paletteOrder(ColorMode mode, bool withMesh)
+{
+    const auto cacheKey = std::make_pair(mode, withMesh);
+    auto it = m_paletteOrder.find(cacheKey);
+    if (it == m_paletteOrder.end()) {
+        rebuildPaletteOrder(mode, withMesh);
+        it = m_paletteOrder.find(cacheKey);
+    }
+    return it->second;
+}
+
+void AnalysisViewState::rebuildPaletteOrder(ColorMode mode, bool withMesh)
+{
+    std::map<std::string, int> order;
+    auto* geometry = findGeometry();
+    // Every mesh accessor merges on demand, so the Geometry stage asks for none
+    // of them. Its shorter map is a prefix of the one the Mesh stage gets, which
+    // is what keeps a name on the same colour across the switch.
+    auto* meshGroup = withMesh ? findMeshGroup() : nullptr;
+
+    auto assign = [&order](const std::string& key) {
+        if (!order.count(key)) {
+            order[key] = static_cast<int>(order.size());
+        }
+    };
+
+    switch (mode) {
+        case ColorMode::Component: {
+            if (geometry) {
+                const auto n = geometry->componentCount();
+                for (Fem::componentIdType i = 0; i < n; ++i) {
+                    assign("Component" + std::to_string(i + 1));
+                }
+            }
+            for (const auto& [component, elements] : Fem::Tools::importedComponents(m_analysis)) {
+                (void)elements;
+                assign(component);
+            }
+            // A mesh that fuses components has fewer of them than the geometry
+            // and so adds nothing here; one that splits them adds the surplus.
+            if (meshGroup) {
+                const auto n = meshGroup->componentCount();
+                for (Fem::componentIdType i = 0; i < n; ++i) {
+                    assign("Component" + std::to_string(i + 1));
+                }
+            }
+            if (withMesh) {
+                for (const auto& [component, elements] :
+                     Fem::Tools::importedMeshComponents(m_analysis)) {
+                    (void)elements;
+                    assign(component);
+                }
+            }
+            break;
+        }
+        case ColorMode::Subelement: {
+            // Sorted, so that the numbering follows the key set rather than the
+            // order it was gathered in. Geometry names are numbered on their own
+            // first: a mesh-only catch-all sorting before Solid1 would otherwise
+            // push it onto another colour than the Geometry stage gave it.
+            std::set<std::string> geometryKeys;
+            if (geometry) {
+                const auto n = geometry->componentCount();
+                for (Fem::componentIdType i = 0; i < n; ++i) {
+                    for (const auto& name : geometry->toplevelElements(i)) {
+                        geometryKeys.insert(name);
+                    }
+                }
+            }
+            for (const auto& path : Fem::Tools::importedToplevelElements(m_analysis)) {
+                geometryKeys.insert(path);
+            }
+            for (const auto& key : geometryKeys) {
+                assign(key);
+            }
+
+            std::set<std::string> meshKeys;
+            if (meshGroup) {
+                const auto n = meshGroup->componentCount();
+                for (Fem::componentIdType i = 0; i < n; ++i) {
+                    for (const auto& name : meshGroup->toplevelElements(i)) {
+                        meshKeys.insert(name);
+                    }
+                }
+            }
+            if (withMesh) {
+                for (const auto& [component, elements] :
+                     Fem::Tools::importedMeshComponents(m_analysis)) {
+                    (void)component;
+                    meshKeys.insert(elements.begin(), elements.end());
+                }
+            }
+            for (const auto& key : meshKeys) {
+                assign(key);
+            }
+            break;
+        }
+        case ColorMode::Material:
+        case ColorMode::CellType:
+        default:
+            // Material sorts its own keys; CellType uses cellTypeOrder(). An
+            // empty map makes ensureCategory fall back to the local index.
+            break;
+    }
+
+    m_paletteOrder[{mode, withMesh}] = std::move(order);
 }
 
 void AnalysisViewState::registerMeshGrid(vtkUnstructuredGrid* meshGrid, const GridSource& source)
@@ -542,7 +672,7 @@ void AnalysisViewState::unregisterMeshGrid(vtkUnstructuredGrid* meshGrid)
 void AnalysisViewState::forgetClassificationsOf(vtkUnstructuredGrid* meshGrid)
 {
     for (auto it = m_classifications.begin(); it != m_classifications.end();) {
-        it = (it->first.second == meshGrid) ? m_classifications.erase(it) : std::next(it);
+        it = (std::get<2>(it->first) == meshGrid) ? m_classifications.erase(it) : std::next(it);
     }
 }
 

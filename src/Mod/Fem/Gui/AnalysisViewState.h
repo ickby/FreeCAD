@@ -27,6 +27,8 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include <boost/signals2.hpp>
@@ -261,6 +263,10 @@ private:
     void applyStageToGroups();
     /// Cheap fingerprint of what the placed instances contribute, see classification().
     std::size_t importRevision() const;
+    /// Analysis-wide key -> palette index for @a mode; see classification().
+    const std::map<std::string, int>& paletteOrder(ColorMode mode, bool withMesh);
+    /// Rebuild the palette-order map for @a mode from geometry, imports and mesh.
+    void rebuildPaletteOrder(ColorMode mode, bool withMesh);
     /// Mirror the persistable subset onto the analysis view provider.
     void persist() const;
     /// Drop the cached classifications of one grid, in every colour mode.
@@ -286,16 +292,25 @@ private:
     std::map<std::string, ClippingPlane> m_clipPlanes;
     std::map<std::string, int> m_underAchieved;
 
-    /// One classification per mesh grid; the null key serves grid-less callers.
-    // Keyed by colour mode as well as by grid, because the mode belongs to the
-    // stage and a switch of stage swings it back and forth. Dropping the other
-    // mode's work on every switch would mean rebuilding it on the way back.
-    mutable std::map<std::pair<ColorMode, vtkUnstructuredGrid*>, std::unique_ptr<Classification>>
+    /// One classification per (mode, stage, mesh grid); null grid serves
+    /// grid-less callers. Stage is part of the key because Component means
+    /// geometry components in the Geometry stage and mesh components in the
+    /// Mesh stage, and the two must not share a cached classification.
+    mutable std::map<
+        std::tuple<ColorMode, ActiveStage, vtkUnstructuredGrid*>,
+        std::unique_ptr<Classification>>
         m_classifications;
     /// Geometry revision the cached classifications were built from
     mutable std::size_t m_classificationRevision {0};
     /// Import fingerprint the cached classifications were built from
     mutable std::size_t m_classificationImportRevision {0};
+    /// Mesh topology revision the cached classifications were built from
+    mutable std::size_t m_classificationMeshRevision {0};
+    /// Analysis-wide key -> palette index, per colour mode and with or without
+    /// the mesh keys. The mesh keys are only ever appended behind the geometry
+    /// ones, so a key the geometry names lands on the same colour in both, and
+    /// the Geometry stage can be served without merging the mesh to find out.
+    mutable std::map<std::pair<ColorMode, bool>, std::map<std::string, int>> m_paletteOrder;
     std::map<vtkUnstructuredGrid*, GridSource> m_meshGrids;
 
     boost::signals2::signal<void()> m_changed;

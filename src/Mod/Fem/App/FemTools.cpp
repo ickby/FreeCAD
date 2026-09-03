@@ -61,6 +61,7 @@
 #include "FemAnalysis.h"
 #include "FemAnalysisImport.h"
 #include "FemGeometry.h"
+#include "FemMeshShapeGroup.h"
 #include "FemTools.h"
 
 
@@ -533,6 +534,99 @@ std::vector<std::pair<std::string, std::vector<std::string>>> Fem::Tools::import
     std::vector<std::pair<std::string, std::vector<std::string>>> out;
     std::vector<const Fem::FemAnalysisImport*> chain;
     collectImportedComponents(analysis, {}, chain, out);
+    return out;
+}
+
+Fem::FemMeshShapeGroup* Fem::Tools::getAnalysisMeshGroup(const Fem::FemAnalysis* analysis)
+{
+    if (!analysis) {
+        return nullptr;
+    }
+    for (auto* obj : analysis->Group.getValues()) {
+        if (auto* mesh = Base::freecad_cast<Fem::FemMeshShapeGroup*>(obj)) {
+            return mesh;
+        }
+    }
+    return nullptr;
+}
+
+namespace
+{
+
+std::set<std::string> suppressedToplevelNames(const Fem::FemAnalysisImport* imp)
+{
+    std::set<std::string> hidden;
+    auto* geom = imp->sourceGeometry();
+    if (!geom) {
+        return hidden;
+    }
+    const auto suppressedValues = imp->SuppressedComponents.getValues();
+    const std::set<long> suppressed(suppressedValues.begin(), suppressedValues.end());
+    Fem::componentIdType componentId = 0;
+    for (auto& component : geom->getComponents()) {
+        ++componentId;
+        if (!suppressed.contains(static_cast<long>(componentId))) {
+            continue;
+        }
+        for (const auto& name : geom->getToplevelElements(component)) {
+            hidden.insert(name);
+        }
+    }
+    return hidden;
+}
+
+void collectImportedMeshComponents(
+    const Fem::FemAnalysis* analysis,
+    const std::string& prefix,
+    std::vector<const Fem::FemAnalysisImport*>& chain,
+    std::vector<std::pair<std::string, std::vector<std::string>>>& out
+)
+{
+    for (auto* imp : Fem::Tools::analysisImports(analysis)) {
+        if (std::ranges::find(chain, imp) != chain.end()) {
+            continue;
+        }
+        const char* name = imp->getNameInDocument();
+        const std::string path = prefix.empty() ? std::string(name ? name : "Import")
+                                                : prefix + "." + (name ? name : "Import");
+
+        if (auto* src = Base::freecad_cast<Fem::FemAnalysis*>(imp->Analysis.getValue())) {
+            if (auto* mesh = Fem::Tools::getAnalysisMeshGroup(src)) {
+                const auto hidden = suppressedToplevelNames(imp);
+                const auto n = mesh->componentCount();
+                for (Fem::componentIdType i = 0; i < n; ++i) {
+                    std::vector<std::string> elements;
+                    for (const auto& element : mesh->toplevelElements(i)) {
+                        if (hidden.contains(element)) {
+                            continue;
+                        }
+                        elements.push_back(path + "." + element);
+                    }
+                    if (elements.empty()) {
+                        continue;
+                    }
+                    out.emplace_back(
+                        path + ".Component" + std::to_string(i + 1),
+                        std::move(elements)
+                    );
+                }
+            }
+            chain.push_back(imp);
+            collectImportedMeshComponents(src, path, chain, out);
+            chain.pop_back();
+        }
+    }
+}
+
+}  // namespace
+
+std::vector<std::pair<std::string, std::vector<std::string>>> Fem::Tools::importedMeshComponents(
+    const Fem::FemAnalysis* analysis
+)
+{
+    std::vector<std::pair<std::string, std::vector<std::string>>> out;
+    std::vector<const Fem::FemAnalysisImport*> chain;
+    collectImportedMeshComponents(analysis, {}, chain, out);
     return out;
 }
 

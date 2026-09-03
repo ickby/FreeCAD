@@ -1822,6 +1822,28 @@ def _make_groupless_tet_mesh():
     return mesh, vol
 
 
+def _make_fused_two_solid_tet_mesh():
+    """
+    Two volume groups that share nodes, so the mesh is one component while
+    geometry that names the same solids as two components stays two. Models
+    what Gmsh CoherenceMesh does to touching parts.
+    """
+    mesh = Fem.FemMesh()
+    # Shared face nodes 1,2,3; Solid1 apex at 4, Solid2 apex at 5.
+    mesh.addNode(0, 0, 0, 1)
+    mesh.addNode(1, 0, 0, 2)
+    mesh.addNode(0, 1, 0, 3)
+    mesh.addNode(0, 0, 1, 4)
+    mesh.addNode(0, 0, -1, 5)
+    vol1 = mesh.addVolume([1, 2, 3, 4])
+    vol2 = mesh.addVolume([1, 2, 3, 5])
+    g1 = mesh.addGroup("Solid1", "Volume")
+    mesh.addGroupElements(g1, [vol1])
+    g2 = mesh.addGroup("Solid2", "Volume")
+    mesh.addGroupElements(g2, [vol2])
+    return mesh
+
+
 class TestMeshTopology(unittest.TestCase):
     fcc_print("import TestMeshTopology")
 
@@ -1972,6 +1994,125 @@ class TestMeshTopology(unittest.TestCase):
 
         report = {name: count for name, count, _total, _self in Fem.perfReport()}
         self.assertEqual(report.get("merge", 0), 1)
+
+    def _fused_analysis(self):
+        """
+        Two geometry components whose mesh shares nodes (one mesh component).
+        """
+        analysis = ObjectsFem.makeAnalysis(self.document, "Analysis")
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        # Touching boxes share a face geometrically but not topologically, so
+        # they stay two components — the same setup CoherenceMesh then fuses.
+        geom.Shape = Part.makeCompound(
+            [Part.makeBox(10, 10, 10), Part.makeBox(10, 10, 10, FreeCAD.Vector(10, 0, 0))]
+        )
+        analysis.addObject(geom)
+
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "Mesh")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        child.FemMesh = _make_fused_two_solid_tet_mesh()
+        group.Group = [child]
+        group.Shape = geom
+        analysis.addObject(group)
+        self.document.recompute()
+        return analysis, geom, group
+
+    def test_fused_mesh_is_one_component_while_geometry_stays_two(self):
+        """Gmsh CoherenceMesh leaves geometry apart and joins the mesh."""
+        _, geom, group = self._fused_analysis()
+        self.assertEqual(geom.getComponentCount(), 2)
+        self.assertEqual(sorted(geom.getToplevelElements(0)), ["Solid1"])
+        self.assertEqual(sorted(geom.getToplevelElements(1)), ["Solid2"])
+
+        _ = group.FemMesh
+        self.assertEqual(group.getComponentCount(), 1)
+        self.assertEqual(sorted(group.getToplevelElements(0)), ["Solid1", "Solid2"])
+
+    def test_component_colour_follows_mesh_partition_and_keeps_shared_colour(self):
+        """
+        Mesh-stage Component categories come from the mesh, not the geometry.
+        A fusion that joins Solid1 and Solid2 into one mesh component yields a
+        single category, and that category keeps the colour of the geometry
+        component that contributed the most (here Component1, one solid each
+        so the tie goes to the lower id).
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for AnalysisViewState")
+
+        import FemGui
+
+        analysis, geom, group = self._fused_analysis()
+        state = FemGui.getAnalysisViewState(analysis)
+
+        # Colour mode is stage-scoped, so it has to be set again after each
+        # switch rather than once up front.
+        state.setActiveStage("Geometry")
+        state.setColorMode("Component")
+        geom_cats = {c["key"]: tuple(c["color"][:3]) for c in state.getCategories()}
+        self.assertEqual(sorted(geom_cats), ["Component1", "Component2"])
+        colour1 = geom_cats["Component1"]
+
+        state.setActiveStage("Mesh")
+        state.setColorMode("Component")
+        mesh_cats = {c["key"]: tuple(c["color"][:3]) for c in state.getCategories()}
+        self.assertEqual(
+            sorted(k for k in mesh_cats if k.startswith("Component")),
+            ["Component1"],
+            "the fused mesh is one component in the Mesh stage",
+        )
+        self.assertEqual(
+            mesh_cats["Component1"],
+            colour1,
+            "the surviving mesh component keeps Component1's geometry colour",
+        )
+        self.assertEqual(state.categoryOfElement("Solid1"), state.categoryOfElement("Solid2"))
+        self.assertEqual(state.categoryOfElement("Solid1"), 0)
+
+    def test_subelement_catch_all_does_not_shift_geometry_colours(self):
+        """
+        A mesh-only catch-all name must not shove Solid1 onto a different
+        palette slot than the Geometry stage used.
+        """
+        if not FreeCAD.GuiUp:
+            self.skipTest("GUI required for AnalysisViewState")
+
+        import FemGui
+
+        analysis = ObjectsFem.makeAnalysis(self.document, "Analysis")
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        geom.Shape = Part.makeBox(10, 10, 10)
+        analysis.addObject(geom)
+
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "Mesh")
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        mesh, _ = _make_groupless_tet_mesh()
+        child.FemMesh = mesh
+        group.Group = [child]
+        group.Shape = geom
+        analysis.addObject(group)
+        self.document.recompute()
+
+        state = FemGui.getAnalysisViewState(analysis)
+
+        # Colour mode is stage-scoped, so it has to be set again after each
+        # switch rather than once up front.
+        state.setActiveStage("Geometry")
+        state.setColorMode("Subelement")
+        geom_solid = next(
+            c for c in state.getCategories() if c["key"] == "Solid1"
+        )
+        geom_colour = tuple(geom_solid["color"][:3])
+
+        state.setActiveStage("Mesh")
+        state.setColorMode("Subelement")
+        mesh_cats = {c["key"]: tuple(c["color"][:3]) for c in state.getCategories()}
+        self.assertIn("Component1_Volume", mesh_cats)
+        self.assertIn("Solid1", mesh_cats)
+        self.assertEqual(
+            mesh_cats["Solid1"],
+            geom_colour,
+            "Solid1 keeps its geometry-stage colour when a catch-all appears",
+        )
 
 
 class TestExportHighest(unittest.TestCase):

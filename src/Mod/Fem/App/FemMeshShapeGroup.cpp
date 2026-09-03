@@ -742,6 +742,11 @@ int FemMeshShapeGroup::entityDimensionMask(const std::string& entity) const
 
 std::size_t FemMeshShapeGroup::topologyRevision() const
 {
+    // Callers that stamp a classification against this need the number of the
+    // topology that is about to be read, not the previous merge. The merge
+    // itself is still silent, so without forcing here a mesher re-run would
+    // leave the stamp looking current until something else asked for the mesh.
+    ensureTopology();
     return m_mergeRevision;
 }
 

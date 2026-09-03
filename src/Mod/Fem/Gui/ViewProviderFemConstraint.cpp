@@ -424,22 +424,6 @@ void ViewProviderFemConstraint::transformExtraSymbol() const
 }
 
 
-// OvG: Visibility automation show parts and hide meshes on activation of a constraint
-std::string ViewProviderFemConstraint::gethideMeshShowPartStr(const std::string showConstr)
-{
-    return "for amesh in App.activeDocument().Objects:\n\
-    if \""
-        + showConstr + "\" == amesh.Name:\n\
-        amesh.ViewObject.Visibility = True\n\
-    elif \"Mesh\" in amesh.TypeId:\n\
-        amesh.ViewObject.Visibility = False\n";
-}
-
-std::string ViewProviderFemConstraint::gethideMeshShowPartStr()
-{
-    return ViewProviderFemConstraint::gethideMeshShowPartStr("");
-}
-
 bool ViewProviderFemConstraint::setEdit(int ModNum)
 {
     // The reference slots write References as they are picked, so Cancel has
@@ -450,11 +434,6 @@ bool ViewProviderFemConstraint::setEdit(int ModNum)
             document->openCommand(QT_TRANSLATE_NOOP("Command", "Edit constraint"));
         }
     }
-    Gui::Command::doCommand(
-        Gui::Command::Doc,
-        "%s",
-        ViewProviderFemConstraint::gethideMeshShowPartStr().c_str()
-    );
     return Gui::ViewProviderGeometryObject::setEdit(ModNum);
 }
 

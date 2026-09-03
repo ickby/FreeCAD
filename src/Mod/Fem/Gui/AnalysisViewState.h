@@ -46,6 +46,11 @@ class FemGeometry;
 class FemMeshShapeGroup;
 }
 
+namespace App
+{
+class DocumentObject;
+}
+
 namespace Gui
 {
 class ViewProviderDocumentObject;
@@ -69,6 +74,15 @@ struct Category;
 FemGuiExport void setStageMask(Gui::ViewProviderDocumentObject& vp, const char* mode);
 
 /**
+ * Start following what the user edits, so the view state can open a scope for it.
+ *
+ * Called once when the workbench module loads. Every task panel is reached
+ * through the same edit-mode signals, so nothing else in the workbench has to
+ * know about edit scopes at all.
+ */
+FemGuiExport void observeEditScopes();
+
+/**
  * Runtime view state for one analysis. Not model state — mutations never
  * recompute document objects. Persistable subset (hidden elements, clip
  * planes) is mirrored onto ViewProviderFemAnalysis as Prop_Output|Prop_Hidden
@@ -90,6 +104,43 @@ public:
 
     void beginUpdate();
     void endUpdate();
+
+    /**
+     * Open an edit scope for @a edited.
+     *
+     * A task panel is about one object, and what the view has to show while it
+     * is open follows from what the panel asks for rather than from whatever
+     * the panel's command happened to switch on the way in. The scope puts the
+     * view where @a intent needs it, remembers what it changed, and endEdit()
+     * puts it back. Nothing here is persisted: an edit is not a state the
+     * document comes back in.
+     *
+     * Only one scope is open at a time, which is all FreeCAD's edit mode
+     * allows. A second call closes the first and warns.
+     */
+    void beginEdit(App::DocumentObject* edited, EditIntent intent);
+
+    /**
+     * Close the scope of @a edited and put back what it changed.
+     *
+     * A stage the user chose while the panel was open is theirs and stays;
+     * only a stage still standing as this scope left it is restored. Closing a
+     * scope that is not open, which an unsetEdit for an object that never
+     * opened one does, is a no-op.
+     */
+    void endEdit(App::DocumentObject* edited);
+
+    /// The object whose panel is open, or null when none is.
+    App::DocumentObject* editedObject() const
+    {
+        return m_editedObject;
+    }
+
+    /// What the open edit scope asked the view for; None when none is open.
+    EditIntent editIntent() const
+    {
+        return m_editIntent;
+    }
 
     /**
      * The stage on show, read off the geometry and mesh groups.
@@ -281,6 +332,14 @@ private:
     mutable ActiveStage m_stage {ActiveStage::Geometry};
     /// Set while the group visibilities are being written from m_stage
     bool m_writingStage {false};
+
+    /// Object whose task panel is open, null when none is. Never persisted.
+    App::DocumentObject* m_editedObject {nullptr};
+    EditIntent m_editIntent {EditIntent::None};
+    /// Stage to go back to when the scope closes
+    ActiveStage m_editStageBefore {ActiveStage::Geometry};
+    /// Stage the scope put the view in, to tell a restore from a user choice
+    ActiveStage m_editStageApplied {ActiveStage::NoStage};
     DimensionMode m_dimensionMode {DimensionMode::Highest};
     bool m_showConstruction {false};
     bool m_wireframe {false};

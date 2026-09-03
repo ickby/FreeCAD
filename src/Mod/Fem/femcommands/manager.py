@@ -318,16 +318,6 @@ class CommandManager:
         else:
             return False
 
-    def hide_meshes_show_parts_constraints(self):
-        if FreeCAD.GuiUp:
-            for acnstrmesh in FemGui.getActiveAnalysis().Group:
-                if "Constraint" in acnstrmesh.TypeId:
-                    acnstrmesh.ViewObject.Visibility = True
-                if "Mesh" in acnstrmesh.TypeId:
-                    # OvG: Hide meshes and show constraints and meshed part
-                    # e.g. on purging results
-                    acnstrmesh.ViewObject.Visibility = False
-
     # ****************************************************************************************
     # methods to add the objects to the document in FreeCADGui mode
 

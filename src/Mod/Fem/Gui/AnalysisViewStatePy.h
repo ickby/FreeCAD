@@ -50,6 +50,10 @@ public:
 
     Py::Object getActiveStage(const Py::Tuple&);
     Py::Object setActiveStage(const Py::Tuple&);
+    Py::Object beginEdit(const Py::Tuple&);
+    Py::Object endEdit(const Py::Tuple&);
+    Py::Object getEditedObject(const Py::Tuple&);
+    Py::Object getEditIntent(const Py::Tuple&);
     Py::Object getDimensionMode(const Py::Tuple&);
     Py::Object setDimensionMode(const Py::Tuple&);
     Py::Object getShowConstruction(const Py::Tuple&);

@@ -71,6 +71,7 @@
 #include "ViewProviderFemConstraintTemperature.h"
 #include "ViewProviderFemConstraintTransform.h"
 #include "ViewProviderResult.h"
+#include "AnalysisViewState.h"
 #include "Workbench.h"
 
 #ifdef FC_USE_VTK
@@ -115,6 +116,10 @@ PyMOD_INIT_FUNC(FemGui)
 
     // instantiating the commands
     CreateFemCommands();
+
+    // Follow what the user edits, so the analysis view state can put the view
+    // where the open panel needs it and back afterwards.
+    FemGui::observeEditScopes();
 
     // clang-format off
     // addition objects

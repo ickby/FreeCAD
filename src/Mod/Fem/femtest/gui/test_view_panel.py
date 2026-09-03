@@ -264,16 +264,21 @@ class TestViewPanelGui(unittest.TestCase):
         return group
 
     def _enter_edit(self):
-        """Enter the partition step the way the view provider does, then hand the
-        panels the notification the document observer would deliver."""
+        """
+        Enter the partition step the way the view provider does.
+
+        The tree is handed the notification the document observer would
+        deliver; the stage is not the panel's to set, so that goes through the
+        edit scope of the view state, which is what the observer opens.
+        """
         view_geometry_base.set_input_preview(self.part, True)
         self.explorer.slotInEdit(self.part.ViewObject)
-        self.settings.slotInEdit(self.part.ViewObject)
+        FemGui.getAnalysisViewState(self.analysis).beginEdit(self.part, "Geometry")
 
     def _leave_edit(self):
         view_geometry_base.set_input_preview(self.part, False)
         self.explorer.slotResetEdit(self.part.ViewObject)
-        self.settings.slotResetEdit(self.part.ViewObject)
+        FemGui.getAnalysisViewState(self.analysis).endEdit(self.part)
 
     # -- what the tree describes --------------------------------------------
 

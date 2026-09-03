@@ -189,21 +189,6 @@ def _chain_preview_input(viewprovider):
         return None
 
 
-def _picks_references(viewprovider, analysis):
-    """
-    Whether the open editor picks references on the geometry of the analysis.
-
-    Constraints, materials, mesh refinements and equations all hold references
-    into that geometry, so they are picked on the same shape a chain step is.
-    """
-    if analysis is None:
-        return False
-    obj = _vp_object(viewprovider)
-    if obj is None or not hasattr(obj, "References"):
-        return False
-    return femutils.get_analysis(obj) == analysis
-
-
 def _app_document_object(arg):
     """
     Return arg if it is an App DocumentObject. Never touches ViewProvider.Object.
@@ -273,10 +258,15 @@ class _GuiDocObserver:
         self.owner._gui_deleted_object(viewprovider)
 
     def slotInEdit(self, viewprovider):
-        self.owner.slotInEdit(viewprovider)
+        # The settings panel keeps no edit state of its own; only the tree does.
+        slot = getattr(self.owner, "slotInEdit", None)
+        if slot:
+            slot(viewprovider)
 
     def slotResetEdit(self, viewprovider):
-        self.owner.slotResetEdit(viewprovider)
+        slot = getattr(self.owner, "slotResetEdit", None)
+        if slot:
+            slot(viewprovider)
 
 
 class _AppDocObserver:
@@ -2055,8 +2045,6 @@ class ViewSettings(QtGui.QWidget):
         self._has_mesh = False
         self._vs_callback = None
         self._updating = False
-        self._edit_obj = None
-        self._edit_stage = None
         self._counts = None
         self._geometry_counts = None
         self.setup_analysis()
@@ -2132,9 +2120,6 @@ class ViewSettings(QtGui.QWidget):
         else:
             self._has_geometry = False
             self._has_mesh = False
-            # No analysis left to put the stage back on.
-            self._edit_obj = None
-            self._edit_stage = None
 
         self._connect_view_state()
         self._counts = self._read_element_counts()
@@ -2272,7 +2257,7 @@ class ViewSettings(QtGui.QWidget):
         self._updating = True
         try:
             has_vs = self.view_state is not None
-            editing = self._edit_obj is not None
+            editing = has_vs and self.view_state.getEditedObject() is not None
             stage = self.view_state.getActiveStage() if has_vs else None
             # Outside the two preprocessing stages nothing of the model is
             # drawn, so there is no content to describe. The scene settings
@@ -2380,9 +2365,6 @@ class ViewSettings(QtGui.QWidget):
 
     def slotActiveFemAnalysisUpdated(self, analysis):
         if analysis != self.active_analysis:
-            # The stage to go back to belonged to the analysis being left.
-            self._edit_obj = None
-            self._edit_stage = None
             self.active_analysis = analysis
             self.setup_analysis()
 
@@ -2447,35 +2429,11 @@ class ViewSettings(QtGui.QWidget):
             self.active_analysis = None
             self.setup_analysis()
 
-    def slotInEdit(self, viewprovider):
-        """
-        Put the view into the geometry stage for as long as geometry is picked,
-        be it by a chain step or by a member holding references into the
-        geometry. What is picked is geometry, and a mesh drawn over it only gets
-        in the way, so the stage stays where it is put.
-        """
-        if self._edit_obj is not None or not self.view_state:
-            return
-        if _chain_preview_input(viewprovider) is None and not _picks_references(
-            viewprovider, self.active_analysis
-        ):
-            return
-
-        self._edit_obj = _vp_object(viewprovider)
-        self._edit_stage = self.view_state.getActiveStage()
-        self.view_state.setActiveStage("Geometry")
-        self.setup_widgets()
-
-    def slotResetEdit(self, viewprovider):
-        if self._edit_obj is None or _vp_object(viewprovider) != self._edit_obj:
-            return
-
-        stage = self._edit_stage
-        self._edit_obj = None
-        self._edit_stage = None
-        if self.view_state and stage:
-            self.view_state.setActiveStage(stage)
-        self.setup_widgets()
+    # Putting the view into the geometry stage while geometry is picked, and
+    # back afterwards, is the view state's edit scope. It is opened from the
+    # edit-mode signals for every editor in the workbench, so the panel only
+    # reads what it decided; a copy here would snapshot the other one's stage
+    # and put that back instead.
 
     def clip_widgets(self):
         layout = self.widget.ClippingGroup.layout()

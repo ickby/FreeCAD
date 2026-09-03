@@ -284,16 +284,8 @@ class TestReferenceSelectionGui(unittest.TestCase):
         References are picked on geometry, so a mesh drawn over it would leave
         nothing to pick. Same rule as for an edited chain step.
         """
-        from femguiutils import view_panel
-
-        view_panel.setup_visualization_panel()
-        dock = FreeCADGui.getMainWindow().findChild(QtGui.QDockWidget, "FEMView")
-        self.assertIsNotNone(dock, "the FEM workbench puts up the view panel")
-        settings = dock.widget()._settings
-
         ObjectsFem.makeMeshShapeGroup(self.document, geometry=self.group, analysis=self.analysis)
         self.document.recompute()
-        settings.setup_analysis()
 
         state = FemGui.getAnalysisViewState(self.analysis)
         state.setActiveStage("Mesh")
@@ -302,12 +294,21 @@ class TestReferenceSelectionGui(unittest.TestCase):
         self.analysis.addObject(material)
         self.document.recompute()
 
-        settings.slotInEdit(material.ViewObject)
+        # The real path: entering edit mode is what opens the scope, whichever
+        # view provider is entered and whatever language it is written in.
+        guidoc = FreeCADGui.getDocument(self.document.Name)
+        guidoc.setEdit(material.Name)
+        FreeCADGui.updateGui()
         try:
             self.assertEqual(state.getActiveStage(), "Geometry")
+            self.assertEqual(state.getEditIntent(), "Geometry")
+            self.assertEqual(state.getEditedObject(), material)
         finally:
-            settings.slotResetEdit(material.ViewObject)
+            guidoc.resetEdit()
+            FreeCADGui.Control.closeDialog()
+            FreeCADGui.updateGui()
         self.assertEqual(state.getActiveStage(), "Mesh")
+        self.assertIsNone(state.getEditedObject())
 
     # -- the unified slot widget --------------------------------------------
 

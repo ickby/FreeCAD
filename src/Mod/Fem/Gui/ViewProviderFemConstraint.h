@@ -44,6 +44,7 @@ class SoTransform;
 namespace FemGui
 {
 
+
 class FemGuiExport ViewProviderFemConstraint: public Gui::ViewProviderGeometryObject,
                                               public Gui::ViewProviderSuppressibleExtension
 {
@@ -107,8 +108,6 @@ public:
     /** Build a symbol subtree with optional placement pre-transform. */
     SoSeparator* makeSymbolInstance(const Base::Placement& pre) const;
 
-    static std::string gethideMeshShowPartStr();
-    static std::string gethideMeshShowPartStr(const std::string showConstr);
 
 protected:
     void onChanged(const App::Property* prop) override;

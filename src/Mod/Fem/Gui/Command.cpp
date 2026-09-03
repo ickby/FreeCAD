@@ -87,21 +87,6 @@ static bool getConstraintPrerequisits(Fem::FemAnalysis** Analysis)
     return false;
 }
 
-// OvG: Visibility automation show parts and hide meshes on activation of a constraint
-static std::string gethideMeshShowPartStr(std::string showConstr = "")
-{
-    return "for amesh in App.activeDocument().Objects:\n\
-    if \""
-        + showConstr + "\" == amesh.Name:\n\
-        amesh.ViewObject.Visibility = True\n\
-    elif \"Mesh\" in amesh.TypeId:\n\
-        aparttoshow = amesh.Name.replace(\"_Mesh\",\"\")\n\
-        for apart in App.activeDocument().Objects:\n\
-            if aparttoshow == apart.Name:\n\
-                apart.ViewObject.Visibility = True\n\
-        amesh.ViewObject.Visibility = False\n";
-}
-
 static void stashReferencesFor(const std::string& featName)
 {
     Gui::Command::doCommand(
@@ -281,9 +266,6 @@ void CmdFemConstraintBearing::activated(int)
         FeatName.c_str()
     );
 
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
-
     updateActive();
 
     doCommand(Gui, "Gui.activeDocument().setEdit('%s')", FeatName.c_str());
@@ -360,9 +342,6 @@ void CmdFemConstraintContact::activated(int)
         FeatName.c_str()
     );
 
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
-
     updateActive();
 
     doCommand(Gui, "Gui.activeDocument().setEdit('%s')", FeatName.c_str());
@@ -416,9 +395,6 @@ void CmdFemConstraintDisplacement::activated(int)
         FeatName.c_str()
     );
 
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
-
     updateActive();
 
     doCommand(Gui, "Gui.activeDocument().setEdit('%s')", FeatName.c_str());
@@ -467,9 +443,6 @@ void CmdFemConstraintFixed::activated(int)
         Analysis->getNameInDocument(),
         FeatName.c_str()
     );
-
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
 
     updateActive();
 
@@ -526,12 +499,6 @@ void CmdFemConstraintRigidBody::activated(int)
         Analysis->getNameInDocument(),
         FeatName.c_str()
     );
-
-    doCommand(
-        Doc,
-        "%s",
-        gethideMeshShowPartStr(FeatName).c_str()
-    );  // OvG: Hide meshes and show parts
 
     updateActive();
 
@@ -592,8 +559,6 @@ void CmdFemConstraintFluidBoundary::activated(int)
         FeatName.c_str()
     );
 
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
     updateActive();
 
     doCommand(Gui, "Gui.activeDocument().setEdit('%s')", FeatName.c_str());
@@ -656,9 +621,6 @@ void CmdFemConstraintForce::activated(int)
         FeatName.c_str()
     );
 
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
-
     updateActive();
 
     doCommand(Gui, "Gui.activeDocument().setEdit('%s')", FeatName.c_str());
@@ -705,9 +667,6 @@ void CmdFemConstraintGear::activated(int)
         Analysis->getNameInDocument(),
         FeatName.c_str()
     );
-
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
 
     updateActive();
 
@@ -781,9 +740,6 @@ void CmdFemConstraintHeatflux::activated(int)
         FeatName.c_str()
     );
 
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr().c_str());
-
     updateActive();
 
     doCommand(Gui, "Gui.activeDocument().setEdit('%s')", FeatName.c_str());
@@ -837,9 +793,6 @@ void CmdFemConstraintInitialTemperature::activated(int)
         Analysis->getNameInDocument(),
         FeatName.c_str()
     );
-
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr().c_str());
 
     updateActive();
 
@@ -896,9 +849,6 @@ void CmdFemConstraintPlaneRotation::activated(int)
         Analysis->getNameInDocument(),
         FeatName.c_str()
     );
-
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
 
     updateActive();
 
@@ -963,9 +913,6 @@ void CmdFemConstraintPressure::activated(int)
         FeatName.c_str()
     );
 
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
-
     updateActive();
 
     doCommand(Gui, "Gui.activeDocument().setEdit('%s')", FeatName.c_str());
@@ -1024,9 +971,6 @@ void CmdFemConstraintSpring::activated(int)
         Analysis->getNameInDocument(),
         FeatName.c_str()
     );
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
-
     updateActive();
 
     doCommand(Gui, "Gui.activeDocument().setEdit('%s')", FeatName.c_str());
@@ -1078,9 +1022,6 @@ void CmdFemConstraintPulley::activated(int)
         Analysis->getNameInDocument(),
         FeatName.c_str()
     );
-
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
 
     updateActive();
 
@@ -1138,9 +1079,6 @@ void CmdFemConstraintTemperature::activated(int)
         FeatName.c_str()
     );
 
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr().c_str());
-
     updateActive();
 
     doCommand(Gui, "Gui.activeDocument().setEdit('%s')", FeatName.c_str());
@@ -1192,9 +1130,6 @@ void CmdFemConstraintTransform::activated(int)
         Analysis->getNameInDocument(),
         FeatName.c_str()
     );
-
-    // OvG: Hide meshes and show parts
-    doCommand(Doc, "%s", gethideMeshShowPartStr(FeatName).c_str());
 
     updateActive();
 

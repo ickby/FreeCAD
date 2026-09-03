@@ -97,6 +97,22 @@ enum class ActiveStage
     NoStage  ///< neither geometry nor mesh drawn, the view left to the results
 };
 
+/**
+ * What an object being edited needs to see while its panel is open.
+ *
+ * A task panel is about one object, and what the view has to show for it
+ * follows from what the panel asks the user to pick: a constraint referencing
+ * geometry needs the geometry on show, one referencing the mesh needs the mesh.
+ * The intent says which, and the view state works out what to switch; the panel
+ * never writes a visibility itself.
+ */
+enum class EditIntent
+{
+    None = 0,   ///< nothing about the view has to change for this edit
+    Geometry,   ///< references are picked on the analysis geometry
+    Mesh        ///< references are picked on the meshed model
+};
+
 /** Colour mode is stage-scoped; valid values depend on ActiveStage. */
 enum class ColorMode
 {

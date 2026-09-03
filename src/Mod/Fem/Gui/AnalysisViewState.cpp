@@ -34,7 +34,12 @@
 #include "FemPerfLog.h"
 #include "ViewProviderAnalysis.h"
 
+#include <App/DocumentObject.h>
 #include <Base/Console.h>
+#include <Base/Tools.h>
+#include <Gui/Application.h>
+#include <Gui/ViewProviderDocumentObject.h>
+#include <Mod/Fem/App/FemGeometry.h>
 #include <Base/Interpreter.h>
 #include <Base/Tools.h>
 #include <Gui/Application.h>
@@ -259,6 +264,172 @@ void AnalysisViewState::stageVisibilityChanged(ActiveStage owner)
         m_stage = readStage();
     }
     if (m_stage != before) {
+        notifyChanged();
+    }
+}
+
+namespace
+{
+
+/**
+ * What an object being edited needs the view to show.
+ *
+ * Decided here, once, from what the object is. Every task panel in the
+ * workbench arrives through the same two signals, so this is the only place
+ * that has to know - and a panel that used to switch visibilities on its own
+ * way in cannot disagree with one that did it differently.
+ */
+EditIntent intentFor(const App::DocumentObject* obj)
+{
+    if (!obj) {
+        return EditIntent::None;
+    }
+    // A geometry step is edited on the geometry it builds from.
+    if (obj->isDerivedFrom<Fem::FemGeometry>()) {
+        return EditIntent::Geometry;
+    }
+    // And so is anything holding references into it - constraints, materials,
+    // mesh refinements, equations. What they have in common is the References
+    // property, which is what says the panel will ask for something to be
+    // picked on the shape.
+    if (const_cast<App::DocumentObject*>(obj)->getPropertyByName("References")) {
+        return EditIntent::Geometry;
+    }
+    return EditIntent::None;
+}
+
+/// The analysis @a obj belongs to, directly or through a group inside it.
+Fem::FemAnalysis* analysisOf(App::DocumentObject* obj)
+{
+    if (!obj) {
+        return nullptr;
+    }
+    for (auto* parent : obj->getInList()) {
+        if (auto* analysis = Base::freecad_cast<Fem::FemAnalysis*>(parent)) {
+            return analysis;
+        }
+        for (auto* grand : parent->getInList()) {
+            if (auto* analysis = Base::freecad_cast<Fem::FemAnalysis*>(grand)) {
+                return analysis;
+            }
+        }
+    }
+    return nullptr;
+}
+
+/**
+ * Opens and closes the edit scope of whatever the user is editing.
+ *
+ * Every view provider goes into edit mode through these two signals, whichever
+ * language it is written in and whether or not it calls up to its base, which
+ * is what makes this the one place the workbench needs.
+ */
+class EditScopeObserver
+{
+public:
+    void connect()
+    {
+        if (m_connected || !Gui::Application::Instance) {
+            return;
+        }
+        m_inEdit = Gui::Application::Instance->signalInEdit.connect(
+            [](const Gui::ViewProviderDocumentObject& vp) {
+                auto* obj = const_cast<Gui::ViewProviderDocumentObject&>(vp).getObject();
+                if (auto* analysis = analysisOf(obj)) {
+                    if (auto* state = AnalysisViewState::find(analysis)) {
+                        state->beginEdit(obj, intentFor(obj));
+                    }
+                }
+            }
+        );
+        m_resetEdit = Gui::Application::Instance->signalResetEdit.connect(
+            [](const Gui::ViewProviderDocumentObject& vp) {
+                auto* obj = const_cast<Gui::ViewProviderDocumentObject&>(vp).getObject();
+                if (auto* analysis = analysisOf(obj)) {
+                    if (auto* state = AnalysisViewState::find(analysis)) {
+                        state->endEdit(obj);
+                    }
+                }
+            }
+        );
+        m_connected = true;
+    }
+
+private:
+    bool m_connected {false};
+    fastsignals::scoped_connection m_inEdit;
+    fastsignals::scoped_connection m_resetEdit;
+};
+
+EditScopeObserver& editScopeObserver()
+{
+    static EditScopeObserver observer;
+    return observer;
+}
+
+}  // namespace
+
+void FemGui::observeEditScopes()
+{
+    editScopeObserver().connect();
+}
+
+void AnalysisViewState::beginEdit(App::DocumentObject* edited, EditIntent intent)
+{
+    if (!edited) {
+        return;
+    }
+    if (m_editedObject && m_editedObject != edited) {
+        // FreeCAD edits one object at a time, so this is a scope somebody
+        // forgot to close rather than a nested edit. Closing it here leaves the
+        // view where that edit found it, which is what its own endEdit would
+        // have done.
+        Base::Console().warning(
+            "FemGui: edit scope of '%s' was still open when '%s' opened one\n",
+            m_editedObject->getNameInDocument() ? m_editedObject->getNameInDocument() : "?",
+            edited->getNameInDocument() ? edited->getNameInDocument() : "?"
+        );
+        endEdit(m_editedObject);
+    }
+
+    m_editedObject = edited;
+    m_editIntent = intent;
+    m_editStageBefore = activeStage();
+    m_editStageApplied = ActiveStage::NoStage;
+
+    const ActiveStage wanted = (intent == EditIntent::Geometry)  ? ActiveStage::Geometry
+        : (intent == EditIntent::Mesh)                           ? ActiveStage::Mesh
+                                                                 : m_editStageBefore;
+    if (intent != EditIntent::None && wanted != m_editStageBefore) {
+        m_editStageApplied = wanted;
+        setActiveStage(wanted);
+    }
+    else {
+        notifyChanged();
+    }
+}
+
+void AnalysisViewState::endEdit(App::DocumentObject* edited)
+{
+    // An unsetEdit for an object that never opened a scope, or a second one for
+    // the same object, has nothing to put back.
+    if (!edited || m_editedObject != edited) {
+        return;
+    }
+
+    const ActiveStage applied = m_editStageApplied;
+    const ActiveStage before = m_editStageBefore;
+
+    m_editedObject = nullptr;
+    m_editIntent = EditIntent::None;
+    m_editStageApplied = ActiveStage::NoStage;
+
+    // Only a stage still standing as this scope left it goes back. One the user
+    // switched to while the panel was open is a choice, not scenery.
+    if (applied != ActiveStage::NoStage && activeStage() == applied) {
+        setActiveStage(before);
+    }
+    else {
         notifyChanged();
     }
 }

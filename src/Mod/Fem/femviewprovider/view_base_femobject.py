@@ -139,6 +139,9 @@ class VPBaseFemObject:
             # https://forum.freecad.org/viewtopic.php?t=12139&start=10#p161062
             return False
         if hide_mesh:
+            # Post objects and loose mesh objects are clutter the panel is not
+            # about. The stage and its containers are not switched from here:
+            # AnalysisViewState opens an edit scope of its own for that.
             self.hidden_while_editing = hide_while_editing(vobj)
         # The slots write their property as they are picked, so Cancel needs a
         # transaction to roll back to. A create command has one open already,

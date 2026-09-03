@@ -53,6 +53,30 @@ const char* stageToString(ActiveStage stage)
     return "Geometry";
 }
 
+const char* intentToString(EditIntent intent)
+{
+    switch (intent) {
+        case EditIntent::Geometry:
+            return "Geometry";
+        case EditIntent::Mesh:
+            return "Mesh";
+        case EditIntent::None:
+            return "None";
+    }
+    return "None";
+}
+
+EditIntent intentFromString(const std::string& s)
+{
+    if (s == "Geometry") {
+        return EditIntent::Geometry;
+    }
+    if (s == "Mesh") {
+        return EditIntent::Mesh;
+    }
+    return EditIntent::None;
+}
+
 ActiveStage stageFromString(const std::string& s)
 {
     if (s == "Mesh") {
@@ -144,6 +168,27 @@ void AnalysisViewStatePy::init_type()
 
     add_varargs_method("getActiveStage", &AnalysisViewStatePy::getActiveStage, "getActiveStage()");
     add_varargs_method("setActiveStage", &AnalysisViewStatePy::setActiveStage, "setActiveStage(str)");
+    add_varargs_method(
+        "beginEdit",
+        &AnalysisViewStatePy::beginEdit,
+        "beginEdit(obj, intent) -- open the edit scope of obj; intent is one of "
+        "Geometry, Mesh, None"
+    );
+    add_varargs_method(
+        "endEdit",
+        &AnalysisViewStatePy::endEdit,
+        "endEdit(obj) -- close the edit scope of obj and put back what it changed"
+    );
+    add_varargs_method(
+        "getEditedObject",
+        &AnalysisViewStatePy::getEditedObject,
+        "getEditedObject() -- the object whose panel is open, or None"
+    );
+    add_varargs_method(
+        "getEditIntent",
+        &AnalysisViewStatePy::getEditIntent,
+        "getEditIntent() -- what the open edit scope asked the view for"
+    );
     add_varargs_method(
         "getDimensionMode",
         &AnalysisViewStatePy::getDimensionMode,
@@ -332,6 +377,53 @@ Py::Object AnalysisViewStatePy::setActiveStage(const Py::Tuple& args)
         state()->setActiveStage(stageFromString(name));
     }
     return Py::None();
+}
+
+Py::Object AnalysisViewStatePy::beginEdit(const Py::Tuple& args)
+{
+    PyObject* pyObj = nullptr;
+    char* intent = nullptr;
+    if (!PyArg_ParseTuple(args.ptr(), "O!s", &(App::DocumentObjectPy::Type), &pyObj, &intent)) {
+        throw Py::Exception();
+    }
+    if (state()) {
+        state()->beginEdit(
+            static_cast<App::DocumentObjectPy*>(pyObj)->getDocumentObjectPtr(),
+            intentFromString(intent)
+        );
+    }
+    return Py::None();
+}
+
+Py::Object AnalysisViewStatePy::endEdit(const Py::Tuple& args)
+{
+    PyObject* pyObj = nullptr;
+    if (!PyArg_ParseTuple(args.ptr(), "O!", &(App::DocumentObjectPy::Type), &pyObj)) {
+        throw Py::Exception();
+    }
+    if (state()) {
+        state()->endEdit(static_cast<App::DocumentObjectPy*>(pyObj)->getDocumentObjectPtr());
+    }
+    return Py::None();
+}
+
+Py::Object AnalysisViewStatePy::getEditedObject(const Py::Tuple& args)
+{
+    (void)args;
+    App::DocumentObject* edited = state() ? state()->editedObject() : nullptr;
+    if (!edited) {
+        return Py::None();
+    }
+    return Py::asObject(edited->getPyObject());
+}
+
+Py::Object AnalysisViewStatePy::getEditIntent(const Py::Tuple& args)
+{
+    (void)args;
+    if (!state()) {
+        return Py::None();
+    }
+    return Py::String(intentToString(state()->editIntent()));
 }
 
 Py::Object AnalysisViewStatePy::getDimensionMode(const Py::Tuple& args)

@@ -32,6 +32,25 @@ from . import base_fempythonobject
 _PropHelper = base_fempythonobject._PropHelper
 
 
+def assign_shape(obj, shape):
+    """
+    Write a geometry step's result, but only when it is a different shape.
+
+    Everything downstream of an analysis geometry - the component cache, the
+    dimensions, the classification the view colours by, the component claims of
+    the mesh children - is derived from this Shape, and is rebuilt whenever it
+    is written. A step is executed for anything at all that changes on it or on
+    a member of its group, and most of that leaves the result identical, so
+    passing the same shape on again would throw that work away for nothing.
+    """
+    current = obj.Shape
+    if current.isNull() and shape.isNull():
+        return
+    if not current.isNull() and not shape.isNull() and current.isSame(shape):
+        return
+    obj.Shape = shape
+
+
 def _get_features_without_compounds(shape):
     result = shape.Solids
     result += shape.getChildShapes("Shell", "Solids")
@@ -101,7 +120,7 @@ class GeometryGroup(base_fempythonobject.BaseFemPythonObject):
                 last = child
 
     def execute(self, obj):
-        obj.Shape = obj.Group[-1].Shape if obj.Group else Part.Shape()
+        assign_shape(obj, obj.Group[-1].Shape if obj.Group else Part.Shape())
 
 
 class GeometryImport(GeometryBase):
@@ -147,7 +166,7 @@ class GeometryImport(GeometryBase):
         base_shape = base_obj.Shape if base_obj else Part.Shape()
 
         if not import_shapes:
-            obj.Shape = base_shape
+            assign_shape(obj, base_shape)
             return
 
         # Cluster shapes that touch so each connected component can be

@@ -1307,13 +1307,11 @@ class GeometryExplorer(QtGui.QTreeView):
                 self.setup_analysis()
                 return
             # A child that re-meshes rebuilds the merged topology the Mesh stage
-            # reads. The group derives from FemMeshObject too, but its own
-            # FemMesh is that merge and is written without notifying.
-            if (
-                prop == "FemMesh"
-                and obj.isDerivedFrom("Fem::FemMeshObject")
-                and not obj.isDerivedFrom("Fem::FemMeshShapeGroup")
-            ):
+            # reads, and the group publishes that merge as an ordinary output of
+            # its recompute, so both are worth following. A group that only
+            # re-merged after a child moved renames nothing, and the model asks
+            # for the categories it already has cached.
+            if prop == "FemMesh" and obj.isDerivedFrom("Fem::FemMeshObject"):
                 self.setup_analysis()
                 return
             if _changes_imports(self.active_analysis, obj, prop):
@@ -2402,7 +2400,7 @@ class ViewSettings(QtGui.QWidget):
             return
         # An analysis that only places others has no mesh of its own, so an
         # import coming or going decides whether the Mesh stage is reachable.
-        if property not in ("Shape", "Group", "Analysis", "SuppressedComponents"):
+        if property not in ("Shape", "Group", "Analysis", "SuppressedComponents", "FemMesh"):
             return
         obj = _app_document_object(obj)
         if not obj:
@@ -2415,6 +2413,11 @@ class ViewSettings(QtGui.QWidget):
                 self.setup_analysis()
                 return
             if obj.isDerivedFrom("Fem::FemMeshShapeGroup") and property in ("Group", "Shape"):
+                self.setup_analysis()
+                return
+            # As in the other panel: a child that re-meshes and the group that
+            # republished the merge both change what the Mesh stage lists.
+            if property == "FemMesh" and obj.isDerivedFrom("Fem::FemMeshObject"):
                 self.setup_analysis()
                 return
             if _changes_imports(self.active_analysis, obj, property):

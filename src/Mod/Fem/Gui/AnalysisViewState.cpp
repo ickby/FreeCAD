@@ -515,11 +515,12 @@ const Classification* AnalysisViewState::classification(vtkUnstructuredGrid* mes
         m_classificationImportRevision = importRevision;
     }
 
-    // Mesh topology only matters while the Mesh stage is colouring by it. Asking
-    // topologyRevision() forces the merge, so stay off it in the Geometry stage;
-    // paletteOrder() leaves the mesh alone there for the same reason.
+    // A remeshed group renames what the Mesh stage colours by. The revision is
+    // the number of the last recompute and reading it costs nothing, so it is
+    // compared whichever stage is up. A child that only moved republishes the
+    // mesh without touching it, and the classification survives the move.
     auto* meshGroup = findMeshGroup();
-    if (stage == ActiveStage::Mesh && meshGroup) {
+    if (meshGroup) {
         const std::size_t meshRevision = meshGroup->topologyRevision();
         if (m_classificationMeshRevision != meshRevision) {
             m_classifications.clear();
@@ -561,9 +562,9 @@ void AnalysisViewState::rebuildPaletteOrder(ColorMode mode, bool withMesh)
 {
     std::map<std::string, int> order;
     auto* geometry = findGeometry();
-    // Every mesh accessor merges on demand, so the Geometry stage asks for none
-    // of them. Its shorter map is a prefix of the one the Mesh stage gets, which
-    // is what keeps a name on the same colour across the switch.
+    // The Geometry stage colours geometry names only. Its shorter map is a
+    // prefix of the one the Mesh stage gets, which is what keeps a name on the
+    // same colour across the switch.
     auto* meshGroup = withMesh ? findMeshGroup() : nullptr;
 
     auto assign = [&order](const std::string& key) {

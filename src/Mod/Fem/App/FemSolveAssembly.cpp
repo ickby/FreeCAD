@@ -238,9 +238,9 @@ Fem::SolveAssemblyResult Fem::buildSolveAssembly(const FemAnalysis* analysis)
         // The group's own CellSources name the child mesh instead, which is a
         // different question and answered by the group.
         result.cellSources.assign(nativeGroup->CellSources.getSize(), std::string());
-        // getMergedMesh() above filled CellDimension along with the mesh, so the
-        // two are in step. Keep the length equal to cellSources so the import
-        // cells appended below land at the same index in both lists.
+        // The group's last execute() wrote CellDimension along with the mesh, so
+        // the two are in step. Keep the length equal to cellSources so the
+        // import cells appended below land at the same index in both lists.
         for (long d : nativeGroup->CellDimension.getValues()) {
             result.cellDimensions.push_back(static_cast<int>(d));
         }

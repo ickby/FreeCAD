@@ -36,6 +36,7 @@
 #include "FemPerfLog.h"
 #include "FemTopology.h"
 
+#include <App/Document.h>
 #include <App/FeaturePythonPyImp.h>
 #include <Base/Console.h>
 #include <Mod/Part/App/PartPyCXX.h>
@@ -68,7 +69,11 @@ FemGeometry::~FemGeometry() = default;
 void FemGeometry::onChanged(const App::Property* prop)
 {
     if (prop == &Shape) {
-        build_components();
+        // Only note it. Classifying here would run over every intermediate
+        // shape a chain of operations writes on its way to the result, and
+        // would answer a reader with a topology the document has not
+        // recomputed to yet; execute() is where an output belongs.
+        m_topologyDirty = true;
     }
     else if (prop == &DimensionOverride) {
         // analysis dimension is derived; nothing to rebuild except dependents
@@ -77,9 +82,31 @@ void FemGeometry::onChanged(const App::Property* prop)
     App::GeoFeature::onChanged(prop);
 }
 
+App::DocumentObjectExecReturn* FemGeometry::execute()
+{
+    if (m_topologyDirty) {
+        build_components();
+        m_topologyDirty = false;
+
+        // The Shape was announced when it was written, which for a Python
+        // geometry step is before this ran, so whoever drew it did so against
+        // the topology of the shape before. Saying it again, now that the two
+        // agree, is what lets a view colour what it has already drawn. The
+        // property itself is untouched; only the notification is repeated.
+        if (auto* doc = getDocument(); doc && !isRestoring()) {
+            doc->signalChangedObject(*this, Shape);
+        }
+    }
+    return App::DocumentObject::StdReturn;
+}
+
 void FemGeometry::onDocumentRestored()
 {
+    // The Shape is in the file; the caches derived from it are not. Rebuilding
+    // them classifies a shape that is already there, which is a different and
+    // far cheaper thing than rerunning the import or partition that made it.
     build_components();
+    m_topologyDirty = false;
     App::GeoFeature::onDocumentRestored();
 }
 
@@ -559,6 +586,23 @@ template<>
 const char* Fem::FemGeometryPython::getViewProviderName() const
 {
     return "FemGui::ViewProviderFemGeometryPython";
+}
+
+template<>
+App::DocumentObjectExecReturn* Fem::FemGeometryPython::execute()
+{
+    // The proxy is what produces the Shape - an import, a partition, a group
+    // passing on its last step - and the topology is derived from that Shape,
+    // so it can only be finalised once the proxy has had its turn. Running both
+    // inside one recompute is what leaves the geometry coherent at the point
+    // every consumer looks at it.
+    try {
+        imp->execute();
+    }
+    catch (const Base::Exception& e) {
+        return new App::DocumentObjectExecReturn(e.what());
+    }
+    return Fem::FemGeometry::execute();
 }
 
 template<>

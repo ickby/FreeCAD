@@ -117,11 +117,14 @@ public:
         if (!group) {
             return nullptr;
         }
-        const Fem::FemMesh& mesh = group->getMergedMesh();
+        // Pure reads: the merge is an output of the group's execute(), and the
+        // revision counts the times it was republished. A child that only moved
+        // bumps it too, so the grid is rebuilt at the new coordinates.
         Entry& entry = m_entries[group];
         if (entry.grid && entry.revision == group->mergeRevision()) {
             return entry.grid->GetNumberOfCells() > 0 ? &entry : nullptr;
         }
+        const Fem::FemMesh& mesh = group->getMergedMesh();
         entry.revision = group->mergeRevision();
         entry.grid = vtkSmartPointer<vtkUnstructuredGrid>::New();
         FemPreprocessMeshViewHelper::buildGrid(mesh, entry.grid, entry.cellElementIds);

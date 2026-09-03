@@ -15,6 +15,10 @@ class FemMeshShapeGroup(GeoFeature):
     """
     FemMeshShapeGroup container of the per component meshes of one analysis
 
+    The merged mesh and its topology are produced by execute(), so every reader
+    here returns what the last recompute left behind. Change a child and
+    recompute the document before asking again.
+
     Author: Stefan Tröger <stefantroeger@gmx.net>
     License: LGPL-2.1-or-later
     """
@@ -52,12 +56,21 @@ class FemMeshShapeGroup(GeoFeature):
         """Dimension bitmask for an entity."""
         ...
 
+    def getMergeRevision(self) -> int:
+        """
+        Counter bumped every time execute() republishes the merged mesh.
+
+        Includes a re-merge that only moved a child, which is what separates it
+        from getTopologyRevision().
+        """
+        ...
+
     def getTopologyRevision(self) -> int:
         """
-        Counter bumped when the result mesh is rebuilt.
+        Counter bumped when the topology of the result mesh is rebuilt.
 
-        Merges first if the result mesh is out of date, so the number describes
-        the topology the next read will see rather than the previous one.
+        A pure read of the last recompute. Moving a child republishes the mesh
+        without changing this, because a rigid move renames nothing.
         """
         ...
 

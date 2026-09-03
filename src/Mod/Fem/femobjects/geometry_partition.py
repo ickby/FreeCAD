@@ -32,6 +32,7 @@ import Part
 
 import BOPTools.SplitAPI as SplitAPI
 
+from . import geometry_base
 from .geometry_base import GeometryBase
 from . import base_fempythonobject
 
@@ -851,7 +852,9 @@ class GeometryPartition(GeometryBase):
             raise ValueError(f"Method '{method}' is not valid for the selected targets")
 
         if _unconfigured(obj, method):
-            obj.Shape = base_obj.Shape
+            # A step that has not been given its tool yet hands its input on
+            # unchanged, which is not a new geometry for anything downstream.
+            geometry_base.assign_shape(obj, base_obj.Shape)
             return
 
         base_shape = base_obj.Shape

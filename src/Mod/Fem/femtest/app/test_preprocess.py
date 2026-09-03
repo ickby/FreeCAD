@@ -1727,7 +1727,7 @@ class TestMeshMerge(unittest.TestCase):
             "\n{0}\n{1} run FEM TestMeshMerge tests {2}\n{0}".format(100 * "*", 10 * "*", 57 * "*")
         )
 
-    def test_lazy_merge_two_children(self):
+    def test_merge_two_children(self):
         group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
         child_a = self.document.addObject("Fem::FemMeshObject", "MeshA")
         child_b = self.document.addObject("Fem::FemMeshObject", "MeshB")
@@ -1755,7 +1755,7 @@ class TestMeshMerge(unittest.TestCase):
 
     def test_reading_merged_mesh_does_not_touch_the_group(self):
         """
-        The merge is a cache filled on read. Reading it must not mark anything
+        The merge is an output of execute(). Reading it must not mark anything
         touched, which would mark the document modified and force a recompute.
         """
         group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
@@ -1969,11 +1969,13 @@ class TestMeshTopology(unittest.TestCase):
         self.assertEqual(group.getGroupElementsByName("Component1_Volume"), [vol])
         self.assertEqual(group.getGroupElementsByName("NoSuchGroup"), [])
 
-    def test_topology_reads_merge_only_once(self):
+    def test_topology_reads_never_merge(self):
         """
-        Repeated topology queries after a single invalidation must not re-merge.
-        The panel rebuilds on every view-state notify; without this the merge
-        would run once per notify.
+        Reading the topology merges nothing at all.
+
+        The panel rebuilds on every view-state notify, and a getter that merged
+        would run the whole classification once per notify - and would do it
+        outside the recompute the document schedules for it.
         """
         group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
         child = self.document.addObject("Fem::FemMeshObject", "MeshA")
@@ -1985,15 +1987,16 @@ class TestMeshTopology(unittest.TestCase):
         Fem.perfReset()
         Fem.perfEnable(True)
         try:
-            # First read forces the merge; the rest must reuse the cache.
             for _ in range(5):
                 self.assertEqual(group.getComponentCount(), 1)
                 self.assertEqual(group.getToplevelElements(0), ["Component1_Volume"])
+                self.assertEqual(group.FemMesh.VolumeCount, 1)
         finally:
             Fem.perfEnable(False)
 
         report = {name: count for name, count, _total, _self in Fem.perfReport()}
-        self.assertEqual(report.get("merge", 0), 1)
+        self.assertEqual(report.get("merge", 0), 0)
+        self.assertEqual(report.get("merge.placement", 0), 0)
 
     def _fused_analysis(self):
         """
@@ -2113,6 +2116,400 @@ class TestMeshTopology(unittest.TestCase):
             geom_colour,
             "Solid1 keeps its geometry-stage colour when a catch-all appears",
         )
+
+
+class TestExecuteDrivenOutputs(unittest.TestCase):
+    """
+    When the merge runs, rather than what it produces.
+
+    The merged mesh, its provenance and its topology are outputs of execute(),
+    and the group is a dependent of every child, so FreeCAD hands it a recompute
+    for anything at all that happens to one. What is under test here is which
+    change asks for the whole thing, which asks only for new coordinates, and
+    which asks for nothing.
+    """
+
+    fcc_print("import TestExecuteDrivenOutputs")
+
+    def setUp(self):
+        self.document = FreeCAD.newDocument(self.__class__.__name__)
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.document.Name)
+
+    def test_00print(self):
+        fcc_print(
+            "\n{0}\n{1} run FEM TestExecuteDrivenOutputs tests {2}\n{0}".format(
+                100 * "*", 10 * "*", 47 * "*"
+            )
+        )
+
+    # -- helpers ----------------------------------------------------------
+
+    def _group_with_child(self, name="MeshA"):
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        child = self.document.addObject("Fem::FemMeshObject", name)
+        mesh, _, _ = _make_tet_mesh()
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+        return group, child
+
+    def _merge_counts(self, action):
+        """Merge stages a single action ran, by scope name."""
+        Fem.perfReset()
+        Fem.perfEnable(True)
+        try:
+            action()
+        finally:
+            Fem.perfEnable(False)
+        report = {name: count for name, count, _total, _self in Fem.perfReport()}
+        return report.get("merge", 0), report.get("merge.placement", 0)
+
+    def _assert_output_matches_children(self, group):
+        """The published merge is exactly what the children of the moment add up to."""
+        children = sorted(group.Group, key=lambda obj: obj.Name)
+        cells = group.FemMesh.VolumeCount + group.FemMesh.FaceCount
+        self.assertEqual(group.FemMesh.NodeCount, sum(c.FemMesh.NodeCount for c in children))
+        self.assertEqual(cells, sum(c.FemMesh.VolumeCount + c.FemMesh.FaceCount for c in children))
+        self.assertEqual(len(group.CellSources), cells)
+        self.assertEqual(len(group.CellDimension), cells)
+
+    def _topology_snapshot(self, group):
+        return {
+            "components": group.getComponentCount(),
+            "toplevels": [group.getToplevelElements(c) for c in range(group.getComponentCount())],
+            "cell_sources": list(group.CellSources),
+            "cell_dimension": list(group.CellDimension),
+            "entity_dimension": dict(group.EntityDimension),
+        }
+
+    # -- what asks for a full rebuild --------------------------------------
+
+    def test_child_mesh_assignment_merges_once(self):
+        """One assignment of a child mesh, one full merge, and a new topology."""
+        group, child = self._group_with_child()
+        before_merge = group.getMergeRevision()
+        before_topology = group.getTopologyRevision()
+
+        def remesh():
+            child.FemMesh = _make_two_solid_tet_mesh()
+            self.document.recompute()
+
+        full, placement = self._merge_counts(remesh)
+        self.assertEqual(full, 1)
+        self.assertEqual(placement, 0)
+
+        self.assertEqual(group.getMergeRevision(), before_merge + 1)
+        self.assertEqual(group.getTopologyRevision(), before_topology + 1)
+        self.assertEqual(group.FemMesh.VolumeCount, 2)
+        self.assertEqual(group.getComponentCount(), 2)
+        self.assertEqual(
+            len(group.CellSources), group.FemMesh.VolumeCount + group.FemMesh.FaceCount
+        )
+
+        # And the getters stay pure afterwards.
+        full, placement = self._merge_counts(lambda: self._topology_snapshot(group))
+        self.assertEqual((full, placement), (0, 0))
+
+    def test_group_membership_change_rebuilds_once(self):
+        """Adding a child is one rebuild, and the result stays name-sorted."""
+        group, child_a = self._group_with_child("AMesh")
+        child_z = self.document.addObject("Fem::FemMeshObject", "ZMesh")
+        mesh_z, _ = _make_tri_mesh("Face12")
+        child_z.FemMesh = mesh_z
+
+        def add():
+            group.Group = [child_z, child_a]
+            self.document.recompute()
+
+        full, placement = self._merge_counts(add)
+        self.assertEqual(full, 1)
+        self.assertEqual(placement, 0)
+
+        # Sorted by Name, not by Group order: the tet of AMesh comes first.
+        self.assertEqual(group.CellSources[0], child_a.Name)
+        self.assertEqual(group.CellSources[-1], child_z.Name)
+
+        ordered = list(group.CellSources)
+        nodes = list(group.FemMesh.Nodes.values())
+
+        def reorder():
+            group.Group = [child_a, child_z]
+            self.document.recompute()
+
+        full, placement = self._merge_counts(reorder)
+        self.assertEqual(full, 1)
+        self.assertEqual(list(group.CellSources), ordered)
+        self.assertEqual(list(group.FemMesh.Nodes.values()), nodes)
+
+        def remove():
+            group.Group = [child_a]
+            self.document.recompute()
+
+        full, placement = self._merge_counts(remove)
+        self.assertEqual(full, 1)
+        self.assertEqual(set(group.CellSources), {child_a.Name})
+
+    # -- what asks for nothing ---------------------------------------------
+
+    def test_mesher_parameter_change_merges_nothing(self):
+        """
+        A mesher setting reaches the group as a recompute and stops there.
+
+        Changing it does not produce a mesh by itself - the mesher has to be run
+        - so nothing the group published follows from it yet.
+        """
+        group = ObjectsFem.makeMeshShapeGroup(self.document, "Mesh")
+        mesher = ObjectsFem.makeMeshGmsh(self.document)
+        ObjectsFem.addMeshToShapeGroup(group, mesher)
+        mesher.FemMesh = _make_tet_mesh()[0]
+        self.document.recompute()
+
+        before_merge = group.getMergeRevision()
+        before_topology = group.getTopologyRevision()
+        before = self._topology_snapshot(group)
+        nodes = dict(group.FemMesh.Nodes)
+
+        def retune():
+            mesher.CharacteristicLengthMax = 3.0
+            self.document.recompute()
+
+        full, placement = self._merge_counts(retune)
+        self.assertEqual((full, placement), (0, 0))
+        self.assertEqual(group.getMergeRevision(), before_merge)
+        self.assertEqual(group.getTopologyRevision(), before_topology)
+        self.assertEqual(self._topology_snapshot(group), before)
+        self.assertEqual(dict(group.FemMesh.Nodes), nodes)
+
+    def test_child_components_change_merges_nothing_until_remesh(self):
+        """
+        A component claim is checked when a mesh arrives, not when it is made.
+
+        Claiming a component says which part of the geometry the child is going
+        to mesh. Until it has meshed it, nothing about the merge has changed -
+        but the claim in force when the mesh does arrive is the one that counts.
+        """
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        geom.Shape = Part.makeCompound(
+            [Part.makeBox(10, 10, 10), Part.makeBox(10, 10, 10, FreeCAD.Vector(20, 0, 0))]
+        )
+        group = ObjectsFem.makeMeshShapeGroup(self.document, "Mesh", geometry=geom)
+        child = self.document.addObject("Fem::FemMeshShapeBaseObjectPython", "MeshA")
+        child.Components = (geom, ["Component1", "Component2"])
+        group.Group = [child]
+        child.FemMesh = _make_tet_mesh()[0]
+        self.document.recompute()
+
+        before_merge = group.getMergeRevision()
+        before_topology = group.getTopologyRevision()
+
+        def reclaim():
+            child.Components = (geom, ["Component1"])
+            self.document.recompute()
+
+        full, placement = self._merge_counts(reclaim)
+        self.assertEqual((full, placement), (0, 0))
+        self.assertEqual(group.getMergeRevision(), before_merge)
+        self.assertEqual(group.getTopologyRevision(), before_topology)
+
+        # Component2 is now unclaimed, and the next mesh is validated against
+        # that, not against the claim the last merge ran under.
+        def remesh():
+            child.FemMesh = _make_two_solid_tet_mesh()
+            self.document.recompute()
+
+        full, placement = self._merge_counts(remesh)
+        self.assertEqual(full, 1)
+        self.assertEqual(group.getComponentOwners(), {1: child})
+
+    # -- what asks only for coordinates ------------------------------------
+
+    def test_child_placement_remerges_coordinates_only(self):
+        """
+        Moving a child moves the merged nodes and leaves everything else alone.
+
+        A rigid move renames nothing and reconnects nothing, so the element ids,
+        the groups, the provenance and the dimensions of the last merge all
+        still describe the mesh - only the coordinates are new.
+        """
+        group, child = self._group_with_child()
+        before_merge = group.getMergeRevision()
+        before_topology = group.getTopologyRevision()
+        before = self._topology_snapshot(group)
+        origin = group.FemMesh.Nodes[1]
+
+        def move():
+            child.Placement = FreeCAD.Placement(FreeCAD.Vector(5, 0, 0), FreeCAD.Rotation())
+            self.document.recompute()
+
+        full, placement = self._merge_counts(move)
+        self.assertEqual(placement, 1)
+        self.assertEqual(full, 0)
+
+        self.assertEqual(group.getMergeRevision(), before_merge + 1)
+        self.assertEqual(group.getTopologyRevision(), before_topology)
+        self.assertEqual(self._topology_snapshot(group), before)
+        self.assertAlmostEqual(group.FemMesh.Nodes[1].x, origin.x + 5)
+        self.assertAlmostEqual(group.FemMesh.Nodes[1].y, origin.y)
+
+    def test_import_placement_still_transforms_the_placed_merge(self):
+        """An import places the group's merge, which already places its children."""
+        from femtools import importtools
+
+        source = ObjectsFem.makeAnalysis(self.document, "Source")
+        group = ObjectsFem.makeMeshShapeGroup(self.document, "Mesh", analysis=source)
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        child.FemMesh = _make_tet_mesh()[0]
+        child.Placement = FreeCAD.Placement(FreeCAD.Vector(5, 0, 0), FreeCAD.Rotation())
+        group.Group = [child]
+
+        assembly = ObjectsFem.makeAnalysis(self.document, "Assembly")
+        placed = ObjectsFem.makeAnalysisImport(self.document, "Placed")
+        placed.Analysis = source
+        placed.Placement = FreeCAD.Placement(FreeCAD.Vector(0, 7, 0), FreeCAD.Rotation())
+        importtools.wire_import(assembly, placed)
+        self.document.recompute()
+
+        native = group.FemMesh.Nodes[1]
+        assembled = Fem.buildSolveAssembly(assembly)[0]
+        self.assertTrue(
+            any(
+                abs(node.x - native.x) < 1e-9 and abs(node.y - (native.y + 7)) < 1e-9
+                for node in assembled.Nodes.values()
+            ),
+            "the import places the already placed native merge",
+        )
+
+    # -- restore and undo ---------------------------------------------------
+
+    def test_reopened_document_rebuilds_the_transient_merge(self):
+        """
+        The merged mesh is not in the file; the children are.
+
+        Restoring has to put it back, once, without leaving the freshly opened
+        document looking edited.
+        """
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        geom.Shape = _box()
+        group = ObjectsFem.makeMeshShapeGroup(self.document, "Mesh", geometry=geom)
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        child.FemMesh = _make_tet_mesh()[0]
+        group.Group = [child]
+        self.document.recompute()
+
+        expected = self._topology_snapshot(group)
+        volumes = group.FemMesh.VolumeCount
+        names = (geom.Name, group.Name, child.Name)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "merge.FCStd")
+            self.document.saveAs(path)
+            FreeCAD.closeDocument(self.document.Name)
+
+            Fem.perfReset()
+            Fem.perfEnable(True)
+            try:
+                # tearDown closes self.document, so hand it the reloaded one
+                self.document = FreeCAD.openDocument(path)
+            finally:
+                Fem.perfEnable(False)
+            report = {name: count for name, count, _t, _s in Fem.perfReport()}
+
+            restored_geom = self.document.getObject(names[0])
+            restored_group = self.document.getObject(names[1])
+            restored_child = self.document.getObject(names[2])
+
+            # Exactly one merge, and no leftover work for a recompute to do.
+            self.assertEqual(report.get("merge", 0), 1)
+            self.assertEqual(report.get("merge.placement", 0), 0)
+            self.assertEqual([o.Name for o in self.document.Objects if "Touched" in o.State], [])
+
+            # The geometry Shape is in the file, its topology is derived again.
+            self.assertFalse(restored_geom.Shape.isNull())
+            self.assertEqual(restored_geom.getComponentCount(), 1)
+
+            # The child mesh is in the file, the merge is not.
+            self.assertEqual(restored_child.FemMesh.VolumeCount, 1)
+            self.assertEqual(restored_group.FemMesh.VolumeCount, volumes)
+            self.assertEqual(self._topology_snapshot(restored_group), expected)
+
+    def test_undo_and_redo_of_group_membership_rebuild_coherent_output(self):
+        """
+        Undo and redo change the children behind the group's back.
+
+        Neither carries a merged mesh - it is transient and was never in the
+        transaction - so the next execute is what has to put a coherent one
+        back, both on the way out and on the way in again.
+        """
+        self.document.UndoMode = 1
+        group, child_a = self._group_with_child("AMesh")
+        child_z = self.document.addObject("Fem::FemMeshObject", "ZMesh")
+        child_z.FemMesh = _make_tri_mesh("Face12")[0]
+        self._assert_output_matches_children(group)
+
+        self.document.openTransaction("add mesh")
+        group.Group = [child_a, child_z]
+        self.document.commitTransaction()
+        self.document.recompute()
+        self.assertEqual(len(group.Group), 2)
+        self._assert_output_matches_children(group)
+
+        self.document.undo()
+        self.document.recompute()
+        self.assertEqual(len(group.Group), 1)
+        self._assert_output_matches_children(group)
+
+        self.document.redo()
+        self.document.recompute()
+        self.assertEqual(len(group.Group), 2)
+        self._assert_output_matches_children(group)
+
+    # -- geometry -----------------------------------------------------------
+
+    def test_geometry_topology_follows_the_shape_through_recompute(self):
+        """
+        A geometry chain classifies its result once, at the recompute.
+
+        An unrelated property on a step leaves the shape as it was, so the group
+        hands the same shape on again and nothing behind it is reclassified.
+        """
+        group = ObjectsFem.makeGeometryGroup(self.document, "Geometry")
+        step = ObjectsFem.makeGeometryImport(self.document, "Import")
+        box = self.document.addObject("Part::Box", "Box")
+        step.Import = [box]
+        group.Group = [step]
+        self.document.recompute()
+
+        revision = group.getTopologyRevision()
+        self.assertEqual(group.getComponentCount(), 1)
+
+        # An irrelevant property on a step: the shape it produces is the same
+        # one, so the group must not republish and nothing is reclassified.
+        step.Label = "Renamed import"
+        self.document.recompute()
+        self.assertEqual(group.getTopologyRevision(), revision)
+
+        # A changed input is a changed shape, and the topology follows it - but
+        # only once the document has recomputed to it.
+        box.Length = 20
+        self.document.recompute()
+        self.assertNotEqual(group.getTopologyRevision(), revision)
+        self.assertEqual(group.getComponentCount(), 1)
+        self.assertAlmostEqual(group.Shape.BoundBox.XLength, 20)
+
+    def test_geometry_shape_assignment_is_finalised_by_recompute(self):
+        """A Shape written by hand reaches the topology at the next recompute."""
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        geom.Shape = _box()
+        self.document.recompute()
+        self.assertEqual(geom.getComponentCount(), 1)
+        revision = geom.getTopologyRevision()
+
+        geom.Shape = Part.makeCompound([Part.makeBox(10, 10, 10), _face_xy()])
+        self.document.recompute()
+        self.assertEqual(geom.getTopologyRevision(), revision + 1)
+        self.assertEqual(geom.getComponentCount(), 2)
 
 
 class TestExportHighest(unittest.TestCase):

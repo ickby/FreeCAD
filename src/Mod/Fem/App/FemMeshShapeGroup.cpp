@@ -25,6 +25,8 @@
 #include <set>
 #include <sstream>
 #include <string_view>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 #include <BRepBndLib.hxx>
@@ -34,7 +36,9 @@
 #include <TopoDS_Shape.hxx>
 
 #include <SMDS_MeshElement.hxx>
+#include <SMDS_MeshInfo.hxx>
 #include <SMESHDS_GroupBase.hxx>
+#include <SMESHDS_Mesh.hxx>
 #include <SMESH_Group.hxx>
 #include <SMESH_Mesh.hxx>
 
@@ -67,35 +71,16 @@ const char* objectName(const App::DocumentObject* obj)
     return name ? name : "?";
 }
 
-/**
- * Writes a property without emitting a change.
- *
- * A property signals its container from aboutToSetValue()/hasSetValue(), which
- * touches the object and records an undo entry. Detaching the property from its
- * container for the duration of the write suppresses both, which is what a
- * derived cache needs.
- */
-class SilentPropertyWrite
+/// Nodes and cells of a mesh, the two numbers a merge of it contributes.
+std::pair<int, int> meshCounts(const Fem::FemMesh& mesh)
 {
-public:
-    explicit SilentPropertyWrite(App::Property& prop)
-        : m_prop(prop)
-        , m_container(prop.getContainer())
-    {
-        m_prop.setContainer(nullptr);
+    if (const auto* smesh = mesh.getSMesh()) {
+        if (const auto* meshDS = smesh->GetMeshDS()) {
+            return {meshDS->NbNodes(), meshDS->GetMeshInfo().NbElements()};
+        }
     }
-    ~SilentPropertyWrite()
-    {
-        m_prop.setContainer(m_container);
-    }
-
-    SilentPropertyWrite(const SilentPropertyWrite&) = delete;
-    SilentPropertyWrite& operator=(const SilentPropertyWrite&) = delete;
-
-private:
-    App::Property& m_prop;
-    App::PropertyContainer* m_container;
-};
+    return {0, 0};
+}
 
 }  // namespace
 
@@ -110,8 +95,14 @@ FemMeshShapeGroup::FemMeshShapeGroup()
     // reaches us through the Group link like any other dependency.
     _GroupTouched.setStatus(App::Property::Output, true);
 
-    // Merged mesh is rebuilt on demand; children are what get persisted.
+    // The merged mesh is what execute() produces out of the children, and the
+    // children are what gets persisted. Output keeps publishing it from
+    // touching the group - it is the result of a recompute, not an input to
+    // the next one - and NoModify keeps putting a derived value back from
+    // asking the user to save a document whose file contents never changed.
     FemMesh.setStatus(App::Property::Transient, true);
+    FemMesh.setStatus(App::Property::Output, true);
+    FemMesh.setStatus(App::Property::NoModify, true);
 
     ADD_PROPERTY_TYPE(
         CellSources,
@@ -134,6 +125,12 @@ FemMeshShapeGroup::FemMeshShapeGroup()
         App::PropertyType(App::Prop_Transient | App::Prop_Output | App::Prop_Hidden),
         "Effective analysis dimension per entity group name"
     );
+
+    // Derived alongside the merged mesh and just as transient, so republishing
+    // them says nothing about whether the document needs saving.
+    CellSources.setStatus(App::Property::NoModify, true);
+    CellDimension.setStatus(App::Property::NoModify, true);
+    EntityDimension.setStatus(App::Property::NoModify, true);
 }
 
 FemMeshShapeGroup::~FemMeshShapeGroup() = default;
@@ -145,24 +142,34 @@ bool FemMeshShapeGroup::allowObject(App::DocumentObject* obj)
 
 short FemMeshShapeGroup::mustExecute() const
 {
-    if (Group.isTouched() || Shape.isTouched()) {
+    // A request is the only thing execute() has work for. Group and Shape are
+    // still asked because a restore or an undo can put them back without the
+    // change reaching onChanged(); execute() returns at once when it finds
+    // nothing requested.
+    if (m_meshRebuildRequested || m_topologyRebuildRequested) {
         return 1;
     }
-    for (auto* obj : Group.getValues()) {
-        if (obj && obj->isTouched()) {
-            return 1;
-        }
+    if (Group.isTouched() || Shape.isTouched()) {
+        return 1;
     }
     return FemMeshShapeBaseObject::mustExecute();
 }
 
-void FemMeshShapeGroup::invalidateMergedCache()
+void FemMeshShapeGroup::requestRebuild(bool withTopology)
 {
-    if (m_merging) {
-        return;
+    m_meshRebuildRequested = true;
+    if (withTopology) {
+        m_topologyRebuildRequested = true;
     }
-    m_mergedValid = false;
-    m_topologyValid = false;
+
+    // FreeCAD schedules us for a child that changed inside a recompute, but a
+    // mesh assigned from a script or put back by an undo raises the signal with
+    // nothing else to follow it. Restoring is the one case where the request
+    // alone is enough: onDocumentRestored() rebuilds directly, and touching the
+    // object there would leave a freshly opened document wanting a recompute.
+    if (isAttachedToDocument() && !isRestoring()) {
+        enforceRecompute();
+    }
 }
 
 void FemMeshShapeGroup::reconnectChildSignals()
@@ -189,24 +196,35 @@ void FemMeshShapeGroup::slotChildChanged(const App::DocumentObject& obj, const A
     if (!meshObj) {
         return;
     }
-    if (&prop == &meshObj->FemMesh || &prop == &meshObj->Placement) {
-        invalidateMergedCache();
+    if (&prop == &meshObj->FemMesh) {
+        // A new child mesh brings new cells, new groups and new provenance;
+        // nothing derived from the old one survives it.
+        requestRebuild(true);
         return;
     }
-    auto* shapeBase = Base::freecad_cast<FemMeshShapeBaseObject*>(&obj);
-    if (shapeBase && &prop == &shapeBase->Components) {
-        invalidateMergedCache();
+    if (&prop == &meshObj->Placement) {
+        // A rigid move leaves connectivity, groups and element ids exactly as
+        // they were, so only the coordinates have to be laid down again.
+        requestRebuild(false);
     }
+
+    // Everything else a child has - mesher settings, Components, visibility,
+    // its label - reaches the merge only through the mesh it produces, which
+    // arrives above as an assignment of its own.
 }
 
 void FemMeshShapeGroup::onChanged(const App::Property* prop)
 {
-    if (prop == &Group || prop == &Shape) {
-        invalidateMergedCache();
-        if (prop == &Group) {
-            reconnectChildSignals();
-        }
+    if (prop == &Group) {
+        // Membership and order decide which meshes are appended and in which
+        // order, so the merge and everything derived from it start over.
+        reconnectChildSignals();
+        requestRebuild(true);
     }
+
+    // A change of Shape alone is geometry metadata for the next merge, not a
+    // reason to redo the current one; the next child mesh picks it up.
+
     FemMeshShapeBaseObject::onChanged(prop);
 }
 
@@ -221,15 +239,26 @@ void FemMeshShapeGroup::extensionOnChanged(const App::Property* prop)
 
 void FemMeshShapeGroup::onDocumentRestored()
 {
-    // Anything that read the merge while the document was still coming off disk
-    // got whatever the children held at that moment, which for a mesh read from
-    // its own file in the archive is nothing. Restoring the children raises no
-    // property change, so this is the only point at which that can be undone.
-    invalidateMergedCache();
-
     // The status of a transient property is written to the file, so a document
     // saved before this was set brings the old one back with it.
     _GroupTouched.setStatus(App::Property::Output, true);
+
+    // The child meshes live in their own files inside the archive, and those
+    // are read before the dependency-ordered restore hooks run, so by the time
+    // a group is reached its children hold their meshes. Restoring them raises
+    // no property change, which makes this the only point at which the merged
+    // mesh - transient, and so absent from the file - can be put back.
+    reconnectChildSignals();
+    m_meshRebuildRequested = true;
+    m_topologyRebuildRequested = true;
+    if (auto* ret = execute(); ret != App::DocumentObject::StdReturn) {
+        Base::Console().warning(
+            "FemMeshShapeGroup '%s': %s\n",
+            objectName(this),
+            ret->Why.c_str()
+        );
+        delete ret;
+    }
 
     FemMeshShapeBaseObject::onDocumentRestored();
 }
@@ -462,116 +491,209 @@ std::string FemMeshShapeGroup::validateComponents(bool* hasOverlap) const
 
 App::DocumentObjectExecReturn* FemMeshShapeGroup::execute()
 {
-    // An import pulls its mesh straight out of the source analysis mesh group,
-    // so a change there reaches us as a recompute and not as a property change
-    // on the import. Drop the cache here to cover that; the rebuild itself
-    // still only happens when someone reads the merged mesh.
-    invalidateMergedCache();
+    // The Group link makes us a dependent of every child, so FreeCAD sends a
+    // recompute for anything at all that happens to one - a mesher setting, a
+    // label, a component assignment. Almost none of that changes the merge, and
+    // the two requests are what the changes that do leave behind. Everything
+    // else stops here, at the cost of two bools.
+    if (!m_meshRebuildRequested && !m_topologyRebuildRequested) {
+        return StdReturn;
+    }
 
-    // Validation only — merge happens lazily in getMergedMesh().
+    // A child that only moved keeps the merge it is part of intact apart from
+    // its coordinates, so the classification and the topology of the last full
+    // merge are still the right answer and are left alone.
+    if (!m_topologyRebuildRequested && rebuildPlacementOnly()) {
+        return StdReturn;
+    }
+
     bool overlap = false;
     const std::string msg = validateComponents(&overlap);
     if (overlap) {
+        // Two children meshing the same component would merge into a mesh with
+        // the geometry in it twice. Publishing nothing is what says so; leaving
+        // the previous merge up would show a mesh that no longer follows from
+        // the children, and the request stays open so a corrected assignment
+        // still rebuilds.
+        clearMergedOutput();
         return new App::DocumentObjectExecReturn(msg.c_str());
     }
+
+    rebuildFull();
     return StdReturn;
 }
 
-void FemMeshShapeGroup::ensureMergedMesh()
+const ::Fem::FemMesh& FemMeshShapeGroup::getMergedMesh() const
 {
-    if (m_merging || m_mergedValid) {
-        return;
-    }
-    rebuildMergedMesh();
-}
-
-const ::Fem::FemMesh& FemMeshShapeGroup::getMergedMesh()
-{
-    ensureMergedMesh();
     return FemMesh.getValue();
 }
 
-void FemMeshShapeGroup::rebuildMergedMesh()
+std::vector<FemMeshObject*> FemMeshShapeGroup::sortedChildren() const
 {
-    FEM_PERF_SCOPE("merge");
-
-    m_merging = true;
-    m_topologyValid = false;
-
-    Fem::FemMesh merged;
-    std::vector<std::string> sources;
-
     std::vector<FemMeshObject*> children;
-    children.reserve(Group.getValues().size());
-    for (auto* obj : Group.getValues()) {
+    const auto& values = Group.getValues();
+    children.reserve(values.size());
+    for (auto* obj : values) {
         if (auto* meshObj = Base::freecad_cast<FemMeshObject*>(obj)) {
             children.push_back(meshObj);
         }
     }
+
     // Deterministic merge order so that CellSources and the merged element ids
     // do not depend on the order the children were added in.
-    auto safeName = [](const FemMeshObject* obj) {
-        const char* name = obj->getNameInDocument();
-        return std::string_view(name ? name : "");
-    };
     std::sort(
         children.begin(),
         children.end(),
-        [&safeName](const FemMeshObject* a, const FemMeshObject* b) {
-            return safeName(a) < safeName(b);
+        [](const FemMeshObject* a, const FemMeshObject* b) {
+            const char* na = a->getNameInDocument();
+            const char* nb = b->getNameInDocument();
+            return std::string_view(na ? na : "") < std::string_view(nb ? nb : "");
         }
     );
+    return children;
+}
 
+std::vector<FemMeshShapeGroup::ChildStamp>
+FemMeshShapeGroup::stampsOf(const std::vector<FemMeshObject*>& children)
+{
+    std::vector<ChildStamp> stamps;
+    stamps.reserve(children.size());
+    for (const auto* meshObj : children) {
+        ChildStamp stamp;
+        const char* name = meshObj->getNameInDocument();
+        stamp.name = name ? name : "";
+        std::tie(stamp.nodes, stamp.elements) = meshCounts(meshObj->FemMesh.getValue());
+        stamps.push_back(std::move(stamp));
+    }
+    return stamps;
+}
+
+Fem::FemMesh FemMeshShapeGroup::mergeChildren(
+    const std::vector<FemMeshObject*>& children,
+    std::vector<std::string>* sources
+) const
+{
+    Fem::FemMesh merged;
     for (auto* meshObj : children) {
-        merged.appendMeshData(meshObj->FemMesh.getValue(), std::string(safeName(meshObj)), &sources);
+        const char* name = meshObj->getNameInDocument();
+        // No transform override: appendMeshData applies the transform the child
+        // carries, which its Placement wrote, and so places it in our frame.
+        merged.appendMeshData(meshObj->FemMesh.getValue(), std::string(name ? name : ""), sources);
     }
+    return merged;
+}
 
-    // The merge is a cache fill derived from the children, not a user edit.
-    // Reading .FemMesh must therefore neither mark the object touched (which
-    // would mark the document modified) nor add an undo entry.
+void FemMeshShapeGroup::rebuildFull()
+{
+    FEM_PERF_SCOPE("merge");
+
+    const auto children = sortedChildren();
+    std::vector<std::string> sources;
+    Fem::FemMesh merged = mergeChildren(children, &sources);
+
+    CellSources.setValues(sources);
+
+    FemGeometry* geometry = nullptr;
+    if (auto* shapeObj = Shape.getValue()) {
+        geometry = Base::freecad_cast<FemGeometry*>(shapeObj);
+    }
+    const auto classification = classifyDimensions(merged, sources, geometry);
+    std::vector<long> dims;
+    dims.reserve(classification.cellDimension.size());
+    for (int d : classification.cellDimension) {
+        dims.push_back(d);
+    }
+    CellDimension.setValues(dims);
+    std::map<std::string, std::string> entityMap;
+    for (const auto& [name, dim] : classification.entityDimension) {
+        entityMap[name] = std::to_string(dim);
+    }
+    EntityDimension.setValues(entityMap);
+
+    m_topology = buildMeshTopology(merged, classification);
+
+    // After the topology, because that is what names them, and before the
+    // property takes the mesh over.
     {
-        SilentPropertyWrite silentMesh(FemMesh);
-        SilentPropertyWrite silentSources(CellSources);
-        SilentPropertyWrite silentDims(CellDimension);
-        SilentPropertyWrite silentEntities(EntityDimension);
-        CellSources.setValues(sources);
-
-        FemGeometry* geometry = nullptr;
-        if (auto* shapeObj = Shape.getValue()) {
-            geometry = Base::freecad_cast<FemGeometry*>(shapeObj);
-        }
-        const auto classification = classifyDimensions(merged, sources, geometry);
-        std::vector<long> dims;
-        dims.reserve(classification.cellDimension.size());
-        for (int d : classification.cellDimension) {
-            dims.push_back(d);
-        }
-        CellDimension.setValues(dims);
-        std::map<std::string, std::string> entityMap;
-        for (const auto& [name, dim] : classification.entityDimension) {
-            entityMap[name] = std::to_string(dim);
-        }
-        EntityDimension.setValues(entityMap);
-
-        m_topology = buildMeshTopology(merged, classification);
-        m_topologyValid = true;
-
-        // After the topology, because that is what names them, and before the
-        // property takes the mesh over.
-        {
-            FEM_PERF_SCOPE("merge.catchAllGroups");
-            materialiseCatchAllGroups(merged);
-        }
-
-        // Bumped before the write, because the write is what tells the view
-        // to read the merge back, and a view that recorded the old number
-        // there believes the merge to be stale ever after and rebuilds its
-        // whole grid on the next thing that asks it to look.
-        ++m_mergeRevision;
-        m_mergedValid = true;
-        FemMesh.setValue(merged);
+        FEM_PERF_SCOPE("merge.catchAllGroups");
+        materialiseCatchAllGroups(merged);
     }
-    m_merging = false;
+
+    // What the placement-only path has to find unchanged before it may reuse
+    // any of the above.
+    m_mergeInputs = stampsOf(children);
+
+    // Bumped before the write, because the write is what tells the view to read
+    // the merge back, and a view that recorded the old number there believes
+    // the merge to be stale ever after and rebuilds its whole grid on the next
+    // thing that asks it to look.
+    ++m_mergeRevision;
+    ++m_topologyRevision;
+    FemMesh.setValue(merged);
+
+    m_meshRebuildRequested = false;
+    m_topologyRebuildRequested = false;
+}
+
+bool FemMeshShapeGroup::rebuildPlacementOnly()
+{
+    // Reusing the classification only holds while the children still append the
+    // same cells in the same order: same children, same names, same counts.
+    // Then the merge that follows hands out the same element ids to the same
+    // cells, and CellSources, the dimensions, the groups and the topology all
+    // still describe it - only the node coordinates moved. Anything else is not
+    // a move, and the caller falls back to the full rebuild.
+    if (m_mergeInputs.empty()) {
+        return false;
+    }
+    const auto children = sortedChildren();
+    if (stampsOf(children) != m_mergeInputs) {
+        return false;
+    }
+
+    FEM_PERF_SCOPE("merge.placement");
+
+    Fem::FemMesh merged = mergeChildren(children, nullptr);
+
+    // What SMESH actually took. The children agreeing on their counts is what
+    // predicts it, but a merge is the only thing that establishes it, and a
+    // CellSources that no longer indexes the mesh it describes would mislabel
+    // every cell in the view and in the solver input.
+    if (meshCounts(merged).second != CellSources.getSize()) {
+        return false;
+    }
+
+    // The catch-alls are groups the merge does not carry: they are derived from
+    // the topology and written into the mesh afterwards. The topology is the one
+    // from the last full merge and still names the same elements.
+    materialiseCatchAllGroups(merged);
+
+    ++m_mergeRevision;
+    FemMesh.setValue(merged);
+
+    m_meshRebuildRequested = false;
+    return true;
+}
+
+void FemMeshShapeGroup::clearMergedOutput()
+{
+    m_mergeInputs.clear();
+
+    // The request stays open while the assignment is wrong, so a failing group
+    // is executed again on every recompute. Republishing the same emptiness
+    // each time would walk a view through a rebuild for nothing.
+    if (CellSources.getSize() == 0 && meshCounts(FemMesh.getValue()) == std::pair<int, int> {0, 0}) {
+        return;
+    }
+
+    m_topology = MeshTopology();
+    CellSources.setValues(std::vector<std::string>());
+    CellDimension.setValues(std::vector<long>());
+    EntityDimension.setValues(std::map<std::string, std::string>());
+
+    ++m_mergeRevision;
+    ++m_topologyRevision;
+    FemMesh.setValue(Fem::FemMesh());
 }
 
 void FemMeshShapeGroup::materialiseCatchAllGroups(Fem::FemMesh& mesh) const
@@ -611,38 +733,13 @@ void FemMeshShapeGroup::materialiseCatchAllGroups(Fem::FemMesh& mesh) const
     }
 }
 
-void FemMeshShapeGroup::ensureTopology() const
+const MeshTopology& FemMeshShapeGroup::getMeshTopology() const
 {
-    if (m_topologyValid) {
-        return;
-    }
-    // An accessor called re-entrantly during a merge would clear the flag the
-    // merge is about to set and then return before filling anything, leaving
-    // the caller reading an empty topology. Unreachable today; the panel is
-    // about to become the first external caller of these accessors.
-    if (m_merging) {
-        return;
-    }
-    // The topology is filled by the merge, and a merge that is still valid
-    // would return before filling it, so the cache has to be dropped first.
-    auto* self = const_cast<FemMeshShapeGroup*>(this);
-    self->m_mergedValid = false;
-    self->ensureMergedMesh();
-}
-
-const MeshTopology& FemMeshShapeGroup::getMeshTopology()
-{
-    ensureTopology();
     return m_topology;
 }
 
 std::vector<int> FemMeshShapeGroup::groupElementsByName(const std::string& name) const
 {
-    if (m_merging) {
-        return {};
-    }
-    ensureTopology();
-
     if (auto* smesh = const_cast<Fem::FemMesh&>(FemMesh.getValue()).getSMesh()) {
         for (int gid : smesh->GetGroupIds()) {
             SMESH_Group* group = smesh->GetGroup(gid);
@@ -669,19 +766,11 @@ std::vector<int> FemMeshShapeGroup::groupElementsByName(const std::string& name)
 
 std::size_t FemMeshShapeGroup::componentCount() const
 {
-    if (m_merging) {
-        return 0;
-    }
-    ensureTopology();
     return m_topology.componentCount();
 }
 
 std::vector<std::string> FemMeshShapeGroup::toplevelElements(componentIdType component) const
 {
-    if (m_merging) {
-        return {};
-    }
-    ensureTopology();
     if (component >= m_topology.componentToplevels.size()) {
         return {};
     }
@@ -690,10 +779,6 @@ std::vector<std::string> FemMeshShapeGroup::toplevelElements(componentIdType com
 
 std::vector<std::string> FemMeshShapeGroup::entities(const std::string& toplevel) const
 {
-    if (m_merging) {
-        return {};
-    }
-    ensureTopology();
     auto it = m_topology.entitiesOfToplevel.find(toplevel);
     if (it == m_topology.entitiesOfToplevel.end()) {
         return {};
@@ -703,10 +788,6 @@ std::vector<std::string> FemMeshShapeGroup::entities(const std::string& toplevel
 
 std::vector<std::string> FemMeshShapeGroup::entityOwners(const std::string& entity) const
 {
-    if (m_merging) {
-        return {};
-    }
-    ensureTopology();
     auto it = m_topology.ownersOfEntity.find(entity);
     if (it == m_topology.ownersOfEntity.end()) {
         return {};
@@ -716,10 +797,6 @@ std::vector<std::string> FemMeshShapeGroup::entityOwners(const std::string& enti
 
 int FemMeshShapeGroup::analysisDimension(const std::string& toplevel) const
 {
-    if (m_merging) {
-        return -1;
-    }
-    ensureTopology();
     auto it = m_topology.dimensionOfToplevel.find(toplevel);
     if (it == m_topology.dimensionOfToplevel.end()) {
         return -1;
@@ -729,10 +806,6 @@ int FemMeshShapeGroup::analysisDimension(const std::string& toplevel) const
 
 int FemMeshShapeGroup::entityDimensionMask(const std::string& entity) const
 {
-    if (m_merging) {
-        return 0;
-    }
-    ensureTopology();
     auto it = m_topology.dimensionMaskOfEntity.find(entity);
     if (it == m_topology.dimensionMaskOfEntity.end()) {
         return 0;
@@ -742,12 +815,10 @@ int FemMeshShapeGroup::entityDimensionMask(const std::string& entity) const
 
 std::size_t FemMeshShapeGroup::topologyRevision() const
 {
-    // Callers that stamp a classification against this need the number of the
-    // topology that is about to be read, not the previous merge. The merge
-    // itself is still silent, so without forcing here a mesher re-run would
-    // leave the stamp looking current until something else asked for the mesh.
-    ensureTopology();
-    return m_mergeRevision;
+    // Only the merges that reclassified. A child that moved republishes the
+    // mesh under a new mergeRevision(), but names the same elements the same
+    // way, and a classification stamped against this stays good across it.
+    return m_topologyRevision;
 }
 
 

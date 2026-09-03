@@ -40,6 +40,11 @@ namespace Fem
 /**
  * Analysis geometry container: Shape plus connected-component cache and
  * per-toplevel-element declared analysis dimension.
+ *
+ * The component and dimension caches are outputs of execute(), rebuilt from the
+ * Shape whenever it changed. Assigning a Shape therefore only marks them stale;
+ * they follow at the next recompute, which is what keeps a chain of geometry
+ * operations from classifying every intermediate shape it writes.
  */
 class FemExport FemGeometry: public App::GeoFeature, public AnalysisTopology
 {
@@ -64,6 +69,9 @@ public:
     }
 
     void onChanged(const App::Property* prop) override;
+
+    /// Rebuilds the component and dimension caches if the Shape has changed.
+    App::DocumentObjectExecReturn* execute() override;
 
     /**
      * Restoring properties does not go through onChanged, so the component and
@@ -144,6 +152,8 @@ private:
     void build_components();
     void rebuildDimensionCache();
 
+    /// Set by a Shape assignment, cleared once execute() has caught up.
+    bool m_topologyDirty {true};
     std::size_t m_revision {0};
     std::vector<std::vector<Part::TopoShape>> m_components_cache;
     std::map<std::string, int> m_geometric_dimension;           ///< toplevel -> dim

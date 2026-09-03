@@ -40,10 +40,13 @@ namespace Fem
 /**
  * Mesh container for the preprocessing workflow.
  *
- * Holds per-object mesh children (never listed in analysis.Group). execute()
- * validates component assignment only; the merged FemMesh is built lazily by
- * getMergedMesh() and kept transient. The container implements AnalysisTopology
- * over the result mesh.
+ * Holds per-object mesh children (never listed in analysis.Group). The merged
+ * FemMesh, its provenance and its topology are outputs of execute(), like the
+ * Shape of any other feature; every getter here reads back what the last
+ * execute() left behind and merges nothing of its own. The merged mesh stays
+ * transient, so a document keeps only the child meshes and the group rebuilds
+ * from them on restore. The container implements AnalysisTopology over the
+ * result mesh.
  */
 class FemExport FemMeshShapeGroup: public FemMeshShapeBaseObject,
                                    public App::GroupExtension,
@@ -84,29 +87,27 @@ public:
     bool allowObject(App::DocumentObject* obj) override;
 
     /**
-     * Build or return the cached merged mesh. Children are merged sorted by
-     * Name. Fills the transient FemMesh property, CellSources, CellDimension
-     * and EntityDimension.
+     * The merged mesh as the last execute() published it.
+     *
+     * A pure read: it never merges. Children are merged sorted by Name, into
+     * FemMesh, CellSources, CellDimension and EntityDimension. A caller that
+     * has just changed an input has to recompute the document before the
+     * change shows up here, as with any other output property.
      */
-    const ::Fem::FemMesh& getMergedMesh();
-
-    /** Ensure FemMesh holds a current merge (used by PropertyFemMesh lazy access). */
-    void ensureMergedMesh();
+    const ::Fem::FemMesh& getMergedMesh() const;
 
     /**
-     * Counter bumped on every merge.
+     * Counter bumped every time the merged FemMesh is republished, including a
+     * re-merge that only moved a child.
      *
-     * The merge fills FemMesh and CellSources without a property change - it is
-     * a cache fill, not a user edit, and notifying would mark the document
-     * modified. Anything caching what it read from the merge therefore has no
-     * signal to react to and has to compare this instead.
+     * The properties are written as outputs, so a view is told about the new
+     * mesh, but a cache built from the merge still needs one number to compare
+     * against rather than the mesh itself.
      */
     std::size_t mergeRevision() const
     {
         return m_mergeRevision;
     }
-
-    void invalidateMergedCache();
 
     /**
      * Object claiming each component of the geometry, by 1-based index.
@@ -127,7 +128,7 @@ public:
     int entityDimensionMask(const std::string& entity) const override;
     std::size_t topologyRevision() const override;
 
-    const MeshTopology& getMeshTopology();
+    const MeshTopology& getMeshTopology() const;
     std::vector<int> groupElementsByName(const std::string& name) const;
 
     PyObject* getPyObject() override;
@@ -162,19 +163,53 @@ private:
         bool mixedGeometry {false};
     };
 
+    /**
+     * What the children contributed to the last full merge.
+     *
+     * The placement-only path reuses the element ids, groups and dimensions of
+     * that merge, which only holds while the children still append the same
+     * cells in the same order. Comparing this against the children of the
+     * moment is what says whether that still holds; anything else falls back
+     * to a full rebuild.
+     */
+    struct ChildStamp
+    {
+        std::string name;
+        int nodes {0};
+        int elements {0};
+
+        bool operator==(const ChildStamp&) const = default;
+    };
+
     ComponentClaims collectComponentClaims() const;
     void reconnectChildSignals();
     void slotChildChanged(const App::DocumentObject& obj, const App::Property& prop);
     std::string validateComponents(bool* hasOverlap = nullptr) const;
     void materialiseCatchAllGroups(Fem::FemMesh& mesh) const;
-    void rebuildMergedMesh();
-    void ensureTopology() const;
 
-    bool m_mergedValid {false};
-    bool m_merging {false};
+    /// Children of the group in merge order, which is sorted by internal Name.
+    std::vector<FemMeshObject*> sortedChildren() const;
+    static std::vector<ChildStamp> stampsOf(const std::vector<FemMeshObject*>& children);
+
+    /// Merge the children into a mesh, applying their own transforms.
+    Fem::FemMesh mergeChildren(
+        const std::vector<FemMeshObject*>& children,
+        std::vector<std::string>* sources
+    ) const;
+
+    void rebuildFull();
+    bool rebuildPlacementOnly();
+    void clearMergedOutput();
+
+    /// Ask the next execute() for work, and make sure a recompute reaches it.
+    void requestRebuild(bool withTopology);
+
+    bool m_meshRebuildRequested {true};
+    bool m_topologyRebuildRequested {true};
     std::size_t m_mergeRevision {0};
-    mutable MeshTopology m_topology;
-    mutable bool m_topologyValid {false};
+    std::size_t m_topologyRevision {0};
+    MeshTopology m_topology;
+    std::vector<ChildStamp> m_mergeInputs;
     std::map<const App::DocumentObject*, fastsignals::scoped_connection> m_childConns;
 };
 

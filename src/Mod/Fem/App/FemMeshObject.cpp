@@ -66,7 +66,10 @@ void FemMeshObject::onChanged(const Property* prop)
 {
     App::GeoFeature::onChanged(prop);
 
-    // if the placement has changed apply the change to the mesh data as well
+    // if the placement has changed apply the change to the mesh data as well.
+    // setTransform() is deliberately silent, so nothing downstream hears about
+    // the move through the mesh; a container merging this one watches Placement
+    // itself and re-merges the coordinates from there.
     if (prop == &this->Placement) {
         this->FemMesh.setTransform(this->Placement.getValue().toMatrix());
     }

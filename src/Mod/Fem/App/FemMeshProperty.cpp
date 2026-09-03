@@ -33,7 +33,6 @@
 
 #include "FemMeshProperty.h"
 #include "FemMeshPy.h"
-#include "FemMeshShapeGroup.h"
 
 
 using namespace Fem;
@@ -65,27 +64,19 @@ void PropertyFemMesh::setValue(const FemMesh& sh)
 
 const FemMesh& PropertyFemMesh::getValue() const
 {
-    // Lazy merge for FemMeshShapeGroup: solvers read .FemMesh without an
-    // explicit getMergedMesh() call.
-    if (auto* group = Base::freecad_cast<FemMeshShapeGroup*>(getContainer())) {
-        const_cast<FemMeshShapeGroup*>(group)->ensureMergedMesh();
-    }
+    // On a FemMeshShapeGroup this is the merge its last execute() published.
+    // Reading it merges nothing: a caller that has just changed a child has to
+    // recompute the document first, as with any other output property.
     return *_FemMesh;
 }
 
 const Data::ComplexGeoData* PropertyFemMesh::getComplexData() const
 {
-    if (auto* group = Base::freecad_cast<FemMeshShapeGroup*>(getContainer())) {
-        const_cast<FemMeshShapeGroup*>(group)->ensureMergedMesh();
-    }
     return static_cast<FemMesh*>(_FemMesh);
 }
 
 Base::BoundBox3d PropertyFemMesh::getBoundingBox() const
 {
-    if (auto* group = Base::freecad_cast<FemMeshShapeGroup*>(getContainer())) {
-        const_cast<FemMeshShapeGroup*>(group)->ensureMergedMesh();
-    }
     return _FemMesh->getBoundBox();
 }
 
@@ -108,9 +99,6 @@ void PropertyFemMesh::transformGeometry(const Base::Matrix4D& rclMat)
 
 PyObject* PropertyFemMesh::getPyObject()
 {
-    if (auto* group = Base::freecad_cast<FemMeshShapeGroup*>(getContainer())) {
-        group->ensureMergedMesh();
-    }
     FemMeshPy* mesh = new FemMeshPy(&*_FemMesh);
     mesh->setConst();
     return mesh;

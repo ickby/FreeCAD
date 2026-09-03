@@ -126,6 +126,16 @@ PyObject* FemMeshShapeGroupPy::getEntityDimensionMask(PyObject* args)
     );
 }
 
+PyObject* FemMeshShapeGroupPy::getMergeRevision(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    return Py::new_reference_to(
+        Py::Int(static_cast<long>(this->getFemMeshShapeGroupPtr()->mergeRevision()))
+    );
+}
+
 PyObject* FemMeshShapeGroupPy::getTopologyRevision(PyObject* args)
 {
     if (!PyArg_ParseTuple(args, "")) {

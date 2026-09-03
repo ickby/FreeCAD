@@ -215,6 +215,8 @@ const Fem::FemMesh& Fem::FemAnalysisImport::sourceMesh() const
 {
     auto* src = Base::freecad_cast<Fem::FemAnalysis*>(Analysis.getValue());
     if (auto* meshGroup = meshGroupOf(src)) {
+        // The merge the source group last published. Nothing is forced here:
+        // the source analysis recomputes before an import that depends on it.
         return meshGroup->getMergedMesh();
     }
     m_emptyMesh = FemMesh();

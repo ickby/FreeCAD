@@ -76,6 +76,7 @@
 #include "FemMesh.h"
 #include "FemGeometry.h"
 #include "FemMeshDimension.h"
+#include "FemPerfLog.h"
 #include <FemMeshPy.h>
 
 #ifdef FC_USE_VTK
@@ -118,25 +119,51 @@ FemMesh::FemMesh(const FemMesh& mesh)
     copyMeshData(mesh);
 }
 
-FemMesh::~FemMesh()
+namespace
 {
+/**
+ * Hands a mesh back.
+ *
+ * The generator makes a new mesh rather than reusing one, so anything that
+ * replaces the mesh it holds has to release the old one or leak it whole --
+ * tens of megabytes each on a model of any size.
+ */
+void releaseMesh(SMESH_Mesh* mesh)
+{
+    if (!mesh) {
+        return;
+    }
     try {
         TopoDS_Shape aNull;
-        myMesh->ShapeToMesh(aNull);
-        myMesh->Clear();
-        // myMesh->ClearLog();
-        delete myMesh;
+        mesh->ShapeToMesh(aNull);
+        mesh->Clear();
+        delete mesh;
     }
     catch (...) {
     }
 }
 
+}  // namespace
+
+FemMesh::FemMesh(FemMesh&& mesh) noexcept
+    : myMesh(mesh.myMesh)
+#if SMESH_VERSION_MAJOR < 9
+    , myStudyId(mesh.myStudyId)
+#endif
+{
+    _Mtrx = mesh._Mtrx;
+    mesh.myMesh = nullptr;
+}
+
+FemMesh::~FemMesh()
+{
+    releaseMesh(myMesh);
+    myMesh = nullptr;
+}
+
 FemMesh& FemMesh::operator=(const FemMesh& mesh)
 {
     if (this != &mesh) {
-        // The generator hands out a fresh mesh rather than reusing ours, so the
-        // one being replaced has to be released here or every assignment leaks
-        // a whole mesh -- tens of megabytes each on a model of any size.
         SMESH_Mesh* replaced = myMesh;
 #if SMESH_VERSION_MAJOR >= 9
         myMesh = getGenerator()->CreateMesh(true);
@@ -144,16 +171,23 @@ FemMesh& FemMesh::operator=(const FemMesh& mesh)
         myMesh = getGenerator()->CreateMesh(myStudyId, true);
 #endif
         copyMeshData(mesh);
-        if (replaced) {
-            try {
-                TopoDS_Shape aNull;
-                replaced->ShapeToMesh(aNull);
-                replaced->Clear();
-                delete replaced;
-            }
-            catch (...) {
-            }
-        }
+        releaseMesh(replaced);
+    }
+    return *this;
+}
+
+FemMesh& FemMesh::operator=(FemMesh&& mesh) noexcept
+{
+    if (this != &mesh) {
+        _Mtrx = mesh._Mtrx;
+
+        // The point of the move: the mesh changes hands instead of being built
+        // again node by node and element by element, which is what copyMeshData
+        // does and what a merged mesh cannot afford to pay twice.
+        SMESH_Mesh* replaced = myMesh;
+        myMesh = mesh.myMesh;
+        mesh.myMesh = nullptr;
+        releaseMesh(replaced);
     }
     return *this;
 }
@@ -164,7 +198,7 @@ void FemMesh::appendMeshData(
     std::vector<std::string>* cellSources
 )
 {
-    appendMeshData(mesh, sourceName, cellSources, nullptr, nullptr, nullptr);
+    appendMeshData(mesh, sourceName, cellSources, nullptr, nullptr, nullptr, nullptr, nullptr);
 }
 
 void FemMesh::appendMeshData(
@@ -174,9 +208,12 @@ void FemMesh::appendMeshData(
     const Base::Matrix4D* transformOverride,
     const std::function<std::string(const std::string&)>* groupRenamer,
     std::map<int, int>* nodeIdMap,
-    std::vector<int>* cellSourceIds
+    std::vector<int>* cellSourceIds,
+    std::vector<int>* appendedNodeIds
 )
 {
+    FEM_PERF_SCOPE("mesh.append");
+
     // Do not overwrite this->_Mtrx with mesh._Mtrx — each child's placement is
     // applied to node coordinates so the accumulated mesh stays in the group frame.
 
@@ -191,81 +228,138 @@ void FemMesh::appendMeshData(
     SMDS_ElemIteratorPtr srcElemIt = srcMeshDS->elementsIterator();
     SMDS_NodeIteratorPtr srcNodeIt = srcMeshDS->nodesIterator();
 
-    std::map<int, const SMDS_MeshNode*> node_map;
-    while (srcNodeIt->more()) {
-        const SMDS_MeshNode* node = srcNodeIt->next();
-        double x = node->X();
-        double y = node->Y();
-        double z = node->Z();
-        if (applyTrsf) {
-            Base::Vector3d p(x, y, z);
-            p = childTrsf * p;
-            x = p.x;
-            y = p.y;
-            z = p.z;
+    // Indexed by source id rather than keyed by it. SMDS already stores its
+    // nodes and cells in vectors of that shape, so a tree here would cost an
+    // allocation per node and a descent on each of the four lookups every
+    // tetrahedron makes below. The counts are the right first guess because ids
+    // are dense in practice; the tables grow if a mesh hands out sparse ones.
+    std::vector<const SMDS_MeshNode*> nodeById(
+        static_cast<std::size_t>(srcMeshDS->NbNodes()) + 1,
+        nullptr
+    );
+    std::vector<const SMDS_MeshElement*> elementById(
+        static_cast<std::size_t>(srcMeshDS->GetMeshInfo().NbElements()) + 1,
+        nullptr
+    );
+    auto rememberNode = [&nodeById](int id, const SMDS_MeshNode* value) {
+        if (id <= 0) {
+            return;
         }
-        auto newNode = appendMeshDS->AddNode(x, y, z);
-        node_map[node->GetID()] = newNode;
-        if (nodeIdMap && newNode) {
-            (*nodeIdMap)[node->GetID()] = newNode->GetID();
+        if (static_cast<std::size_t>(id) >= nodeById.size()) {
+            nodeById.resize(static_cast<std::size_t>(id) + 1, nullptr);
+        }
+        nodeById[static_cast<std::size_t>(id)] = value;
+    };
+    auto rememberElement = [&elementById](int id, const SMDS_MeshElement* value) {
+        if (id <= 0) {
+            return;
+        }
+        if (static_cast<std::size_t>(id) >= elementById.size()) {
+            elementById.resize(static_cast<std::size_t>(id) + 1, nullptr);
+        }
+        elementById[static_cast<std::size_t>(id)] = value;
+    };
+    auto mappedNode = [&nodeById](int id) -> const SMDS_MeshNode* {
+        return id > 0 && static_cast<std::size_t>(id) < nodeById.size() ? nodeById[id] : nullptr;
+    };
+    auto mappedElement = [&elementById](int id) -> const SMDS_MeshElement* {
+        return id > 0 && static_cast<std::size_t>(id) < elementById.size() ? elementById[id]
+                                                                          : nullptr;
+    };
+
+    {
+        FEM_PERF_SCOPE("mesh.append.nodes");
+        while (srcNodeIt->more()) {
+            const SMDS_MeshNode* node = srcNodeIt->next();
+            double x = node->X();
+            double y = node->Y();
+            double z = node->Z();
+            if (applyTrsf) {
+                Base::Vector3d p(x, y, z);
+                p = childTrsf * p;
+                x = p.x;
+                y = p.y;
+                z = p.z;
+            }
+            auto newNode = appendMeshDS->AddNode(x, y, z);
+            rememberNode(node->GetID(), newNode);
+            if (nodeIdMap && newNode) {
+                (*nodeIdMap)[node->GetID()] = newNode->GetID();
+            }
+            if (appendedNodeIds) {
+                appendedNodeIds->push_back(newNode ? newNode->GetID() : 0);
+            }
         }
     }
 
-    std::map<int, const SMDS_MeshElement*> element_map;
-    while (srcElemIt->more()) {
-        const SMDS_MeshElement* elem = srcElemIt->next();
-
+    {
+        FEM_PERF_SCOPE("mesh.append.elements");
+        // Reused across the loop: a vector of its own per element would be an
+        // allocation per cell, and there are as many cells as the mesh has.
         std::vector<const SMDS_MeshNode*> nodes;
-        nodes.resize(elem->NbNodes());
-        SMDS_ElemIteratorPtr nIt = elem->nodesIterator();
-        for (int iN = 0; nIt->more(); ++iN) {
-            auto srcNode = static_cast<const SMDS_MeshNode*>(nIt->next());
-            nodes[iN] = node_map[srcNode->GetID()];
-        }
 
-        SMDS_MeshElement* new_element = nullptr;
-        if (elem->GetType() != SMDSAbs_Node) {
-            switch (elem->GetEntityType()) {
-                case SMDSEntity_Polyhedra:
-#if SMESH_VERSION_MAJOR >= 9
-                    new_element = editor.GetMeshDS()->AddPolyhedralVolume(
-                        nodes,
-                        static_cast<const SMDS_MeshVolume*>(elem)->GetQuantities()
-                    );
-#else
-                    new_element = editor.GetMeshDS()->AddPolyhedralVolume(
-                        nodes,
-                        static_cast<const SMDS_VtkVolume*>(elem)->GetQuantities()
-                    );
-#endif
-                    element_map[elem->GetID()] = new_element;
-                    break;
-                case SMDSEntity_Ball: {
-                    SMESH_MeshEditor::ElemFeatures elemFeat;
-                    elemFeat.Init(static_cast<const SMDS_BallElement*>(elem)->GetDiameter());
-                    new_element = editor.AddElement(nodes, elemFeat);
-                    element_map[elem->GetID()] = new_element;
-                    break;
-                }
-                default: {
-                    SMESH_MeshEditor::ElemFeatures elemFeat(elem->GetType(), elem->IsPoly());
-                    new_element = editor.AddElement(nodes, elemFeat);
-                    element_map[elem->GetID()] = new_element;
-                    break;
-                }
+        // Likewise reused. ElemFeatures carries a std::vector of its own for
+        // the polyhedra quantities, so building one per element builds and
+        // destroys that vector per element too; Init only assigns its fields.
+        SMESH_MeshEditor::ElemFeatures elemFeat;
+        while (srcElemIt->more()) {
+            const SMDS_MeshElement* elem = srcElemIt->next();
+
+            const int nbNodes = elem->NbNodes();
+            nodes.resize(static_cast<std::size_t>(nbNodes));
+            for (int iN = 0; iN < nbNodes; ++iN) {
+                // By index: nodesIterator() would heap-allocate an iterator for
+                // every element only to walk the same nodes.
+                const SMDS_MeshNode* srcNode = elem->GetNode(iN);
+                nodes[static_cast<std::size_t>(iN)] =
+                    srcNode ? mappedNode(srcNode->GetID()) : nullptr;
             }
-            if (new_element) {
-                if (cellSources) {
-                    cellSources->push_back(sourceName);
+
+            SMDS_MeshElement* new_element = nullptr;
+            if (elem->GetType() != SMDSAbs_Node) {
+                switch (elem->GetEntityType()) {
+                    case SMDSEntity_Polyhedra:
+    #if SMESH_VERSION_MAJOR >= 9
+                        new_element = editor.GetMeshDS()->AddPolyhedralVolume(
+                            nodes,
+                            static_cast<const SMDS_MeshVolume*>(elem)->GetQuantities()
+                        );
+    #else
+                        new_element = editor.GetMeshDS()->AddPolyhedralVolume(
+                            nodes,
+                            static_cast<const SMDS_VtkVolume*>(elem)->GetQuantities()
+                        );
+    #endif
+                        rememberElement(elem->GetID(), new_element);
+                        break;
+                    case SMDSEntity_Ball: {
+                        SMESH_MeshEditor::ElemFeatures ballFeat;
+                        ballFeat.Init(static_cast<const SMDS_BallElement*>(elem)->GetDiameter());
+                        new_element = editor.AddElement(nodes, ballFeat);
+                        rememberElement(elem->GetID(), new_element);
+                        break;
+                    }
+                    default: {
+                        elemFeat.Init(elem->GetType(), elem->IsPoly());
+                        new_element = editor.AddElement(nodes, elemFeat);
+                        rememberElement(elem->GetID(), new_element);
+                        break;
+                    }
                 }
-                if (cellSourceIds) {
-                    cellSourceIds->push_back(elem->GetID());
+                if (new_element) {
+                    if (cellSources) {
+                        cellSources->push_back(sourceName);
+                    }
+                    if (cellSourceIds) {
+                        cellSourceIds->push_back(elem->GetID());
+                    }
                 }
             }
         }
     }
 
     // Union groups by name (and type); do not create duplicate same-named groups.
+    FEM_PERF_SCOPE("mesh.append.groups");
     SMESH_Mesh::GroupIteratorPtr gIt = mesh.myMesh->GetGroups();
     while (gIt->more()) {
         SMESH_Group* group = gIt->next();
@@ -281,14 +375,14 @@ void FemMesh::appendMeshData(
         const SMDS_MeshElement* foundElem = nullptr;
         if (groupType == SMDSAbs_Node) {
             while (eIt->more()) {
-                if ((foundElem = node_map[eIt->next()->GetID()])) {
+                if ((foundElem = mappedNode(eIt->next()->GetID()))) {
                     groupElems.push_back(foundElem);
                 }
             }
         }
         else {
             while (eIt->more()) {
-                if ((foundElem = element_map[eIt->next()->GetID()])) {
+                if ((foundElem = mappedElement(eIt->next()->GetID()))) {
                     groupElems.push_back(foundElem);
                 }
             }
@@ -340,6 +434,8 @@ void FemMesh::appendMeshData(
 
 void FemMesh::copyMeshData(const FemMesh& mesh)
 {
+    FEM_PERF_SCOPE("mesh.copy");
+
     _Mtrx = mesh._Mtrx;
 
     // 1. Get source mesh
@@ -2971,20 +3067,36 @@ void FemMesh::addGroupElements(int GroupId, const std::set<int>& ElementIds)
         throw std::runtime_error("addGroupElements: Failed to add group elements.");
     }
 
-    // Traverse the full mesh and add elements to group if id is in set 'ids'
-    // and if group type is compatible with element
-    SMDSAbs_ElementType aElementType = groupDS->GetType();
+    // Look each wanted id up rather than walking the mesh looking for it. The
+    // ids are what the caller has, and SMDS keeps its nodes and cells in vectors
+    // indexed by them, so this costs the size of the group. Traversing the mesh
+    // instead cost its whole size once per group, which on a mesh named in many
+    // pieces is that mesh walked once for each of them.
+    const SMDSAbs_ElementType aElementType = groupDS->GetType();
+    SMESHDS_Mesh* meshDS = this->getSMesh()->GetMeshDS();
+    // FindElement complains about an id it does not hold, and the factory keeps
+    // this one current; the node maximum is a cache that nothing here refreshes,
+    // but FindNode checks its own range quietly, so it needs no bound.
+    const int maxElementId = meshDS->MaxElementID();
 
-    SMDS_ElemIteratorPtr aElemIter = this->getSMesh()->GetMeshDS()->elementsIterator(aElementType);
-    while (aElemIter->more()) {
-        const SMDS_MeshElement* aElem = aElemIter->next();
-        std::set<int>::iterator it;
-        it = ElementIds.find(aElem->GetID());
-        if (it != ElementIds.end()) {
-            // the element was in the list
-            if (!groupDS->Contains(aElem)) {  // check whether element is already in group
-                groupDS->Add(aElem);          // if not, add it
-            }
+    for (int id : ElementIds) {
+        const SMDS_MeshElement* aElem = nullptr;
+        if (aElementType == SMDSAbs_Node) {
+            // Nodes and cells are numbered apart, so which of the two an id
+            // names is decided by what the group collects.
+            aElem = meshDS->FindNode(id);
+        }
+        else if (id >= 1 && id <= maxElementId) {
+            aElem = meshDS->FindElement(id);
+        }
+
+        // An id of the wrong kind names an element the group cannot hold, which
+        // the traversal used to pass over by never offering it.
+        if (!aElem || aElem->GetType() != aElementType) {
+            continue;
+        }
+        if (!groupDS->Contains(aElem)) {  // check whether element is already in group
+            groupDS->Add(aElem);          // if not, add it
         }
     }
 }

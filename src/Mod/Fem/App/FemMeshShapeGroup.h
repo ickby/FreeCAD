@@ -194,7 +194,8 @@ private:
     /// Merge the children into a mesh, applying their own transforms.
     Fem::FemMesh mergeChildren(
         const std::vector<FemMeshObject*>& children,
-        std::vector<std::string>* sources
+        std::vector<std::string>* sources,
+        std::vector<int>* nodeIds
     ) const;
 
     void rebuildFull();
@@ -210,6 +211,18 @@ private:
     std::size_t m_topologyRevision {0};
     MeshTopology m_topology;
     std::vector<ChildStamp> m_mergeInputs;
+
+    /**
+     * Merged node id of every child node of the last full merge, in the order
+     * the nodes were appended.
+     *
+     * A child that only moved keeps every one of those nodes; where they are is
+     * the only thing that changed. Walking the children in the same order again
+     * therefore lines their nodes up with this, which is what lets the merged
+     * coordinates be written where they lie instead of the mesh being built
+     * from nothing to move it.
+     */
+    std::vector<int> m_mergeNodeIds;
     std::map<const App::DocumentObject*, fastsignals::scoped_connection> m_childConns;
 };
 

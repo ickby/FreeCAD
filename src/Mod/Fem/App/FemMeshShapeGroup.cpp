@@ -35,8 +35,10 @@
 #include <Precision.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include <SMDS_Mesh.hxx>
 #include <SMDS_MeshElement.hxx>
 #include <SMDS_MeshInfo.hxx>
+#include <SMDS_MeshNode.hxx>
 #include <SMESHDS_GroupBase.hxx>
 #include <SMESHDS_Mesh.hxx>
 #include <SMESH_Group.hxx>
@@ -570,7 +572,8 @@ FemMeshShapeGroup::stampsOf(const std::vector<FemMeshObject*>& children)
 
 Fem::FemMesh FemMeshShapeGroup::mergeChildren(
     const std::vector<FemMeshObject*>& children,
-    std::vector<std::string>* sources
+    std::vector<std::string>* sources,
+    std::vector<int>* nodeIds
 ) const
 {
     Fem::FemMesh merged;
@@ -578,7 +581,16 @@ Fem::FemMesh FemMeshShapeGroup::mergeChildren(
         const char* name = meshObj->getNameInDocument();
         // No transform override: appendMeshData applies the transform the child
         // carries, which its Placement wrote, and so places it in our frame.
-        merged.appendMeshData(meshObj->FemMesh.getValue(), std::string(name ? name : ""), sources);
+        merged.appendMeshData(
+            meshObj->FemMesh.getValue(),
+            std::string(name ? name : ""),
+            sources,
+            nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            nodeIds
+        );
     }
     return merged;
 }
@@ -589,9 +601,13 @@ void FemMeshShapeGroup::rebuildFull()
 
     const auto children = sortedChildren();
     std::vector<std::string> sources;
-    Fem::FemMesh merged = mergeChildren(children, &sources);
+    std::vector<int> nodeIds;
+    Fem::FemMesh merged = mergeChildren(children, &sources, &nodeIds);
 
-    CellSources.setValues(sources);
+    {
+        FEM_PERF_SCOPE("merge.properties");
+        CellSources.setValues(sources);
+    }
 
     FemGeometry* geometry = nullptr;
     if (auto* shapeObj = Shape.getValue()) {
@@ -603,12 +619,15 @@ void FemMeshShapeGroup::rebuildFull()
     for (int d : classification.cellDimension) {
         dims.push_back(d);
     }
-    CellDimension.setValues(dims);
     std::map<std::string, std::string> entityMap;
     for (const auto& [name, dim] : classification.entityDimension) {
         entityMap[name] = std::to_string(dim);
     }
-    EntityDimension.setValues(entityMap);
+    {
+        FEM_PERF_SCOPE("merge.properties");
+        CellDimension.setValues(dims);
+        EntityDimension.setValues(entityMap);
+    }
 
     m_topology = buildMeshTopology(merged, classification);
 
@@ -620,8 +639,12 @@ void FemMeshShapeGroup::rebuildFull()
     }
 
     // What the placement-only path has to find unchanged before it may reuse
-    // any of the above.
-    m_mergeInputs = stampsOf(children);
+    // any of the above, and the nodes it will write into.
+    {
+        FEM_PERF_SCOPE("merge.stamps");
+        m_mergeInputs = stampsOf(children);
+    }
+    m_mergeNodeIds = std::move(nodeIds);
 
     // Bumped before the write, because the write is what tells the view to read
     // the merge back, and a view that recorded the old number there believes
@@ -629,7 +652,14 @@ void FemMeshShapeGroup::rebuildFull()
     // thing that asks it to look.
     ++m_mergeRevision;
     ++m_topologyRevision;
-    FemMesh.setValue(merged);
+
+    // Moved, not copied: the property would otherwise build every node and
+    // every element of it a second time, for a mesh this function is done with.
+    // What is left in the scope is releasing the merge this one replaces.
+    {
+        FEM_PERF_SCOPE("merge.publish");
+        FemMesh.setValue(std::move(merged));
+    }
 
     m_meshRebuildRequested = false;
     m_topologyRebuildRequested = false;
@@ -637,40 +667,97 @@ void FemMeshShapeGroup::rebuildFull()
 
 bool FemMeshShapeGroup::rebuildPlacementOnly()
 {
-    // Reusing the classification only holds while the children still append the
-    // same cells in the same order: same children, same names, same counts.
-    // Then the merge that follows hands out the same element ids to the same
-    // cells, and CellSources, the dimensions, the groups and the topology all
-    // still describe it - only the node coordinates moved. Anything else is not
-    // a move, and the caller falls back to the full rebuild.
-    if (m_mergeInputs.empty()) {
+    // Reusing the last full merge only holds while the children still append the
+    // same nodes and cells in the same order: same children, same names, same
+    // counts. Then every merged node is still the node it was, every element
+    // still stands on the same ones, and the groups, CellSources, dimensions
+    // and topology all still describe the result. Anything else is not a move,
+    // and the caller falls back to the full rebuild.
+    if (m_mergeInputs.empty() || m_mergeNodeIds.empty()) {
         return false;
     }
     const auto children = sortedChildren();
     if (stampsOf(children) != m_mergeInputs) {
         return false;
     }
-
-    FEM_PERF_SCOPE("merge.placement");
-
-    Fem::FemMesh merged = mergeChildren(children, nullptr);
-
-    // What SMESH actually took. The children agreeing on their counts is what
-    // predicts it, but a merge is the only thing that establishes it, and a
-    // CellSources that no longer indexes the mesh it describes would mislabel
-    // every cell in the view and in the solver input.
-    if (meshCounts(merged).second != CellSources.getSize()) {
+    std::size_t expected = 0;
+    for (const auto& stamp : m_mergeInputs) {
+        expected += static_cast<std::size_t>(stamp.nodes);
+    }
+    if (expected != m_mergeNodeIds.size()) {
         return false;
     }
 
-    // The catch-alls are groups the merge does not carry: they are derived from
-    // the topology and written into the mesh afterwards. The topology is the one
-    // from the last full merge and still names the same elements.
-    materialiseCatchAllGroups(merged);
+    FEM_PERF_SCOPE("merge.placement");
+
+    // Only where the nodes are has changed, so only that is written. Merging
+    // the children again to move them would rebuild the whole mesh, and the
+    // property would then build it once more when it took it over; neither is
+    // work a rigid transform asks for.
+    bool coherent = true;
+    FemMesh.modifyValue([&](Fem::FemMesh& merged) {
+        auto* mergedMesh = merged.getSMesh();
+        SMESHDS_Mesh* mergedDS = mergedMesh ? mergedMesh->GetMeshDS() : nullptr;
+        if (!mergedDS) {
+            coherent = false;
+            return;
+        }
+
+        std::size_t next = 0;
+        for (auto* meshObj : children) {
+            const Fem::FemMesh& childMesh = meshObj->FemMesh.getValue();
+            const auto* childSMesh = childMesh.getSMesh();
+            const SMESHDS_Mesh* childDS = childSMesh ? childSMesh->GetMeshDS() : nullptr;
+            if (!childDS) {
+                coherent = false;
+                return;
+            }
+
+            const Base::Matrix4D trsf = childMesh.getTransform();
+            const bool applyTrsf = (trsf != Base::Matrix4D());
+
+            SMDS_NodeIteratorPtr nIt = childDS->nodesIterator();
+            while (nIt->more()) {
+                const SMDS_MeshNode* source = nIt->next();
+                const SMDS_MeshNode* target = next < m_mergeNodeIds.size()
+                    ? mergedDS->FindNode(m_mergeNodeIds[next])
+                    : nullptr;
+                ++next;
+                if (!source || !target) {
+                    coherent = false;
+                    return;
+                }
+
+                double x = source->X();
+                double y = source->Y();
+                double z = source->Z();
+                if (applyTrsf) {
+                    Base::Vector3d p(x, y, z);
+                    p = trsf * p;
+                    x = p.x;
+                    y = p.y;
+                    z = p.z;
+                }
+                // The base version on purpose: the override records the move in
+                // the SMESHDS journal, which nothing reads for a mesh derived
+                // from the children and which would grow with every drag.
+                mergedDS->SMDS_Mesh::MoveNode(target, x, y, z);
+            }
+        }
+        if (next != m_mergeNodeIds.size()) {
+            coherent = false;
+        }
+    });
+
+    if (!coherent) {
+        // The counts were checked before anything was written, so this is not
+        // reachable by a change of the children; if it happens anyway the mesh
+        // may be half moved, and returning false has the caller publish a whole
+        // one over it in the same execute().
+        return false;
+    }
 
     ++m_mergeRevision;
-    FemMesh.setValue(merged);
-
     m_meshRebuildRequested = false;
     return true;
 }
@@ -678,11 +765,13 @@ bool FemMeshShapeGroup::rebuildPlacementOnly()
 void FemMeshShapeGroup::clearMergedOutput()
 {
     m_mergeInputs.clear();
+    m_mergeNodeIds.clear();
 
     // The request stays open while the assignment is wrong, so a failing group
     // is executed again on every recompute. Republishing the same emptiness
     // each time would walk a view through a rebuild for nothing.
-    if (CellSources.getSize() == 0 && meshCounts(FemMesh.getValue()) == std::pair<int, int> {0, 0}) {
+    const auto counts = meshCounts(FemMesh.getValue());
+    if (CellSources.getSize() == 0 && counts.first == 0 && counts.second == 0) {
         return;
     }
 

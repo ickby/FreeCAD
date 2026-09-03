@@ -24,6 +24,7 @@
 
 
 #include <sstream>
+#include <utility>
 
 
 #include <Base/PlacementPy.h>
@@ -59,6 +60,20 @@ void PropertyFemMesh::setValue(const FemMesh& sh)
 {
     aboutToSetValue();
     *_FemMesh = sh;
+    hasSetValue();
+}
+
+void PropertyFemMesh::setValue(FemMesh&& sh)
+{
+    aboutToSetValue();
+    *_FemMesh = std::move(sh);
+    hasSetValue();
+}
+
+void PropertyFemMesh::modifyValue(const std::function<void(FemMesh&)>& editor)
+{
+    aboutToSetValue();
+    editor(*_FemMesh);
     hasSetValue();
 }
 

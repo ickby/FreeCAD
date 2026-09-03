@@ -52,6 +52,13 @@ SIZES = (10, 20, 30)
 # Solids in the geometry chain the topology section classifies.
 GEOMETRY_SOLIDS = 8
 
+# Disconnected blocks in the many-component mesh, and the lattice size of each.
+# Every block is a component of its own and so earns a catch-all group, which is
+# what makes writing those groups scale with their number rather than vanish
+# into one group that happens to hold the whole mesh.
+COMPONENT_BLOCKS = 150
+COMPONENT_BLOCK_SIZE = 4
+
 # The scopes worth counting rather than timing. A merge that is meant to happen
 # once has to happen exactly once: twice is a caller doing the work of the
 # recompute behind its back, and the timings alone would not say so.
@@ -138,6 +145,42 @@ def measure(label, action, prepare=None):
         wall = time.perf_counter() - start
         Fem.perfEnable(False)
     return Measurement(label, wall, Fem.perfReport())
+
+
+def _disconnected_blocks(blocks, n):
+    """
+    *blocks* lattices that share no node, so the mesh has that many components.
+
+    The blocks are pushed far enough apart that nothing joins them; each one is
+    the same lattice as _tet_lattice builds, just placed and renumbered.
+    """
+    mesh = Fem.FemMesh()
+    per_block_nodes = (n + 1) ** 3
+    for block in range(blocks):
+        base = block * per_block_nodes
+        offset = block * (n + 10.0)
+        for iz in range(n + 1):
+            for iy in range(n + 1):
+                for ix in range(n + 1):
+                    nid = base + 1 + ix + iy * (n + 1) + iz * (n + 1) * (n + 1)
+                    mesh.addNode(float(ix) + offset, float(iy), float(iz), nid)
+        for iz in range(n):
+            for iy in range(n):
+                for ix in range(n):
+                    a = base + 1 + ix + iy * (n + 1) + iz * (n + 1) * (n + 1)
+                    mesh.addVolume([a, a + 1, a + (n + 1), a + (n + 1) * (n + 1)])
+    return mesh
+
+
+def _component_measurements(document):
+    """Writing the catch-all group of every component of a many-part mesh."""
+    mesh = _disconnected_blocks(COMPONENT_BLOCKS, COMPONENT_BLOCK_SIZE)
+    group, child = _make_group(document, "Blocks", mesh)
+    label = (
+        f"cold merge, many components  "
+        f"[{COMPONENT_BLOCKS} blocks, cells={mesh.VolumeCount}]"
+    )
+    return [measure(label, document.recompute, prepare=lambda: _request_rebuild(group))]
 
 
 def call_table(results):
@@ -354,6 +397,7 @@ def run(sizes=SIZES):
                 )
             )
 
+        results.extend(_component_measurements(document))
         results.extend(_geometry_measurements(document))
 
         print()

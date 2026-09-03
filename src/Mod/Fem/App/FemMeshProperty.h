@@ -25,6 +25,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "FemMesh.h"
 #include <App/PropertyGeo.h>
 #include <Base/BoundBox.h>
@@ -49,6 +51,25 @@ public:
     void setValuePtr(FemMesh* mesh);
     /// set the FemMesh shape
     void setValue(const FemMesh&);
+
+    /**
+     * Set the FemMesh shape by taking the mesh over.
+     *
+     * The copying overload builds the whole mesh again, which for a value the
+     * caller made and is about to drop is the merge paid for twice.
+     */
+    void setValue(FemMesh&&);
+
+    /**
+     * Change the mesh where it lies, under the usual notification.
+     *
+     * For an edit that leaves the structure of the mesh alone -- moving nodes
+     * that are already there -- and so has nothing to rebuild. The mesh keeps
+     * its identity, so anything holding on to it from getComplexData() still
+     * points at the right object.
+     */
+    void modifyValue(const std::function<void(FemMesh&)>& editor);
+
     /// does nothing, for add property macro
     void setValue()
     {}

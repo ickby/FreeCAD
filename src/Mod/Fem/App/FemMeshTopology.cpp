@@ -153,10 +153,12 @@ MeshTopology Fem::buildMeshTopology(
                 continue;
             }
             candidateElement[i] = elem;
-            SMDS_ElemIteratorPtr nIt = elem->nodesIterator();
-            while (nIt->more()) {
-                const auto* node = static_cast<const SMDS_MeshNode*>(nIt->next());
-                if (node) {
+
+            // By index: nodesIterator() would allocate an iterator per element.
+            const int nbNodes = elem->NbNodes();
+            for (int k = 0; k < nbNodes; ++k) {
+                const SMDS_MeshNode* node = elem->GetNode(k);
+                if (node && node->GetID() >= 0) {
                     unions.shareKey(static_cast<std::size_t>(node->GetID()), i);
                 }
             }
@@ -200,9 +202,9 @@ MeshTopology Fem::buildMeshTopology(
             if (!elem) {
                 continue;
             }
-            SMDS_ElemIteratorPtr nIt = elem->nodesIterator();
-            while (nIt->more()) {
-                const auto* node = static_cast<const SMDS_MeshNode*>(nIt->next());
+            const int nbNodes = elem->NbNodes();
+            for (int k = 0; k < nbNodes; ++k) {
+                const SMDS_MeshNode* node = elem->GetNode(k);
                 if (!node) {
                     continue;
                 }
@@ -260,9 +262,12 @@ MeshTopology Fem::buildMeshTopology(
                 const int eid = elem->GetID();
 
                 int comp = -1;
-                SMDS_ElemIteratorPtr nIt = elem->nodesIterator();
-                while (nIt->more() && comp < 0) {
-                    const auto* node = static_cast<const SMDS_MeshNode*>(nIt->next());
+                // By index: nodesIterator() would allocate an iterator per
+                // element of every group, and the first node that knows its
+                // component answers the question.
+                const int nbNodes = elem->NbNodes();
+                for (int k = 0; k < nbNodes && comp < 0; ++k) {
+                    const SMDS_MeshNode* node = elem->GetNode(k);
                     if (!node) {
                         continue;
                     }
@@ -361,10 +366,9 @@ MeshTopology Fem::buildMeshTopology(
             if (!elem) {
                 continue;
             }
-            SMDS_ElemIteratorPtr nIt = elem->nodesIterator();
-            while (nIt->more()) {
-                const auto* node = static_cast<const SMDS_MeshNode*>(nIt->next());
-                if (node) {
+            const int nbNodes = elem->NbNodes();
+            for (int k = 0; k < nbNodes; ++k) {
+                if (const SMDS_MeshNode* node = elem->GetNode(k)) {
                     nodes.push_back(node->GetID());
                 }
             }

@@ -95,9 +95,20 @@ class FemExport FemMesh: public Data::ComplexGeoData
 public:
     FemMesh();
     FemMesh(const FemMesh&);
+
+    /**
+     * Takes the mesh over instead of building it again.
+     *
+     * A copy re-adds every node and every element one at a time, which on a
+     * mesh of any size costs about as much as whatever produced it. A mesh that
+     * has been moved from owns nothing and is only good for destruction or for
+     * being assigned to again.
+     */
+    FemMesh(FemMesh&&) noexcept;
     ~FemMesh() override;
 
     FemMesh& operator=(const FemMesh&);
+    FemMesh& operator=(FemMesh&&) noexcept;
     const SMESH_Mesh* getSMesh() const;
     SMESH_Mesh* getSMesh();
     static SMESH_Gen* getGenerator();
@@ -294,6 +305,10 @@ public:
      * appended cell, in the order the cells were appended. It is the only way to
      * carry per-element data of the source over to the merged mesh, because an
      * element which SMESH refuses would otherwise shift everything behind it.
+     * When appendedNodeIds is set, it receives the merged node ID of every
+     * source node, in the order the nodes were appended. That order is what
+     * lets a later pass find the merged node a source node became without
+     * carrying a map per child.
      */
     void appendMeshData(
         const FemMesh& mesh,
@@ -302,7 +317,8 @@ public:
         const Base::Matrix4D* transformOverride,
         const std::function<std::string(const std::string&)>* groupRenamer,
         std::map<int, int>* nodeIdMap = nullptr,
-        std::vector<int>* cellSourceIds = nullptr
+        std::vector<int>* cellSourceIds = nullptr,
+        std::vector<int>* appendedNodeIds = nullptr
     );
 
 private:

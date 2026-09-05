@@ -212,6 +212,8 @@ SET(FemGui_SRCS_ViewProvider
     ViewProviderFemAnalysisImport.h
     FemGeometryViewHelper.cpp
     FemGeometryViewHelper.h
+    FemInstanceViewHelper.cpp
+    FemInstanceViewHelper.h
     FemPreprocessMeshViewHelper.cpp
     FemPreprocessMeshViewHelper.h
     ViewProviderAnalysis.cpp

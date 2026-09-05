@@ -32,6 +32,7 @@
 #include <Mod/Fem/FemGlobal.h>
 
 #include "AnalysisViewState.h"
+#include "FemInstanceViewHelper.h"
 #include "FemMeshRenderer.h"
 #include "FemViewTypes.h"
 
@@ -58,27 +59,11 @@ namespace FemGui
 /**
  * Shared FemMeshRenderer + AnalysisViewState wiring for preprocessing VPs.
  */
-class FemGuiExport FemPreprocessMeshViewHelper
+class FemGuiExport FemPreprocessMeshViewHelper: public FemInstanceViewHelper
 {
 public:
-    using AnalysisFinder = std::function<Fem::FemAnalysis*()>;
-    using GeometryFinder = std::function<Fem::FemGeometry*()>;
-
     FemPreprocessMeshViewHelper();
-    ~FemPreprocessMeshViewHelper();
-
-    void setHost(
-        Gui::ViewProviderDocumentObject* viewProvider,
-        AnalysisFinder findAnalysis,
-        GeometryFinder findGeometry
-    );
-
-    /** Analysis-relative path prefix (e.g. "Import2.") for hidden/clip lookups. */
-    void setPathPrefix(const std::string& prefix);
-    /** Placement of this instance, used to bring clip planes into its frame. */
-    void setLocalFrame(const Base::Placement& placement);
-    /** When false the host view provider manages stage display masks itself. */
-    void setManageStageVisibility(bool on);
+    ~FemPreprocessMeshViewHelper() override;
 
     void ensureDisplayModes(SoSeparator* hiddenSeparator);
     bool hasDisplayModes() const;
@@ -108,30 +93,21 @@ public:
      */
     void setElementSubsetMask(std::vector<unsigned char> mask);
 
-    void connectViewState();
-    void disconnectViewState();
     void syncStageVisibility();
-    void onViewStateChanged();
+    void onViewStateChanged() override;
 
     FemMeshRenderer& renderer();
 
+protected:
+    /// Register the grid with the state that was just bound, so it can classify it.
+    void onViewStateBound() override;
+    /// Take the grid back off the state before letting go of it.
+    void onViewStateUnbound(AnalysisViewState* state) override;
+
 private:
-    void ensureViewStateConnection();
     void registerGrid();
     void applyViewState(bool meshChanged);
     void applyElementSubset(std::vector<unsigned char>& visibility) const;
-    std::set<std::string> localHiddenElements(const std::set<std::string>& hidden) const;
-    std::map<std::string, ClippingPlane> localClipPlanes(
-        const std::map<std::string, ClippingPlane>& clips
-    ) const;
-    AnalysisViewState* viewState() const;
-
-    Gui::ViewProviderDocumentObject* m_viewProvider {nullptr};
-    std::string m_pathPrefix;
-    Base::Placement m_localFrame;
-    bool m_manageStageVisibility {true};
-    AnalysisFinder m_findAnalysis;
-    GeometryFinder m_findGeometry;
 
     FemMeshRenderer m_renderer;
     SoSeparator* m_hidden {nullptr};
@@ -142,11 +118,8 @@ private:
     std::vector<unsigned char> m_elementSubsetMask;
     std::vector<int> m_cellElementIds;
 
-    AnalysisViewState::Connection m_viewStateConn;
-    AnalysisViewState* m_boundViewState {nullptr};
     vtkUnstructuredGrid* m_registeredGrid {nullptr};
 
-    bool m_viewStateCacheValid {false};
     DimensionMode m_cachedDimMode {DimensionMode::Highest};
     bool m_cachedShowConstruction {false};
     bool m_cachedWireframe {false};

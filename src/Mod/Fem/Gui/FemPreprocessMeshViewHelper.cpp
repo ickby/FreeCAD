@@ -41,110 +41,11 @@
 
 using namespace FemGui;
 
-namespace
-{
-constexpr const char* PreprocessMode = "Preprocess";
-constexpr const char* PreprocessHiddenMode = "PreprocessHidden";
-
-std::string stripTrailingDot(std::string path)
-{
-    if (!path.empty() && path.back() == '.') {
-        path.pop_back();
-    }
-    return path;
-}
-
-bool clipApplies(const ClippingPlane& plane, const std::string& pathPrefix)
-{
-    if (!plane.Active) {
-        return false;
-    }
-    if (plane.Scope.empty()) {
-        return true;
-    }
-    const std::string scope = stripTrailingDot(pathPrefix);
-    if (scope.empty()) {
-        return false;
-    }
-    return scope == plane.Scope || scope.starts_with(plane.Scope + ".");
-}
-
-}  // namespace
-
-void FemPreprocessMeshViewHelper::setPathPrefix(const std::string& prefix)
-{
-    m_pathPrefix = prefix;
-}
-
-void FemPreprocessMeshViewHelper::setLocalFrame(const Base::Placement& placement)
-{
-    m_localFrame = placement;
-    m_viewStateCacheValid = false;
-}
-
-void FemPreprocessMeshViewHelper::setManageStageVisibility(bool on)
-{
-    m_manageStageVisibility = on;
-}
-
-std::set<std::string> FemPreprocessMeshViewHelper::localHiddenElements(
-    const std::set<std::string>& hidden
-) const
-{
-    std::set<std::string> local;
-    if (m_pathPrefix.empty()) {
-        for (const auto& name : hidden) {
-            if (name.find('.') == std::string::npos) {
-                local.insert(name);
-            }
-        }
-        return local;
-    }
-    for (const auto& name : hidden) {
-        if (name.starts_with(m_pathPrefix)) {
-            local.insert(name.substr(m_pathPrefix.size()));
-        }
-    }
-    return local;
-}
-
-std::map<std::string, ClippingPlane> FemPreprocessMeshViewHelper::localClipPlanes(
-    const std::map<std::string, ClippingPlane>& clips
-) const
-{
-    std::map<std::string, ClippingPlane> local;
-    const Base::Placement toLocal = m_localFrame.inverse();
-    for (const auto& entry : clips) {
-        if (!clipApplies(entry.second, m_pathPrefix)) {
-            continue;
-        }
-        // The grid holds the node coordinates of the source analysis while a
-        // plane is placed in the frame of the importing one, so the plane has to
-        // come back through the instance placement to cut where the user put it.
-        ClippingPlane plane = entry.second;
-        toLocal.multVec(entry.second.Origin, plane.Origin);
-        plane.Direction = toLocal.getRotation().multVec(entry.second.Direction);
-        local.emplace(entry.first, plane);
-    }
-    return local;
-}
-
 FemPreprocessMeshViewHelper::FemPreprocessMeshViewHelper() = default;
 
 FemPreprocessMeshViewHelper::~FemPreprocessMeshViewHelper()
 {
     disconnectViewState();
-}
-
-void FemPreprocessMeshViewHelper::setHost(
-    Gui::ViewProviderDocumentObject* viewProvider,
-    AnalysisFinder findAnalysis,
-    GeometryFinder findGeometry
-)
-{
-    m_viewProvider = viewProvider;
-    m_findAnalysis = std::move(findAnalysis);
-    m_findGeometry = std::move(findGeometry);
 }
 
 void FemPreprocessMeshViewHelper::ensureDisplayModes(SoSeparator* hiddenSeparator)
@@ -154,9 +55,9 @@ void FemPreprocessMeshViewHelper::ensureDisplayModes(SoSeparator* hiddenSeparato
         return;
     }
     m_hidden = hiddenSeparator;
-    m_viewProvider->addDisplayMaskMode(m_renderer.root(), PreprocessMode);
+    m_viewProvider->addDisplayMaskMode(m_renderer.root(), ViewMode::Preprocess);
     if (m_hidden) {
-        m_viewProvider->addDisplayMaskMode(m_hidden, PreprocessHiddenMode);
+        m_viewProvider->addDisplayMaskMode(m_hidden, ViewMode::PreprocessHidden);
     }
     m_displayModesAdded = true;
 }
@@ -215,58 +116,29 @@ void FemPreprocessMeshViewHelper::applyElementSubset(std::vector<unsigned char>&
     }
 }
 
-AnalysisViewState* FemPreprocessMeshViewHelper::viewState() const
+void FemPreprocessMeshViewHelper::onViewStateBound()
 {
-    if (!m_findAnalysis) {
-        return nullptr;
-    }
-    auto* analysis = m_findAnalysis();
-    if (!analysis) {
-        return nullptr;
-    }
-    return AnalysisViewState::forAnalysis(analysis);
+    registerGrid();
 }
 
-void FemPreprocessMeshViewHelper::disconnectViewState()
+void FemPreprocessMeshViewHelper::onViewStateUnbound(AnalysisViewState* state)
 {
-    m_viewStateConn.disconnect();
-    if (m_boundViewState && AnalysisViewState::isAlive(m_boundViewState)) {
-        m_boundViewState->unregisterMeshGrid(m_registeredGrid);
+    if (AnalysisViewState::isAlive(state)) {
+        state->unregisterMeshGrid(m_registeredGrid);
     }
     m_registeredGrid = nullptr;
-    m_boundViewState = nullptr;
-    m_viewStateCacheValid = false;
 }
 
-void FemPreprocessMeshViewHelper::connectViewState()
-{
-    ensureViewStateConnection();
-}
-
-void FemPreprocessMeshViewHelper::ensureViewStateConnection()
-{
-    auto* state = viewState();
-    if (state == m_boundViewState && m_viewStateConn.connected()) {
-        return;
-    }
-    disconnectViewState();
-    m_boundViewState = state;
-    if (state) {
-        m_viewStateConn = state->connectChanged([this]() { onViewStateChanged(); });
-        registerGrid();
-        onViewStateChanged();
-    }
-}
-
+/// Hand the current grid to the bound state, taking back whatever it held before.
 void FemPreprocessMeshViewHelper::registerGrid()
 {
-    if (!m_boundViewState || !AnalysisViewState::isAlive(m_boundViewState)
+    if (!boundViewState() || !AnalysisViewState::isAlive(boundViewState())
         || m_registeredGrid == m_vtkmesh.Get()) {
         return;
     }
-    m_boundViewState->unregisterMeshGrid(m_registeredGrid);
+    boundViewState()->unregisterMeshGrid(m_registeredGrid);
     m_registeredGrid = m_vtkmesh.Get();
-    m_boundViewState->registerMeshGrid(
+    boundViewState()->registerMeshGrid(
         m_registeredGrid,
         GridSource {m_pathPrefix, m_findGeometry ? m_findGeometry() : nullptr}
     );
@@ -369,7 +241,7 @@ void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
     FEM_PERF_SCOPE("mesh.applyViewState");
 
     ensureViewStateConnection();
-    auto* state = m_boundViewState ? m_boundViewState : viewState();
+    auto* state = effectiveViewState();
     auto* geometry = m_findGeometry ? m_findGeometry() : nullptr;
 
     if (!state) {
@@ -488,8 +360,8 @@ void FemPreprocessMeshViewHelper::syncStageVisibility()
         return;
     }
     bool meshStage = true;
-    if (auto* state = m_boundViewState ? m_boundViewState : viewState()) {
+    if (auto* state = effectiveViewState()) {
         meshStage = (state->activeStage() == ActiveStage::Mesh);
     }
-    setStageMask(*m_viewProvider, meshStage ? PreprocessMode : PreprocessHiddenMode);
+    setStageMask(*m_viewProvider, meshStage ? ViewMode::Preprocess : ViewMode::PreprocessHidden);
 }

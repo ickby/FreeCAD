@@ -291,8 +291,7 @@ private:
     std::string m_builtFrom;
     std::vector<fastsignals::connection> m_connections;
     fastsignals::scoped_connection m_treeConn;
-    AnalysisViewState::Connection m_viewStateConn;
-    AnalysisViewState* m_boundViewState {nullptr};
+    ViewStateBinding m_viewStateBinding;
 };
 
 }  // namespace FemGui

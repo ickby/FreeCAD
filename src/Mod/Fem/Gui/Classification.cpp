@@ -312,6 +312,19 @@ void appendInheritedMaterials(
 
 }  // namespace
 
+std::vector<Category> Classification::categories() const
+{
+    return m_categories;
+}
+
+int Classification::categoryOfCell(vtkIdType cell) const
+{
+    if (cell < 0 || static_cast<size_t>(cell) >= m_cellCategory.size()) {
+        return 0;
+    }
+    return m_cellCategory[static_cast<size_t>(cell)];
+}
+
 Base::Color Classification::colorForIndex(int index)
 {
     const auto& colors = FemMeshRenderer::distinctColors();
@@ -392,7 +405,7 @@ SubelementClassification::SubelementClassification(
     const Fem::AnalysisTopology* meshTopology,
     const std::map<std::string, int>* paletteOrder
 )
-    : m_geometry(geometry)
+    : Classification(geometry)
 {
     build(analysis, geometry, meshGrid, gridSource, meshTopology, paletteOrder);
 }
@@ -479,11 +492,6 @@ void SubelementClassification::build(
     }
 }
 
-std::vector<Category> SubelementClassification::categories() const
-{
-    return m_categories;
-}
-
 int SubelementClassification::categoryOfElement(const std::string& element) const
 {
     auto it = m_keyToIndex.find(element);
@@ -494,14 +502,6 @@ int SubelementClassification::categoryOfElement(const std::string& element) cons
     const auto key = toplevelOfEntity(m_geometry, element);
     it = m_keyToIndex.find(key);
     return it != m_keyToIndex.end() ? it->second : 0;
-}
-
-int SubelementClassification::categoryOfCell(vtkIdType cell) const
-{
-    if (cell < 0 || static_cast<size_t>(cell) >= m_cellCategory.size()) {
-        return 0;
-    }
-    return m_cellCategory[static_cast<size_t>(cell)];
 }
 
 // ---------------------------------------------------------------------------
@@ -516,7 +516,7 @@ ComponentClassification::ComponentClassification(
     const Fem::AnalysisTopology* meshTopology,
     const std::map<std::string, int>* paletteOrder
 )
-    : m_geometry(geometry)
+    : Classification(geometry)
 {
     build(analysis, geometry, meshGrid, gridSource, meshTopology, paletteOrder);
 }
@@ -708,11 +708,6 @@ void ComponentClassification::build(
     }
 }
 
-std::vector<Category> ComponentClassification::categories() const
-{
-    return m_categories;
-}
-
 int ComponentClassification::categoryOfElement(const std::string& element) const
 {
     // A component is asked about by name where the panel tree colours its row
@@ -735,14 +730,6 @@ int ComponentClassification::categoryOfElement(const std::string& element) const
     return 0;
 }
 
-int ComponentClassification::categoryOfCell(vtkIdType cell) const
-{
-    if (cell < 0 || static_cast<size_t>(cell) >= m_cellCategory.size()) {
-        return 0;
-    }
-    return m_cellCategory[static_cast<size_t>(cell)];
-}
-
 // ---------------------------------------------------------------------------
 // MaterialClassification
 // ---------------------------------------------------------------------------
@@ -754,7 +741,7 @@ MaterialClassification::MaterialClassification(
     const GridSource& gridSource,
     const std::map<std::string, int>* paletteOrder
 )
-    : m_geometry(geometry)
+    : Classification(geometry)
 {
     build(analysis, geometry, meshGrid, gridSource, paletteOrder);
 }
@@ -898,11 +885,6 @@ void MaterialClassification::build(
     }
 }
 
-std::vector<Category> MaterialClassification::categories() const
-{
-    return m_categories;
-}
-
 int MaterialClassification::categoryOfElement(const std::string& element) const
 {
     auto it = m_elementCategory.find(element);
@@ -919,14 +901,6 @@ int MaterialClassification::categoryOfElement(const std::string& element) const
     }
     auto nit = m_keyToIndex.find(NoMaterialKey);
     return nit != m_keyToIndex.end() ? nit->second : 0;
-}
-
-int MaterialClassification::categoryOfCell(vtkIdType cell) const
-{
-    if (cell < 0 || static_cast<size_t>(cell) >= m_cellCategory.size()) {
-        return 0;
-    }
-    return m_cellCategory[static_cast<size_t>(cell)];
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,21 +998,9 @@ void CellTypeClassification::build(
     }
 }
 
-std::vector<Category> CellTypeClassification::categories() const
-{
-    return m_categories;
-}
-
 int CellTypeClassification::categoryOfElement(const std::string& /*element*/) const
 {
     // Cell type is mesh-local; geometry elements have no cell-type category.
     return 0;
 }
 
-int CellTypeClassification::categoryOfCell(vtkIdType cell) const
-{
-    if (cell < 0 || static_cast<size_t>(cell) >= m_cellCategory.size()) {
-        return 0;
-    }
-    return m_cellCategory[static_cast<size_t>(cell)];
-}

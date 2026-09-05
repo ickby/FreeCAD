@@ -83,6 +83,38 @@ FemGuiExport void setStageMask(Gui::ViewProviderDocumentObject& vp, const char* 
 FemGuiExport void observeEditScopes();
 
 /**
+ * The colour modes, in the order a chooser should offer them.
+ *
+ * Which modes there are, what each is called, and which of them mean anything
+ * in a given stage are three things the view state decides and everything else
+ * - the Python wrapper, the view panel's combo box - has to be told. They were
+ * spelled out again in each of those places, so adding a mode meant finding
+ * every list that had to grow, and forgetting one left a mode that could be
+ * chosen but not honoured.
+ */
+FemGuiExport const std::vector<ColorMode>& allColorModes();
+
+/**
+ * Whether @a mode says anything about what @a stage draws.
+ *
+ * CellType names the kinds of element a mesh is built from, so it has nothing
+ * to say about a stage that is not showing the mesh. setColorMode() enforces
+ * this; a chooser asks so that it can grey the entry out rather than let the
+ * user pick something that springs back.
+ */
+FemGuiExport bool colorModeAppliesTo(ColorMode mode, ActiveStage stage);
+
+/// The name @a mode goes by in Python and in the view panel.
+FemGuiExport const char* colorModeName(ColorMode mode);
+/// The mode @a name stands for, Subelement for anything unrecognised.
+FemGuiExport ColorMode colorModeFromName(const std::string& name);
+
+/// The name @a stage goes by in Python and in the view panel.
+FemGuiExport const char* activeStageName(ActiveStage stage);
+/// The stage @a name stands for, Geometry for anything unrecognised.
+FemGuiExport ActiveStage activeStageFromName(const std::string& name);
+
+/**
  * Runtime view state for one analysis. Not model state — mutations never
  * recompute document objects. Persistable subset (hidden elements, clip
  * planes) is mirrored onto ViewProviderFemAnalysis as Prop_Output|Prop_Hidden
@@ -375,6 +407,64 @@ private:
     boost::signals2::signal<void()> m_changed;
 
     static std::map<Fem::FemAnalysis*, std::unique_ptr<AnalysisViewState>> s_states;
+};
+
+/**
+ * One follower's connection to the view state of the analysis it belongs to.
+ *
+ * Following a state is never done once. A view provider or a render helper is
+ * built before the object it draws is in an analysis, so the state it has to
+ * follow is only reachable later; and the object can be moved to another
+ * analysis afterwards, which makes the state it was following the wrong one.
+ * Every follower therefore has to ask again whether the state it holds is
+ * still the state it wants, and rebind when it is not.
+ *
+ * Written out by hand at each place that needed it, that rule came out
+ * differently every time - some rebound on a changed state, some only ever
+ * connected once and kept following an analysis the object had left, some
+ * would not reconnect a connection that had been dropped. This holds the rule
+ * once. isBoundTo() answers "is there anything to do", bind() does it, and
+ * release() gives the state back one last time so that a follower with
+ * something to hand in can do so before the state is let go of.
+ */
+class FemGuiExport ViewStateBinding
+{
+public:
+    ViewStateBinding() = default;
+    ~ViewStateBinding();
+
+    ViewStateBinding(const ViewStateBinding&) = delete;
+    ViewStateBinding& operator=(const ViewStateBinding&) = delete;
+
+    /// Whether @a state is already being followed, connection and all.
+    bool isBoundTo(const AnalysisViewState* state) const;
+
+    /// Follow @a state, calling @a onChanged whenever it changes. Replaces any binding.
+    void bind(AnalysisViewState* state, AnalysisViewState::Slot onChanged);
+
+    /**
+     * Stop being called about changes and give the state back, or null when
+     * none was bound.
+     *
+     * The state is returned rather than dropped silently because a follower
+     * that registered something with it - a mesh grid, say - has to take that
+     * back, and this is its last chance to name what it is taking it back from.
+     */
+    AnalysisViewState* release();
+
+    AnalysisViewState* state() const
+    {
+        return m_state;
+    }
+
+    explicit operator bool() const
+    {
+        return m_state != nullptr;
+    }
+
+private:
+    AnalysisViewState* m_state {nullptr};
+    AnalysisViewState::Connection m_conn;
 };
 
 }  // namespace FemGui

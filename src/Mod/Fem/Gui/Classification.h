@@ -77,9 +77,21 @@ class FemGuiExport Classification
 public:
     virtual ~Classification() = default;
 
-    virtual std::vector<Category> categories() const = 0;
+    /**
+     * The categories this classification sorts into, in palette order.
+     *
+     * Every mode builds the same three tables - the categories, the key each
+     * one is known by, and the category each cell of the grid fell into - and
+     * differs only in how it fills them and how it answers for a geometry
+     * element. So the tables and the two answers that read them straight off
+     * live here, and a mode is its build() and its categoryOfElement().
+     */
+    std::vector<Category> categories() const;
+
+    /// The category of @a cell, or 0 when the cell is not one of this grid's.
+    int categoryOfCell(vtkIdType cell) const;
+
     virtual int categoryOfElement(const std::string& element) const = 0;
-    virtual int categoryOfCell(vtkIdType cell) const = 0;
 
     /**
      * Colour of the n-th category, wrapping the live palette.
@@ -119,6 +131,19 @@ public:
         const Fem::AnalysisTopology* meshTopology = nullptr,
         const std::map<std::string, int>* paletteOrder = nullptr
     );
+
+protected:
+    /// @a geometry is what element names are resolved against; null for mesh-only modes.
+    explicit Classification(Fem::FemGeometry* geometry = nullptr)
+        : m_geometry(geometry)
+    {}
+
+    Fem::FemGeometry* m_geometry {nullptr};
+    std::vector<Category> m_categories;
+    /// Category key -> its index in m_categories
+    std::map<std::string, int> m_keyToIndex;
+    /// Category of each cell of the input grid
+    std::vector<int> m_cellCategory;
 };
 
 /** One colour per geometry entity (Face7, Solid3, ...). */
@@ -134,9 +159,7 @@ public:
         const std::map<std::string, int>* paletteOrder = nullptr
     );
 
-    std::vector<Category> categories() const override;
     int categoryOfElement(const std::string& element) const override;
-    int categoryOfCell(vtkIdType cell) const override;
 
 private:
     void build(
@@ -147,11 +170,6 @@ private:
         const Fem::AnalysisTopology* meshTopology,
         const std::map<std::string, int>* paletteOrder
     );
-
-    Fem::FemGeometry* m_geometry {nullptr};
-    std::vector<Category> m_categories;
-    std::map<std::string, int> m_keyToIndex;
-    std::vector<int> m_cellCategory;  ///< per input-grid cell
 };
 
 /**
@@ -180,9 +198,7 @@ public:
         const std::map<std::string, int>* paletteOrder = nullptr
     );
 
-    std::vector<Category> categories() const override;
     int categoryOfElement(const std::string& element) const override;
-    int categoryOfCell(vtkIdType cell) const override;
 
 private:
     void build(
@@ -194,12 +210,8 @@ private:
         const std::map<std::string, int>* paletteOrder
     );
 
-    Fem::FemGeometry* m_geometry {nullptr};
-    std::vector<Category> m_categories;
-    std::map<std::string, int> m_keyToIndex;
     /// Toplevel element path -> the component it sits in
     std::map<std::string, int> m_elementCategory;
-    std::vector<int> m_cellCategory;
 };
 
 /**
@@ -220,9 +232,7 @@ public:
         const std::map<std::string, int>* paletteOrder = nullptr
     );
 
-    std::vector<Category> categories() const override;
     int categoryOfElement(const std::string& element) const override;
-    int categoryOfCell(vtkIdType cell) const override;
 
 private:
     void build(
@@ -233,11 +243,7 @@ private:
         const std::map<std::string, int>* paletteOrder
     );
 
-    Fem::FemGeometry* m_geometry {nullptr};
-    std::vector<Category> m_categories;
-    std::map<std::string, int> m_keyToIndex;
     std::map<std::string, int> m_elementCategory;
-    std::vector<int> m_cellCategory;
 };
 
 /**
@@ -255,9 +261,7 @@ public:
         const GridSource& gridSource = {}
     );
 
-    std::vector<Category> categories() const override;
     int categoryOfElement(const std::string& element) const override;
-    int categoryOfCell(vtkIdType cell) const override;
 
 private:
     void build(
@@ -265,10 +269,6 @@ private:
         Fem::FemGeometry* geometry,
         const GridSource& gridSource
     );
-
-    std::vector<Category> m_categories;
-    std::map<std::string, int> m_keyToIndex;
-    std::vector<int> m_cellCategory;
 };
 
 }  // namespace FemGui

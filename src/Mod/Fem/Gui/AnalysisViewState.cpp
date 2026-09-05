@@ -27,6 +27,7 @@
 # include <functional>
 # include <set>
 # include <sstream>
+# include <utility>
 #endif
 
 #include "AnalysisViewState.h"
@@ -92,6 +93,76 @@ void FemGui::setStageMask(Gui::ViewProviderDocumentObject& vp, const char* mode)
     if (!vp.Visibility.getValue()) {
         vp.Gui::ViewProvider::hide();
     }
+}
+
+const std::vector<ColorMode>& FemGui::allColorModes()
+{
+    static const std::vector<ColorMode> modes {
+        ColorMode::Subelement,
+        ColorMode::Component,
+        ColorMode::Material,
+        ColorMode::CellType,
+    };
+    return modes;
+}
+
+bool FemGui::colorModeAppliesTo(ColorMode mode, ActiveStage stage)
+{
+    return mode != ColorMode::CellType || stage == ActiveStage::Mesh;
+}
+
+const char* FemGui::colorModeName(ColorMode mode)
+{
+    switch (mode) {
+        case ColorMode::Subelement:
+            return "Subelement";
+        case ColorMode::Component:
+            return "Component";
+        case ColorMode::Material:
+            return "Material";
+        case ColorMode::CellType:
+            return "CellType";
+    }
+    return "Subelement";
+}
+
+ColorMode FemGui::colorModeFromName(const std::string& name)
+{
+    for (ColorMode mode : allColorModes()) {
+        if (name == colorModeName(mode)) {
+            return mode;
+        }
+    }
+    return ColorMode::Subelement;
+}
+
+const char* FemGui::activeStageName(ActiveStage stage)
+{
+    switch (stage) {
+        case ActiveStage::Geometry:
+            return "Geometry";
+        case ActiveStage::Mesh:
+            return "Mesh";
+        case ActiveStage::Result:
+            return "Result";
+        case ActiveStage::NoStage:
+            return "NoStage";
+    }
+    return "Geometry";
+}
+
+ActiveStage FemGui::activeStageFromName(const std::string& name)
+{
+    if (name == "Mesh") {
+        return ActiveStage::Mesh;
+    }
+    if (name == "Result") {
+        return ActiveStage::Result;
+    }
+    if (name == "NoStage") {
+        return ActiveStage::NoStage;
+    }
+    return ActiveStage::Geometry;
 }
 
 std::map<Fem::FemAnalysis*, std::unique_ptr<AnalysisViewState>> AnalysisViewState::s_states;
@@ -481,8 +552,7 @@ ColorMode AnalysisViewState::colorMode(ActiveStage stage) const
 
 void AnalysisViewState::setColorMode(ActiveStage stage, ColorMode mode)
 {
-    // Restrict CellType to mesh stage
-    if (mode == ColorMode::CellType && stage != ActiveStage::Mesh) {
+    if (!colorModeAppliesTo(mode, stage)) {
         mode = ColorMode::Subelement;
     }
     if (colorMode(stage) == mode) {
@@ -981,4 +1051,35 @@ void AnalysisViewState::saveToViewProvider(ViewProviderFemAnalysis* vp) const
     }
     vp->ViewClipPlaneNames.setValues(names);
     vp->ViewClipPlaneData.setValues(data);
+}
+
+// ---------------------------------------------------------------------------
+// ViewStateBinding
+// ---------------------------------------------------------------------------
+
+ViewStateBinding::~ViewStateBinding()
+{
+    m_conn.disconnect();
+}
+
+bool ViewStateBinding::isBoundTo(const AnalysisViewState* state) const
+{
+    return m_state == state && m_conn.connected();
+}
+
+void ViewStateBinding::bind(AnalysisViewState* state, AnalysisViewState::Slot onChanged)
+{
+    m_conn.disconnect();
+    m_state = state;
+    if (m_state) {
+        m_conn = m_state->connectChanged(std::move(onChanged));
+    }
+}
+
+AnalysisViewState* ViewStateBinding::release()
+{
+    m_conn.disconnect();
+    AnalysisViewState* state = m_state;
+    m_state = nullptr;
+    return state;
 }

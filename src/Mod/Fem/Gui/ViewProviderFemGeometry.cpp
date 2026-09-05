@@ -328,7 +328,7 @@ ViewProviderFemGeometry::ViewProviderFemGeometry()
 
 ViewProviderFemGeometry::~ViewProviderFemGeometry()
 {
-    m_viewStateConn.disconnect();
+    m_viewStateBinding.release();
 
     m_separator->unref();
     m_hidden->unref();
@@ -391,15 +391,11 @@ AnalysisViewState* ViewProviderFemGeometry::viewState() const
 void ViewProviderFemGeometry::ensureViewStateConnection()
 {
     auto* state = viewState();
-    if (state == m_boundViewState) {
+    if (m_viewStateBinding.isBoundTo(state)) {
         return;
     }
-    m_viewStateConn.disconnect();
-    m_boundViewState = state;
+    m_viewStateBinding.bind(state, [this]() { onViewStateChanged(); });
     if (state) {
-        m_viewStateConn = state->connectChanged([this]() {
-            onViewStateChanged();
-        });
         // Apply the current stage immediately; otherwise we miss the state that
         // was active before this VP connected (e.g. Mesh stage after Gmsh create).
         onViewStateChanged();
@@ -441,7 +437,7 @@ void ViewProviderFemGeometry::applyChainRole()
         step ? ToggleVisibilityMode::NoToggleVisibility : ToggleVisibilityMode::CanToggleVisibility
     );
     if (step) {
-        setStageMask(*this, "Hidden");
+        setStageMask(*this, ViewMode::Hidden);
     }
     else {
         // Shape changes were ignored while this was a step, so the vtk source
@@ -451,7 +447,7 @@ void ViewProviderFemGeometry::applyChainRole()
             m_vtksource->SetShape(m_shape);
         }
         m_viewStateCacheValid = false;
-        setStageMask(*this, "Default");
+        setStageMask(*this, ViewMode::Default);
         // Rebuilds the render and lets the active stage have the final say on
         // the mask. applyChainRole is a no-op from there, the role is set.
         onViewStateChanged();
@@ -535,7 +531,7 @@ const char* ViewProviderFemGeometry::suppressedMaskMode() const
     // would therefore cut off the previewed step along with the group's own
     // result, leaving nothing to look at or pick. Stepping aside onto the
     // children mask drops the result and keeps the step reachable instead.
-    return getDisplayMaskMode("Group") ? "Group" : "Hidden";
+    return getDisplayMaskMode(ViewMode::Group) ? ViewMode::Group : ViewMode::Hidden;
 }
 
 void ViewProviderFemGeometry::setChainRenderSuppressed(bool on)
@@ -607,7 +603,7 @@ void ViewProviderFemGeometry::onViewStateChanged()
     applyChainRole();
     if (m_isChainStep && !m_chainPreview) {
         // Nothing to show and nothing to filter: the group renders the result.
-        setStageMask(*this, "Hidden");
+        setStageMask(*this, ViewMode::Hidden);
         return;
     }
     if (m_suppressChainRender) {
@@ -615,13 +611,13 @@ void ViewProviderFemGeometry::onViewStateChanged()
         return;
     }
 
-    auto* state = m_boundViewState;
+    auto* state = m_viewStateBinding.state();
     if (!state) {
         // No stage to consult, but the mask still has to be opened. Without
         // this a previewed step keeps the Hidden mask applyChainRole left
         // behind, and a group coming out of suppression never gets its render
         // back, leaving an empty viewport either way.
-        setStageMask(*this, "Default");
+        setStageMask(*this, ViewMode::Default);
         m_viewStateCacheValid = false;
         updateVTK();
         return;
@@ -639,7 +635,10 @@ void ViewProviderFemGeometry::onViewStateChanged()
     // steps below it draw nothing, so the extension-owned Group mask would leave
     // an empty view. A previewed step overrides the stage, because picking
     // geometry for a chain step is a geometry operation by definition.
-    setStageMask(*this, (m_chainPreview || stage == ActiveStage::Geometry) ? "Default" : "Hidden");
+    setStageMask(
+        *this,
+        (m_chainPreview || stage == ActiveStage::Geometry) ? ViewMode::Default : ViewMode::Hidden
+    );
 
     const bool colorOnly = m_viewStateCacheValid && m_cachedDimMode == dimMode
         && m_cachedWireframe == wireframe && m_cachedHidden == hidden
@@ -721,13 +720,13 @@ void ViewProviderFemGeometry::attach(App::DocumentObject* pcObj)
     m_separator->addChild(m_highlightoverlay);
     m_separator->addChild(m_toolPreviewSwitch);
 
-    addDisplayMaskMode(m_separator, "Default");
-    addDisplayMaskMode(m_hidden, "Hidden");
+    addDisplayMaskMode(m_separator, ViewMode::Default);
+    addDisplayMaskMode(m_hidden, ViewMode::Hidden);
     // Do not register "Group" here: ViewProviderGeoFeatureGroupExtension owns
     // that mask (pcGroupChildren). A group normally renders the result of its
     // chain itself, and only steps aside onto that mask while a step below it
     // is previewed, see suppressedMaskMode.
-    setDisplayMaskMode("Default");
+    setDisplayMaskMode(ViewMode::Default);
 
     applyChainRole();
     ensureViewStateConnection();
@@ -736,7 +735,7 @@ void ViewProviderFemGeometry::attach(App::DocumentObject* pcObj)
 void ViewProviderFemGeometry::setDisplayMode(const char* ModeName)
 {
     if (m_isChainStep && !m_chainPreview) {
-        setStageMask(*this, "Hidden");
+        setStageMask(*this, ViewMode::Hidden);
         return;
     }
     if (m_suppressChainRender) {
@@ -744,7 +743,10 @@ void ViewProviderFemGeometry::setDisplayMode(const char* ModeName)
         return;
     }
     if (ModeName) {
-        setStageMask(*this, strcmp(ModeName, "Hidden") == 0 ? "Hidden" : "Default");
+        setStageMask(
+        *this,
+        strcmp(ModeName, ViewMode::Hidden) == 0 ? ViewMode::Hidden : ViewMode::Default
+    );
     }
     update3D();
 }
@@ -1566,7 +1568,7 @@ void ViewProviderFemGeometry::updateVTK()
     }
 
     ensureViewStateConnection();
-    auto* state = m_boundViewState;
+    auto* state = m_viewStateBinding.state();
 
     const std::set<std::string> empty_hidden;
     const std::map<std::string, ClippingPlane> empty_clips;
@@ -1805,7 +1807,7 @@ void ViewProviderFemGeometry::updateColors()
     }
 
     ensureViewStateConnection();
-    auto* state = m_boundViewState;
+    auto* state = m_viewStateBinding.state();
     const Classification* classification = state ? state->classification() : nullptr;
 
     // SoBrepFaceSet remaps materials by partIndex (BREP faces). PER_FACE triggers a
@@ -2019,7 +2021,7 @@ void ViewProviderFemGeometry::update3D()
     vtkSortDataArray::Sort(sicc, sorted_indices);
 
     ensureViewStateConnection();
-    auto* state = m_boundViewState;
+    auto* state = m_viewStateBinding.state();
     const bool wireframe = state ? state->wireframe() : (DisplayMode.getValue() == 1);
     // Whatever is left is drawn as what it is. The dimension mode has already
     // left out the elements it does not name, so there is nothing here to strip
@@ -2170,7 +2172,7 @@ void ViewProviderFemGeometry::update3D()
 
 void ViewProviderFemGeometry::updateGeometryOverlay()
 {
-    auto* state = m_boundViewState;
+    auto* state = m_viewStateBinding.state();
     const auto clipper = state ? state->activeClipPlanes() : std::map<std::string, ClippingPlane> {};
     const std::set<std::string> empty_hidden;
     const auto& hidden = state ? state->hiddenElements() : empty_hidden;
@@ -2225,16 +2227,16 @@ void ViewProviderFemGeometry::updateGeometryOverlay()
 void ViewProviderFemGeometry::setClippingPlane(const std::string& name, const ClippingPlane& plane)
 {
     ensureViewStateConnection();
-    if (m_boundViewState) {
-        m_boundViewState->setClipPlane(name, plane);
+    if (m_viewStateBinding.state()) {
+        m_viewStateBinding.state()->setClipPlane(name, plane);
     }
 }
 
 void ViewProviderFemGeometry::removeClippingPlane(const std::string& name)
 {
     ensureViewStateConnection();
-    if (m_boundViewState) {
-        m_boundViewState->removeClipPlane(name);
+    if (m_viewStateBinding.state()) {
+        m_viewStateBinding.state()->removeClipPlane(name);
     }
 }
 

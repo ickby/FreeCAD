@@ -46,6 +46,7 @@
 #include <vtkTableBasedClipDataSet.h>
 
 #include "AnalysisViewState.h"
+#include "FemInstanceViewHelper.h"
 #include "FemViewTypes.h"
 
 class SoCoordinate3;
@@ -83,23 +84,12 @@ namespace FemGui
 /**
  * Shared IVtk + AnalysisViewState wiring for geometry rendering on import VPs.
  */
-class FemGuiExport FemGeometryViewHelper
+class FemGuiExport FemGeometryViewHelper: public FemInstanceViewHelper
 {
 public:
-    using AnalysisFinder = std::function<Fem::FemAnalysis*()>;
-    using GeometryFinder = std::function<Fem::FemGeometry*()>;
-
     FemGeometryViewHelper();
-    ~FemGeometryViewHelper();
+    ~FemGeometryViewHelper() override;
 
-    void setHost(
-        Gui::ViewProviderDocumentObject* viewProvider,
-        AnalysisFinder findAnalysis,
-        GeometryFinder findGeometry
-    );
-
-    /** Analysis-relative path prefix (e.g. "Import2.") for hidden/clip lookups. */
-    void setPathPrefix(const std::string& prefix);
     /**
      * Prefix for the subnames the 3D view reports and accepts.
      *
@@ -109,16 +99,11 @@ public:
      * from the analysis this instance was imported into.
      */
     void setSelectionPrefix(const std::string& prefix);
-    /** Placement of this instance, used to bring clip planes into its frame. */
-    void setLocalFrame(const Base::Placement& placement);
-    void setManageStageVisibility(bool on);
     void setSuppressedComponents(const std::vector<long>& indices);
 
     void attachToSeparator(SoSeparator* root);
     void ensureDisplayModes(SoSeparator* hiddenSeparator);
-    void connectViewState();
-    void disconnectViewState();
-    void onViewStateChanged();
+    void onViewStateChanged() override;
 
     /**
      * @a shape in the frame of its own analysis.
@@ -192,7 +177,6 @@ public:
     }
 
 private:
-    void ensureViewStateConnection();
     /** The VTK ids of everything that is not hidden, and who owns each of them. */
     void collectVisibleIds(const std::set<std::string>& hidden, IVtk_ShapeIdList& passthrough_ids);
     void applyClipPlanes(
@@ -219,14 +203,9 @@ private:
     void applySelectionHighlight();
     void resetSelectionVisuals();
     std::string elementForShapeId(vtkIdType id, const char* fallbackPrefix) const;
-    std::set<std::string> localHiddenElements(const std::set<std::string>& hidden) const;
-    std::map<std::string, ClippingPlane> localClipPlanes(
-        const std::map<std::string, ClippingPlane>& clips
-    ) const;
     std::set<std::string> suppressedToplevels(Fem::FemGeometry* geom) const;
     const Base::Color* highlightColorFor(const std::string& element, vtkIdType id) const;
     std::vector<std::string> volumeOwnersOf(const std::string& element) const;
-    AnalysisViewState* viewState() const;
 
     struct ElementHighlight
     {
@@ -239,13 +218,7 @@ private:
     std::set<std::string> m_preselected;
     bool m_preselectPromotion {false};
 
-    Gui::ViewProviderDocumentObject* m_viewProvider {nullptr};
-    AnalysisFinder m_findAnalysis;
-    GeometryFinder m_findGeometry;
-    std::string m_pathPrefix;
     std::string m_selectionPrefix;
-    Base::Placement m_localFrame;
-    bool m_manageStageVisibility {true};
     std::vector<long> m_suppressedComponents;
 
     Part::TopoShape m_topoShape;
@@ -298,10 +271,7 @@ private:
 
     bool m_displayModesAdded {false};
     bool m_attached {false};
-    AnalysisViewState::Connection m_viewStateConn;
-    AnalysisViewState* m_boundViewState {nullptr};
 
-    bool m_viewStateCacheValid {false};
     DimensionMode m_cachedDimMode {DimensionMode::Highest};
     bool m_cachedWireframe {false};
     ColorMode m_cachedColorMode {ColorMode::Subelement};

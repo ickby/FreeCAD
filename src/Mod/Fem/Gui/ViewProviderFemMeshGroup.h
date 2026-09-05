@@ -66,7 +66,7 @@ protected:
     void syncChildViewStates();
 
 private:
-    AnalysisViewState::Connection m_viewStateConn;
+    ViewStateBinding m_viewStateBinding;
     SoGroup* m_childRoot {nullptr};
 };
 

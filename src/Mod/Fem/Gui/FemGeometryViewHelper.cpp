@@ -80,8 +80,6 @@ using namespace FemGui;
 namespace
 {
 
-constexpr const char* GeometryMode = "Geometry";
-constexpr const char* GeometryHiddenMode = "GeometryHidden";
 
 /// Surface cells, which is all the ghost overlay of a shape is made of.
 const std::vector<VTKCellType> cells_2d = {
@@ -118,29 +116,6 @@ bool isVolumeElementName(const std::string& element)
     }
     const std::string kind = element.substr(0, digits);
     return kind == "Solid" || kind == "Shell" || kind == "CompSolid" || kind == "Compound";
-}
-
-std::string stripTrailingDot(std::string path)
-{
-    if (!path.empty() && path.back() == '.') {
-        path.pop_back();
-    }
-    return path;
-}
-
-bool clipApplies(const ClippingPlane& plane, const std::string& pathPrefix)
-{
-    if (!plane.Active) {
-        return false;
-    }
-    if (plane.Scope.empty()) {
-        return true;
-    }
-    const std::string scope = stripTrailingDot(pathPrefix);
-    if (scope.empty()) {
-        return false;
-    }
-    return scope == plane.Scope || scope.starts_with(plane.Scope + ".");
 }
 
 }  // namespace
@@ -264,31 +239,9 @@ FemGeometryViewHelper::~FemGeometryViewHelper()
     m_overlayfaces->unref();
 }
 
-void FemGeometryViewHelper::setHost(
-    Gui::ViewProviderDocumentObject* viewProvider,
-    AnalysisFinder findAnalysis,
-    GeometryFinder findGeometry
-)
-{
-    m_viewProvider = viewProvider;
-    m_findAnalysis = std::move(findAnalysis);
-    m_findGeometry = std::move(findGeometry);
-}
-
-void FemGeometryViewHelper::setPathPrefix(const std::string& prefix)
-{
-    m_pathPrefix = prefix;
-}
-
 void FemGeometryViewHelper::setSelectionPrefix(const std::string& prefix)
 {
     m_selectionPrefix = prefix;
-}
-
-void FemGeometryViewHelper::setLocalFrame(const Base::Placement& placement)
-{
-    m_localFrame = placement;
-    m_viewStateCacheValid = false;
 }
 
 void FemGeometryViewHelper::setElementHighlight(
@@ -361,11 +314,6 @@ const Base::Color* FemGeometryViewHelper::highlightColorFor(
     return nullptr;
 }
 
-void FemGeometryViewHelper::setManageStageVisibility(bool on)
-{
-    m_manageStageVisibility = on;
-}
-
 void FemGeometryViewHelper::setSuppressedComponents(const std::vector<long>& indices)
 {
     m_suppressedComponents = indices;
@@ -418,91 +366,11 @@ void FemGeometryViewHelper::ensureDisplayModes(SoSeparator* hiddenSeparator)
     if (!m_viewProvider || m_displayModesAdded) {
         return;
     }
-    m_viewProvider->addDisplayMaskMode(m_separator, GeometryMode);
+    m_viewProvider->addDisplayMaskMode(m_separator, ViewMode::Geometry);
     if (m_hidden) {
-        m_viewProvider->addDisplayMaskMode(m_hidden, GeometryHiddenMode);
+        m_viewProvider->addDisplayMaskMode(m_hidden, ViewMode::GeometryHidden);
     }
     m_displayModesAdded = true;
-}
-
-AnalysisViewState* FemGeometryViewHelper::viewState() const
-{
-    if (!m_findAnalysis) {
-        return nullptr;
-    }
-    auto* analysis = m_findAnalysis();
-    if (!analysis) {
-        return nullptr;
-    }
-    return AnalysisViewState::forAnalysis(analysis);
-}
-
-void FemGeometryViewHelper::disconnectViewState()
-{
-    m_viewStateConn.disconnect();
-    m_boundViewState = nullptr;
-    m_viewStateCacheValid = false;
-}
-
-void FemGeometryViewHelper::connectViewState()
-{
-    ensureViewStateConnection();
-}
-
-void FemGeometryViewHelper::ensureViewStateConnection()
-{
-    auto* state = viewState();
-    if (state == m_boundViewState && m_viewStateConn.connected()) {
-        return;
-    }
-    disconnectViewState();
-    m_boundViewState = state;
-    if (state) {
-        m_viewStateConn = state->connectChanged([this]() { onViewStateChanged(); });
-        onViewStateChanged();
-    }
-}
-
-std::set<std::string> FemGeometryViewHelper::localHiddenElements(
-    const std::set<std::string>& hidden
-) const
-{
-    std::set<std::string> local;
-    if (m_pathPrefix.empty()) {
-        for (const auto& name : hidden) {
-            if (name.find('.') == std::string::npos) {
-                local.insert(name);
-            }
-        }
-        return local;
-    }
-    for (const auto& name : hidden) {
-        if (name.starts_with(m_pathPrefix)) {
-            local.insert(name.substr(m_pathPrefix.size()));
-        }
-    }
-    return local;
-}
-
-std::map<std::string, ClippingPlane> FemGeometryViewHelper::localClipPlanes(
-    const std::map<std::string, ClippingPlane>& clips
-) const
-{
-    std::map<std::string, ClippingPlane> local;
-    const Base::Placement toLocal = m_localFrame.inverse();
-    for (const auto& entry : clips) {
-        if (!clipApplies(entry.second, m_pathPrefix)) {
-            continue;
-        }
-        // The shape is triangulated in the frame of its source analysis while a
-        // plane is placed in the frame of the importing one, so the plane has to
-        // come back through the instance placement to cut where the user put it.
-        ClippingPlane plane = entry.second;
-        toLocal.multVec(entry.second.Origin, plane.Origin);
-        plane.Direction = toLocal.getRotation().multVec(entry.second.Direction);
-        local.emplace(entry.first, plane);
-    }
-    return local;
 }
 
 std::set<std::string> FemGeometryViewHelper::suppressedToplevels(Fem::FemGeometry* geom) const
@@ -546,10 +414,10 @@ void FemGeometryViewHelper::onViewStateChanged()
     }
     FEM_PERF_SCOPE("geometry.onViewStateChanged");
 
-    auto* state = m_boundViewState;
+    auto* state = boundViewState();
     if (state && m_manageStageVisibility && m_viewProvider && m_displayModesAdded) {
         const bool geometryStage = state->activeStage() == ActiveStage::Geometry;
-        setStageMask(*m_viewProvider, geometryStage ? GeometryMode : GeometryHiddenMode);
+        setStageMask(*m_viewProvider, geometryStage ? ViewMode::Geometry : ViewMode::GeometryHidden);
     }
 
     if (!state) {
@@ -853,7 +721,7 @@ void FemGeometryViewHelper::updateVTK()
     }
     FEM_PERF_SCOPE("geometry.updateVTK");
 
-    auto* state = m_boundViewState;
+    auto* state = boundViewState();
     auto hidden = state ? localHiddenElements(state->hiddenElements()) : std::set<std::string> {};
     for (const auto& name : suppressedToplevels(m_metadata)) {
         hidden.insert(name);
@@ -1091,7 +959,7 @@ void FemGeometryViewHelper::updateColors()
     }
     FEM_PERF_SCOPE("geometry.colors");
 
-    auto* state = m_boundViewState;
+    auto* state = boundViewState();
     const Classification* classification = nullptr;
     {
         // Builds the classification unless the state still has one, so a first
@@ -1218,7 +1086,7 @@ void FemGeometryViewHelper::colorFromPalette()
 
 void FemGeometryViewHelper::updateGhostOverlay()
 {
-    auto* state = m_boundViewState;
+    auto* state = boundViewState();
     const auto dimMode = state ? state->dimensionMode() : DimensionMode::Highest;
     // A ghost of what is drawn anyway says nothing, so it only appears once
     // something is missing from the instance. A suppressed component is
@@ -1351,7 +1219,7 @@ void FemGeometryViewHelper::update3D()
         vtkSortDataArray::Sort(sicc, sorted_indices);
     }
 
-    auto* state = m_boundViewState;
+    auto* state = boundViewState();
     const bool wireframe = state ? state->wireframe() : false;
     // Whatever is left is drawn as what it is. The dimension mode has already
     // left out the elements it does not name, so there is nothing here to strip

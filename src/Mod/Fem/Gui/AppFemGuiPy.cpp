@@ -92,6 +92,13 @@ public:
             "removeActiveAnalysisObserver(object) -- Remove a previously registered observer."
         );
         add_varargs_method(
+            "colorModes",
+            &Module::colorModes,
+            "colorModes([stage]) -- The colour modes the view state offers, in the order "
+            "a chooser should list them. With a stage name ('Geometry', 'Mesh', ...) only "
+            "the modes that say something about that stage."
+        );
+        add_varargs_method(
             "getAnalysisViewState",
             &Module::getAnalysisViewState,
             "getAnalysisViewState([AnalysisObject]) -- Runtime AnalysisViewState for the "
@@ -254,6 +261,24 @@ private:
             return FemGui::ActiveAnalysisObserver::instance()->getActiveObject();
         }
         return nullptr;
+    }
+    Py::Object colorModes(const Py::Tuple& args)
+    {
+        const char* stageName = nullptr;
+        if (!PyArg_ParseTuple(args.ptr(), "|s", &stageName)) {
+            throw Py::Exception();
+        }
+
+        // Without a stage every mode is listed: a chooser is filled once, before
+        // there is an analysis to have a stage at all, and asks again per stage.
+        Py::List names;
+        for (ColorMode mode : allColorModes()) {
+            if (stageName && !colorModeAppliesTo(mode, activeStageFromName(stageName))) {
+                continue;
+            }
+            names.append(Py::String(colorModeName(mode)));
+        }
+        return names;
     }
     Py::Object getAnalysisViewState(const Py::Tuple& args)
     {

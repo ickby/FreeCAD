@@ -155,7 +155,7 @@ ViewProviderFemAnalysis::ViewProviderFemAnalysis()
 
 ViewProviderFemAnalysis::~ViewProviderFemAnalysis()
 {
-    viewStateConn.disconnect();
+    viewStateBinding.release();
     // Before the view state goes, while the handles can still find it
     clipPlaneHandles.clear();
 
@@ -223,17 +223,12 @@ void ViewProviderFemAnalysis::giveContainersAChildRoot()
 
 void ViewProviderFemAnalysis::connectViewState()
 {
-    if (viewStateConn.connected()) {
-        return;
-    }
     auto* analysis = freecad_cast<Fem::FemAnalysis*>(getObject());
     auto* state = analysis ? AnalysisViewState::forAnalysis(analysis) : nullptr;
-    if (!state) {
+    if (!state || viewStateBinding.isBoundTo(state)) {
         return;
     }
-    viewStateConn = state->connectChanged([this]() {
-        syncClipPlaneHandles();
-    });
+    viewStateBinding.bind(state, [this]() { syncClipPlaneHandles(); });
 }
 
 void ViewProviderFemAnalysis::syncClipPlaneHandles()

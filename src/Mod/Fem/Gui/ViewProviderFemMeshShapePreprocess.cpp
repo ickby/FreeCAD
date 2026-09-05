@@ -37,11 +37,6 @@
 
 using namespace FemGui;
 
-namespace
-{
-constexpr const char* PreprocessMode = "Preprocess";
-}  // namespace
-
 PROPERTY_SOURCE(FemGui::ViewProviderFemMeshShapePreprocess, FemGui::ViewProviderFemMeshShapeBase)
 
 ViewProviderFemMeshShapePreprocess::ViewProviderFemMeshShapePreprocess()
@@ -88,9 +83,9 @@ void ViewProviderFemMeshShapePreprocess::attach(App::DocumentObject* pcObject)
 
 void ViewProviderFemMeshShapePreprocess::setDisplayMode(const char* ModeName)
 {
-    if (ModeName && strcmp(ModeName, PreprocessMode) == 0) {
+    if (ModeName && strcmp(ModeName, ViewMode::Preprocess) == 0) {
         if (m_preprocessMesh.hasDisplayModes()) {
-            setStageMask(*this, PreprocessMode);
+            setStageMask(*this, ViewMode::Preprocess);
         }
         return;
     }
@@ -101,7 +96,7 @@ std::vector<std::string> ViewProviderFemMeshShapePreprocess::getDisplayModes() c
 {
     auto modes = ViewProviderFemMeshShapeBase::getDisplayModes();
     if (preprocessActive()) {
-        modes.emplace_back(PreprocessMode);
+        modes.emplace_back(ViewMode::Preprocess);
     }
     return modes;
 }

@@ -36,6 +36,31 @@ namespace FemGui
 {
 
 /**
+ * The display mask modes the FEM stages switch view providers between.
+ *
+ * A mask mode is addressed by name, and the name has to be the same string
+ * where the mode is registered and where a stage switches to it. Spelling it
+ * out at each end let the two drift apart unnoticed, since a mask that names
+ * nothing is not an error to Coin - the object simply stops being drawn. They
+ * are gathered here so that a stage and the view provider it switches read
+ * from one list.
+ */
+namespace ViewMode
+{
+/// What a view provider that knows nothing of stages draws under.
+constexpr const char* Default = "Default";
+/// Drawn by nothing, the mode a stage parks an object it does not own in.
+constexpr const char* Hidden = "Hidden";
+/// A group holding its children rather than geometry of its own.
+constexpr const char* Group = "Group";
+constexpr const char* Geometry = "Geometry";
+constexpr const char* GeometryHidden = "GeometryHidden";
+constexpr const char* Mesh = "Mesh";
+constexpr const char* Preprocess = "Preprocess";
+constexpr const char* PreprocessHidden = "PreprocessHidden";
+}  // namespace ViewMode
+
+/**
  * Where the element names on a mesh grid come from.
  *
  * A grid of a placed instance is meshed and named in the source analysis, so

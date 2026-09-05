@@ -206,7 +206,7 @@ private:
     std::map<std::string, std::unique_ptr<ClipPlaneHandle>> clipPlaneHandles;
     /// The planes as of the last sync, to tell a real change from a passing one
     std::map<std::string, ClippingPlane> syncedClipPlanes;
-    AnalysisViewState::Connection viewStateConn;
+    ViewStateBinding viewStateBinding;
     /// Guards against a sync that is set off by the syncing itself
     bool syncingClipPlanes {false};
 };

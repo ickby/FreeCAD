@@ -38,21 +38,6 @@ using namespace FemGui;
 namespace
 {
 
-const char* stageToString(ActiveStage stage)
-{
-    switch (stage) {
-        case ActiveStage::Geometry:
-            return "Geometry";
-        case ActiveStage::Mesh:
-            return "Mesh";
-        case ActiveStage::Result:
-            return "Result";
-        case ActiveStage::NoStage:
-            return "NoStage";
-    }
-    return "Geometry";
-}
-
 const char* intentToString(EditIntent intent)
 {
     switch (intent) {
@@ -75,20 +60,6 @@ EditIntent intentFromString(const std::string& s)
         return EditIntent::Mesh;
     }
     return EditIntent::None;
-}
-
-ActiveStage stageFromString(const std::string& s)
-{
-    if (s == "Mesh") {
-        return ActiveStage::Mesh;
-    }
-    if (s == "Result") {
-        return ActiveStage::Result;
-    }
-    if (s == "NoStage") {
-        return ActiveStage::NoStage;
-    }
-    return ActiveStage::Geometry;
 }
 
 // Python talks dimensions, not shapes. "Surface" reads as a name for what is
@@ -127,35 +98,6 @@ DimensionMode dimensionFromString(const std::string& s)
         return DimensionMode::Point;
     }
     return DimensionMode::Highest;
-}
-
-const char* colorModeToString(ColorMode mode)
-{
-    switch (mode) {
-        case ColorMode::Subelement:
-            return "Subelement";
-        case ColorMode::Component:
-            return "Component";
-        case ColorMode::Material:
-            return "Material";
-        case ColorMode::CellType:
-            return "CellType";
-    }
-    return "Subelement";
-}
-
-ColorMode colorModeFromString(const std::string& s)
-{
-    if (s == "Component") {
-        return ColorMode::Component;
-    }
-    if (s == "Material") {
-        return ColorMode::Material;
-    }
-    if (s == "CellType") {
-        return ColorMode::CellType;
-    }
-    return ColorMode::Subelement;
 }
 
 }  // namespace
@@ -364,7 +306,7 @@ Py::Object AnalysisViewStatePy::getActiveStage(const Py::Tuple& args)
     if (!state()) {
         return Py::None();
     }
-    return Py::String(stageToString(state()->activeStage()));
+    return Py::String(activeStageName(state()->activeStage()));
 }
 
 Py::Object AnalysisViewStatePy::setActiveStage(const Py::Tuple& args)
@@ -374,7 +316,7 @@ Py::Object AnalysisViewStatePy::setActiveStage(const Py::Tuple& args)
         throw Py::Exception();
     }
     if (state()) {
-        state()->setActiveStage(stageFromString(name));
+        state()->setActiveStage(activeStageFromName(name));
     }
     return Py::None();
 }
@@ -534,7 +476,7 @@ Py::Object AnalysisViewStatePy::getColorMode(const Py::Tuple& args)
     if (!state()) {
         return Py::None();
     }
-    return Py::String(colorModeToString(state()->colorMode()));
+    return Py::String(colorModeName(state()->colorMode()));
 }
 
 Py::Object AnalysisViewStatePy::setColorMode(const Py::Tuple& args)
@@ -544,7 +486,7 @@ Py::Object AnalysisViewStatePy::setColorMode(const Py::Tuple& args)
         throw Py::Exception();
     }
     if (state()) {
-        state()->setColorMode(colorModeFromString(name));
+        state()->setColorMode(colorModeFromName(name));
     }
     return Py::None();
 }

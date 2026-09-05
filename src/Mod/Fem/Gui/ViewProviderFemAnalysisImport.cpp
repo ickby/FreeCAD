@@ -73,10 +73,6 @@ using namespace FemGui;
 namespace
 {
 
-constexpr const char* GeometryMode = "Geometry";
-constexpr const char* MeshMode = "Mesh";
-constexpr const char* HiddenMode = "Hidden";
-
 /// Preferences holding the drag steps shared by all instance draggers.
 constexpr const char* draggerStepGroup = "User parameter:BaseApp/Preferences/Mod/Fem/General";
 constexpr const char* translationStepEntry = "ImportDraggerTranslationStep";
@@ -301,7 +297,7 @@ ViewProviderFemAnalysisImport::ViewProviderFemAnalysisImport()
 
 ViewProviderFemAnalysisImport::~ViewProviderFemAnalysisImport()
 {
-    m_viewStateConn.disconnect();
+    m_viewStateBinding.release();
     m_treeConn.disconnect();
     m_connections.clear();
     clearRenderTree();
@@ -319,10 +315,10 @@ void ViewProviderFemAnalysisImport::attach(App::DocumentObject* obj)
 {
     Gui::ViewProviderDocumentObject::attach(obj);
 
-    addDisplayMaskMode(m_geometryRoot, GeometryMode);
-    addDisplayMaskMode(m_meshRoot, MeshMode);
-    addDisplayMaskMode(m_hidden, HiddenMode);
-    setDisplayMaskMode(GeometryMode);
+    addDisplayMaskMode(m_geometryRoot, ViewMode::Geometry);
+    addDisplayMaskMode(m_meshRoot, ViewMode::Mesh);
+    addDisplayMaskMode(m_hidden, ViewMode::Hidden);
+    setDisplayMaskMode(ViewMode::Geometry);
 
     pInheritedSymbols = new SoSeparator();
     pInheritedSymbols->ref();
@@ -358,7 +354,7 @@ std::vector<std::string> ViewProviderFemAnalysisImport::getDisplayModes() const
     // What an instance draws follows the stage of the analysis it is placed in
     // rather than a choice of its own, so there is a single mode. It is there
     // because an object without one cannot be shown or hidden like the rest.
-    return {"Default"};
+    return {ViewMode::Default};
 }
 
 void ViewProviderFemAnalysisImport::setDisplayMode(const char* mode)
@@ -413,13 +409,11 @@ void ViewProviderFemAnalysisImport::connectViewState()
 {
     auto* analysis = findAnalysis();
     auto* state = analysis ? AnalysisViewState::forAnalysis(analysis) : nullptr;
-    if (state == m_boundViewState && m_viewStateConn.connected()) {
+    if (m_viewStateBinding.isBoundTo(state)) {
         return;
     }
-    m_viewStateConn.disconnect();
-    m_boundViewState = state;
+    m_viewStateBinding.bind(state, [this]() { onViewStateChanged(); });
     if (state) {
-        m_viewStateConn = state->connectChanged([this]() { onViewStateChanged(); });
         // The helpers follow the same state, and the render tree is usually
         // built before the import is in an analysis, so they were left without
         // one and have to catch up. Until they do, they draw as if no colour
@@ -447,19 +441,19 @@ void ViewProviderFemAnalysisImport::syncStageVisibility()
     // An import is put into its analysis after the view provider is attached,
     // so the state it has to follow is only reachable later on.
     connectViewState();
-    if (!m_boundViewState) {
-        setStageMask(*this, GeometryMode);
+    if (!m_viewStateBinding.state()) {
+        setStageMask(*this, ViewMode::Geometry);
         return;
     }
-    switch (m_boundViewState->activeStage()) {
+    switch (m_viewStateBinding.state()->activeStage()) {
         case ActiveStage::Mesh:
-            setStageMask(*this, MeshMode);
+            setStageMask(*this, ViewMode::Mesh);
             break;
         case ActiveStage::Geometry:
-            setStageMask(*this, GeometryMode);
+            setStageMask(*this, ViewMode::Geometry);
             break;
         default:
-            setStageMask(*this, HiddenMode);
+            setStageMask(*this, ViewMode::Hidden);
             break;
     }
 }
@@ -770,7 +764,7 @@ void ViewProviderFemAnalysisImport::updateNodePlacement(
     // through this instance. Without one, what the helpers draw is the same
     // wherever the instance stands, and rebuilding it would cost a drag its
     // smoothness for nothing.
-    if (m_boundViewState && !m_boundViewState->activeClipPlanes().empty()) {
+    if (m_viewStateBinding.state() && !m_viewStateBinding.state()->activeClipPlanes().empty()) {
         node.geometry.onViewStateChanged();
         node.mesh.onViewStateChanged();
     }

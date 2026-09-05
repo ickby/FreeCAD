@@ -42,7 +42,7 @@ ViewProviderFemMeshGroup::ViewProviderFemMeshGroup()
 
 ViewProviderFemMeshGroup::~ViewProviderFemMeshGroup()
 {
-    m_viewStateConn.disconnect();
+    m_viewStateBinding.release();
     m_childRoot->unref();
 }
 
@@ -116,20 +116,14 @@ Fem::FemAnalysis* ViewProviderFemMeshGroup::findAnalysis() const
 void ViewProviderFemMeshGroup::connectViewState()
 {
     auto* analysis = findAnalysis();
-    if (!analysis) {
+    auto* state = analysis ? AnalysisViewState::forAnalysis(analysis) : nullptr;
+    if (m_viewStateBinding.isBoundTo(state)) {
         return;
     }
-    auto* state = AnalysisViewState::forAnalysis(analysis);
-    if (!state) {
-        return;
-    }
-    if (m_viewStateConn.connected()) {
-        return;
-    }
-    m_viewStateConn = state->connectChanged([this]() {
+    m_viewStateBinding.bind(state, [this]() { syncChildViewStates(); });
+    if (state) {
         syncChildViewStates();
-    });
-    syncChildViewStates();
+    }
 }
 
 void ViewProviderFemMeshGroup::syncChildViewStates()

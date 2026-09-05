@@ -373,8 +373,7 @@ protected:
     SoSFColor m_colorhighlight;
     SoSFColor m_colorselection;
 
-    AnalysisViewState::Connection m_viewStateConn;
-    AnalysisViewState* m_boundViewState {nullptr};
+    ViewStateBinding m_viewStateBinding;
 
     // Chain role: a step renders nothing, the result step carries a tree badge
     bool m_isChainStep {false};

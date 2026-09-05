@@ -53,9 +53,6 @@ __dock = None
 # of a solid to the next, whereas 2D is 2D.
 _DIM_MODES = {"All": None, "3D": 3, "2D": 2, "1D": 1, "0D": 0}
 _ALL_DIMENSIONS = "All"
-_COLOR_MODES = ["Subelement", "Component", "Material", "CellType"]
-# Colour modes that describe mesh elements and mean nothing to the geometry.
-_MESH_COLOR_MODES = {"CellType"}
 _TREE_ICON_SIZE = 16
 _COLOR_COLUMN_WIDTH = _TREE_ICON_SIZE + 12
 _VIS_COLUMN_WIDTH = 32
@@ -1151,10 +1148,12 @@ class GeometryExplorer(QtGui.QTreeView):
         """
         Grey out the entries that say nothing about the stage on show.
 
-        The view state coerces a mesh colouring back to Subelement outside the
-        mesh stage, and a combo that springs back the moment it is let go is a
-        riddle. Greyed out it is an answer instead.
+        The view state coerces a mode its stage has no use for back to
+        Subelement, and a combo that springs back the moment it is let go is a
+        riddle. Greyed out it is an answer instead. Which modes those are is the
+        view state's to say, so it is asked rather than told.
         """
+        applicable = set(FemGui.colorModes(stage)) if stage else set()
         why = QtCore.QCoreApplication.translate(
             "FEM_ViewPanel", "Colours mesh elements, so only the mesh stage has it"
         )
@@ -1163,11 +1162,11 @@ class GeometryExplorer(QtGui.QTreeView):
             item = model.item(index) if hasattr(model, "item") else None
             if item is None:
                 continue
-            mesh_only = combo.itemText(index) in _MESH_COLOR_MODES
-            item.setEnabled(not mesh_only or stage == "Mesh")
+            applies = combo.itemText(index) in applicable
+            item.setEnabled(applies)
             combo.setItemData(
                 index,
-                why if mesh_only else None,
+                None if applies else why,
                 QtCore.Qt.ItemDataRole.ToolTipRole,
             )
 
@@ -1641,7 +1640,7 @@ class GeometryTreePanel(QtGui.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.color_mode = QtGui.QComboBox()
-        self.color_mode.addItems(_COLOR_MODES)
+        self.color_mode.addItems(FemGui.colorModes())
         self.color_mode.setToolTip(
             QtCore.QCoreApplication.translate(
                 "FEM_ViewPanel",

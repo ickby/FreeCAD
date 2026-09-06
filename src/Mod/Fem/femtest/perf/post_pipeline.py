@@ -69,6 +69,10 @@ from femtest.perf.view_pipeline import measure
 # two runs can be laid side by side.
 NODES_PER_AXIS = view_pipeline.NODES_PER_AXIS
 
+# How far to drag the clip plane: far enough that the cut really moves, near
+# enough that it stays inside the model and keeps cutting something.
+BOX_STEP = view_pipeline.BOX_SIZE / 4.0
+
 
 # ---------------------------------------------------------------------------
 # the model
@@ -151,6 +155,52 @@ def use_field(view_object):
             view_object.Field = name
             return name
     return None
+
+
+def data_bounds(pipeline):
+    """The corners of what the pipeline holds, as two triples."""
+    data = pipeline.Data
+    block = data.GetBlock(0) if hasattr(data, "GetNumberOfBlocks") else data
+    b = block.GetBounds()
+    return (b[0], b[2], b[4]), (b[1], b[3], b[5])
+
+
+def add_warp(document, pipeline):
+    """A warp filter on the pipeline, ready to have its factor moved."""
+    warp = ObjectsFem.makePostVtkFilterWarp(document, pipeline)
+    document.recompute()
+    show_as_surface(warp.ViewObject)
+    use_field(warp.ViewObject)
+    document.recompute()
+    return warp
+
+
+def add_clip_region(document, pipeline):
+    """A region clip cutting on a plane, and the plane, ready to be moved.
+
+    Built the way the Create function command builds it: a function provider
+    under the pipeline holding the plane, and the clip pointing at the plane.
+    Moving the plane is what the 3D handle does while it is dragged, and is the
+    operation the user feels.
+    """
+    provider = document.addObject("Fem::FemPostFunctionProvider", "Functions")
+    pipeline.addObject(provider)
+    plane = document.addObject("Fem::FemPostPlaneFunction", "Plane")
+    provider.addObject(plane)
+
+    low, high = data_bounds(pipeline)
+    plane.PlaneOrigin = FreeCAD.Vector(
+        (low[0] + high[0]) / 2.0, (low[1] + high[1]) / 2.0, (low[2] + high[2]) / 2.0
+    )
+    plane.PlaneNormal = FreeCAD.Vector(1, 0, 0)
+
+    clip = ObjectsFem.makePostVtkFilterClipRegion(document, pipeline)
+    clip.Function = plane
+    document.recompute()
+    show_as_surface(clip.ViewObject)
+    use_field(clip.ViewObject)
+    document.recompute()
+    return clip, plane
 
 
 def post_size(pipeline):
@@ -364,6 +414,50 @@ def run(nodes_per_axis=NODES_PER_AXIS, document=None, keep=True):
                 lambda: group_by("Component"),
             )
         )
+
+    # ---- the other filters --------------------------------------------
+    #
+    # Two operations a user repeats without thinking: dragging the warp factor,
+    # and dragging the plane a region clip cuts on. Both re-run one filter over
+    # the whole result, which is the same shape of work the Model filter does.
+    filter_obj.ViewObject.Visibility = False
+    warp = add_warp(document, pipeline)
+    warp.ViewObject.Visibility = True
+    document.recompute()
+
+    def warp_factor(value):
+        warp.Factor = value
+        recompute()
+
+    warp_factor(1.0)
+    add(
+        measure(
+            "warp filter: change the factor",
+            lambda: warp_factor(2.0),
+            lambda: warp_factor(1.0),
+        )
+    )
+    warp.ViewObject.Visibility = False
+
+    clip, plane = add_clip_region(document, pipeline)
+    clip.ViewObject.Visibility = True
+    document.recompute()
+
+    here = plane.PlaneOrigin
+    there = FreeCAD.Vector(here.x + BOX_STEP, here.y, here.z)
+
+    def move_plane(where):
+        plane.PlaneOrigin = where
+        recompute()
+
+    add(
+        measure(
+            "clip region: move the plane it cuts on",
+            lambda: move_plane(there),
+            lambda: move_plane(here),
+        )
+    )
+    clip.ViewObject.Visibility = False
 
     # ---- the preprocessing side, for scale ----------------------------
     #

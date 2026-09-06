@@ -1261,22 +1261,29 @@ FemPostScalarClipFilter::~FemPostScalarClipFilter() = default;
 
 DocumentObjectExecReturn* FemPostScalarClipFilter::execute()
 {
-    std::string val = "";
-    if (Scalars.isValid()) {
-        val = Scalars.getValueAsString();
-    }
+    const std::vector<std::string> ScalarsArray = getInputScalarFields();
 
-    std::vector<std::string> ScalarsArray = getInputScalarFields();
+    // Rebuilt only when the result offers a different set of fields than last
+    // time. Assigning an enumeration notifies whether or not the value moved,
+    // and the notification reads the range of the field back out of the data to
+    // set the constraints, which is not an answer that can have changed while
+    // only the clip value was dragged.
+    if (m_scalarFields.getEnumVector() != ScalarsArray) {
+        std::string val;
+        if (Scalars.isValid()) {
+            val = Scalars.getValueAsString();
+        }
 
-    App::Enumeration empty;
-    Scalars.setValue(empty);
-    m_scalarFields.setEnums(ScalarsArray);
-    Scalars.setValue(m_scalarFields);
+        App::Enumeration empty;
+        Scalars.setValue(empty);
+        m_scalarFields.setEnums(ScalarsArray);
+        Scalars.setValue(m_scalarFields);
 
-    // search if the current field is in the available ones and set it
-    const auto it = std::ranges::find(ScalarsArray, val);
-    if (!val.empty() && it != ScalarsArray.end()) {
-        Scalars.setValue(val.c_str());
+        // search if the current field is in the available ones and set it
+        const auto it = std::ranges::find(ScalarsArray, val);
+        if (!val.empty() && it != ScalarsArray.end()) {
+            Scalars.setValue(val.c_str());
+        }
     }
 
     // recalculate the filter
@@ -1370,23 +1377,30 @@ FemPostWarpVectorFilter::~FemPostWarpVectorFilter() = default;
 
 DocumentObjectExecReturn* FemPostWarpVectorFilter::execute()
 {
+    const std::vector<std::string> VectorArray = getInputVectorFields();
 
-    std::string val;
-    if (Vector.isValid()) {
-        val = Vector.getValueAsString();
-    }
+    // Rebuilt only when the result offers a different set of fields than last
+    // time. Assigning an enumeration notifies whether or not the value moved,
+    // and the notification puts the array back on the warp - which marks it
+    // modified, so the whole filter re-runs - and touches the object besides.
+    // Dragging the factor changes neither the fields nor the choice among them,
+    // and did all three of those writes on every step of the drag.
+    if (m_vectorFields.getEnumVector() != VectorArray) {
+        std::string val;
+        if (Vector.isValid()) {
+            val = Vector.getValueAsString();
+        }
 
-    std::vector<std::string> VectorArray = getInputVectorFields();
+        App::Enumeration empty;
+        Vector.setValue(empty);
+        m_vectorFields.setEnums(VectorArray);
+        Vector.setValue(m_vectorFields);
 
-    App::Enumeration empty;
-    Vector.setValue(empty);
-    m_vectorFields.setEnums(VectorArray);
-    Vector.setValue(m_vectorFields);
-
-    // search if the current field is in the available ones and set it
-    const auto it = std::ranges::find(VectorArray, val);
-    if (!val.empty() && it != VectorArray.end()) {
-        Vector.setValue(val.c_str());
+        // search if the current field is in the available ones and set it
+        const auto it = std::ranges::find(VectorArray, val);
+        if (!val.empty() && it != VectorArray.end()) {
+            Vector.setValue(val.c_str());
+        }
     }
 
     // recalculate the filter

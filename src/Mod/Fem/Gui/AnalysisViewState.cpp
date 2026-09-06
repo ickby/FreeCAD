@@ -289,6 +289,11 @@ void AnalysisViewState::notifyChanged()
     m_changed();
 }
 
+void AnalysisViewState::chainChanged()
+{
+    notifyChanged();
+}
+
 AnalysisViewState::Connection AnalysisViewState::connectChanged(Slot slot)
 {
     return m_changed.connect(std::move(slot));

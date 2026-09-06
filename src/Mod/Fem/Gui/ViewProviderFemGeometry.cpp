@@ -242,6 +242,27 @@ Fem::FemGeometry* ViewProviderFemGeometry::chainOwner() const
     return nullptr;
 }
 
+bool ViewProviderFemGeometry::isChainResult() const
+{
+    auto* obj = getObject();
+    auto* owner = chainOwner();
+    if (!obj || !owner) {
+        return false;
+    }
+    auto* ext = owner->getExtensionByType<App::GroupExtension>(true);
+    if (!ext) {
+        return false;
+    }
+    // The group takes its shape from the last step of its chain.
+    App::DocumentObject* last = nullptr;
+    for (auto* child : ext->Group.getValues()) {
+        if (Base::freecad_cast<Fem::FemGeometry*>(child)) {
+            last = child;
+        }
+    }
+    return last == obj;
+}
+
 ViewProviderFemGeometry::ChainRole ViewProviderFemGeometry::chainRole() const
 {
     auto* obj = getObject();
@@ -311,6 +332,14 @@ void ViewProviderFemGeometry::applyChainVisuals()
 
     auto* state = m_viewStateBinding.state();
     setStageMask(*this, maskFor(role, state ? state->activeStage() : ActiveStage::Geometry));
+
+    // The tree draws the result badge when it is told to and not before, so the
+    // one thing here that is remembered is whether it has been told. A stale
+    // copy makes the badge late; it cannot make the object draw the wrong thing.
+    if (const bool result = isChainResult(); result != m_badgedAsResult) {
+        m_badgedAsResult = result;
+        signalChangeIcon();
+    }
 }
 
 void ViewProviderFemGeometry::applyChainRole()
@@ -334,68 +363,10 @@ void ViewProviderFemGeometry::applyChainRole()
     applyChainVisuals();
 }
 
-void ViewProviderFemGeometry::refreshChainSteps()
-{
-    auto* obj = getObject();
-    if (!obj) {
-        return;
-    }
-    auto* ext = obj->getExtensionByType<App::GroupExtension>(true);
-    if (!ext) {
-        return;
-    }
-    auto* doc = Gui::Application::Instance->getDocument(obj->getDocument());
-    if (!doc) {
-        return;
-    }
-
-    // The result of the chain is its last step, that is the one the group takes
-    // its shape from.
-    Fem::FemGeometry* result = nullptr;
-    for (auto* child : ext->Group.getValues()) {
-        if (auto* geometry = Base::freecad_cast<Fem::FemGeometry*>(child)) {
-            result = geometry;
-        }
-    }
-
-    // Objects that just left the chain have to get their own visual back, so
-    // former members are refreshed along with the current ones.
-    std::set<std::string> members = m_chainMembers;
-    m_chainMembers.clear();
-    for (auto* child : ext->Group.getValues()) {
-        if (child && child->isAttachedToDocument()) {
-            m_chainMembers.insert(child->getNameInDocument());
-            members.insert(child->getNameInDocument());
-        }
-    }
-
-    for (const auto& name : members) {
-        auto* member = obj->getDocument()->getObject(name.c_str());
-        if (!member) {
-            continue;
-        }
-        auto* vp = Base::freecad_cast<ViewProviderFemGeometry*>(doc->getViewProvider(member));
-        if (!vp) {
-            continue;
-        }
-        vp->applyChainRole();
-        vp->setChainResult(member == result);
-    }
-}
-
-void ViewProviderFemGeometry::setChainResult(bool result)
-{
-    if (result == m_isChainResult) {
-        return;
-    }
-    m_isChainResult = result;
-    signalChangeIcon();
-}
-
 QIcon ViewProviderFemGeometry::mergeColorfulOverlayIcons(const QIcon& orig) const
 {
     QIcon icon = orig;
-    if (m_isChainResult) {
+    if (isChainResult()) {
         static QPixmap badge(
             Gui::BitmapFactory().pixmapFromSvg("FEM_Overlay_Result", QSize(10, 10))
         );
@@ -684,10 +655,16 @@ void ViewProviderFemGeometry::updateData(const App::Property* prop)
     }
 
     // Joining or leaving the chain is what makes a step a step, and the step
-    // itself gets no property change for it.
+    // itself gets no property change for it. The group is the only one that
+    // hears, so it says so once and every member reads its own role again -
+    // including one that has just left, which is still connected and finds
+    // itself without an owner.
     if (auto* ext = geometryObject->getExtensionByType<App::GroupExtension>(true);
         ext && prop == &ext->Group) {
-        refreshChainSteps();
+        if (auto* state = viewState()) {
+            state->chainChanged();
+        }
+        applyChainRole();
     }
 
     ViewProviderDocumentObject::updateData(prop);
@@ -697,7 +674,6 @@ void ViewProviderFemGeometry::finishRestoring()
 {
     ViewProviderDocumentObject::finishRestoring();
     applyChainRole();
-    refreshChainSteps();
 }
 
 void ViewProviderFemGeometry::onChanged(const App::Property* prop)

@@ -93,8 +93,8 @@ public:
     {
         return chainOwner() != nullptr;
     }
-    /** Mark this step as the one the group takes its result from. */
-    void setChainResult(bool result);
+    /** Whether the group takes its result from this step, which earns it a badge. */
+    bool isChainResult() const;
 
     /**
      * What this object is in its chain right now, which is what decides
@@ -219,8 +219,6 @@ protected:
 
     /** Apply the chain role of this object: build step or result owner. */
     void applyChainRole();
-    /** Refresh the roles of the steps below this group. */
-    void refreshChainSteps();
 
     /// Everything this object draws.
     FemGeometryViewHelper m_geometry;
@@ -239,13 +237,13 @@ protected:
 
     ViewStateBinding m_viewStateBinding;
 
-    // The result step carries a tree badge; nothing else here draws anything.
-    bool m_isChainResult {false};
     // Whether this object was a build step when its role was last applied, so
     // that joining or leaving a chain can be noticed and acted on.
     bool m_wasChainStep {false};
-    // Chain members of the last refresh, to hand their visual back when they go
-    std::set<std::string> m_chainMembers;
+    // Whether the tree has been told this step carries the result badge. Not
+    // the answer itself, which is read off the chain: only whether the tree
+    // knows it yet.
+    bool m_badgedAsResult {false};
 };
 
 using ViewProviderFemGeometryPython = Gui::ViewProviderFeaturePythonT<ViewProviderFemGeometry>;

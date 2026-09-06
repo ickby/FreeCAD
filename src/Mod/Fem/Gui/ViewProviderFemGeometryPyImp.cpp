@@ -85,6 +85,17 @@ PyObject* ViewProviderFemGeometryPy::syncSelectionHighlight(PyObject* args)
     Py_Return;
 }
 
+PyObject* ViewProviderFemGeometryPy::isChainResult(PyObject* args)
+{
+    if (!PyArg_ParseTuple(args, "")) {
+        return nullptr;
+    }
+    if (this->getViewProviderFemGeometryPtr()->isChainResult()) {
+        Py_RETURN_TRUE;
+    }
+    Py_RETURN_FALSE;
+}
+
 PyObject* ViewProviderFemGeometryPy::getChainRole(PyObject* args)
 {
     if (!PyArg_ParseTuple(args, "")) {

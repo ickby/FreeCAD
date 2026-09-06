@@ -351,6 +351,19 @@ public:
     }
     void setUnderAchievedElements(std::map<std::string, int> elements);
 
+    /**
+     * Tell the followers that the geometry chain has been rebuilt.
+     *
+     * What a build step is, which of them the group takes its result from, and
+     * which of them is drawn all follow from the membership of the chain, and
+     * every geometry view provider works its own answer out. It only has to be
+     * told that the answers may have changed, which the group is the only one
+     * to hear: the members get no property change of their own for joining or
+     * leaving. Named rather than notifying outright, so the caller says what
+     * happened instead of what should be done about it.
+     */
+    void chainChanged();
+
     Connection connectChanged(Slot slot);
 
     static AnalysisViewState* forAnalysis(Fem::FemAnalysis* analysis);

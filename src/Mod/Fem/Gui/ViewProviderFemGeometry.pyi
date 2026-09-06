@@ -45,6 +45,16 @@ class ViewProviderFemGeometry(ViewProviderDocumentObject):
         """Rebuild 3D selection highlight from the current Gui.Selection"""
         ...
 
+    def isChainResult(self) -> bool:
+        """
+        Whether the group takes its result from this step.
+
+        The last step of a chain, which is what the tree marks with a badge.
+        Read off the membership rather than remembered, so it moves when the
+        chain does.
+        """
+        ...
+
     def getChainRole(self) -> str:
         """
         What this object is in its geometry chain right now.

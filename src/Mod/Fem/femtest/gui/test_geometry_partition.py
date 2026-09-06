@@ -223,6 +223,34 @@ class TestGeometryPartitionGui(unittest.TestCase):
             )
         )
 
+    def test_the_result_badge_follows_the_last_step(self):
+        """
+        The group takes its shape from the last step of its chain, and that step
+        is the one the tree badges. Membership decides it, so it has to move
+        when the chain does: the group says only that something changed and each
+        step reads its own answer, including one that has just left.
+        """
+        self.assertFalse(self.imp.ViewObject.isChainResult())
+        self.assertTrue(self.part.ViewObject.isChainResult())
+
+        self.group.Group = [self.imp]
+        self.document.recompute()
+
+        self.assertTrue(self.imp.ViewObject.isChainResult())
+        self.assertFalse(self.part.ViewObject.isChainResult())
+        self.assertEqual(
+            self.part.ViewObject.getChainRole(),
+            "Owner",
+            "a step that left the chain draws for itself again",
+        )
+        # The mask, not just the answer: nobody writes one into the object that
+        # left, so this only holds if it was told to look again and did.
+        self.assertEqual(
+            _mask_mode(self.part.ViewObject),
+            "Default",
+            "and its render has to be switched back on without anyone pushing it",
+        )
+
     # -- edit preview -------------------------------------------------------
 
     def test_preview_shows_the_input_and_restores_the_group(self):

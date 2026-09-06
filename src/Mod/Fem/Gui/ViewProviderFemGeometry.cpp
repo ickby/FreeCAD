@@ -672,6 +672,15 @@ void ViewProviderFemGeometry::updateData(const App::Property* prop)
 void ViewProviderFemGeometry::finishRestoring()
 {
     ViewProviderDocumentObject::finishRestoring();
+
+    // Restoring a document hands out no property changes, so the shape has
+    // never reached the renderer: updateData is the only other way in, and
+    // opening a document never fires it. Without this the geometry of a saved
+    // analysis is missing until something touches it into a recompute.
+    ensureViewStateConnection();
+    if (chainRole() != ChainRole::Step) {
+        pushShapeToHelper();
+    }
     applyChainVisuals();
 }
 

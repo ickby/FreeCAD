@@ -33,6 +33,8 @@ __title__ = "FEM geometry element mark Gui tests"
 __author__ = "Stefan Tröger"
 __url__ = "https://www.freecad.org"
 
+import os
+import tempfile
 import unittest
 
 import FreeCAD
@@ -139,6 +141,34 @@ class TestGeometryMarksGui(unittest.TestCase):
     def tearDown(self):
         FreeCADGui.Selection.clearSelection()
         FreeCAD.closeDocument(self.document.Name)
+
+    def test_a_reopened_document_draws_its_geometry_at_once(self):
+        """
+        Restoring a document hands out no property changes, so the shape reaches
+        the renderer only if the restore itself hands it over. It did not, and
+        the geometry of a saved analysis stayed missing from the 3D view until
+        something touched it into a recompute.
+        """
+        path = os.path.join(tempfile.mkdtemp(), "reopened.FCStd")
+        self.document.saveAs(path)
+        FreeCAD.closeDocument(self.document.Name)
+
+        self.document = FreeCAD.open(path)
+        group = self.document.getObject("Geometry")
+        self.assertIsNotNone(group, "the saved geometry group comes back")
+        # Every mask, not a fixed one: which child the drawn mode sits under
+        # depends on the extensions the restored object brings with it.
+        switch = group.ViewObject.SwitchNode
+        points = 0
+        for index in range(switch.getNumChildren()):
+            child = switch.getChild(index)
+            for node in children_of_type(child, "SoCoordinate3"):
+                points = max(points, node.point.getNum())
+        self.assertGreater(
+            points,
+            1,
+            "the restored geometry has to be in the render nodes without a recompute",
+        )
 
     def _face_colors(self):
         return node_colors(self.face_material)

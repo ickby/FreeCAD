@@ -33,37 +33,32 @@
     </rdf:RDF>
   </metadata>
   <!--
-    Four pieces of a model, two of them picked out. The dropped pair is drawn
-    in outline rather than in a paler fill so it reads the same on a light and
-    on a dark panel: what carries the shape there is the dark stroke every
-    other FEM post filter icon uses, not a tint that one of the two themes
-    would swallow.
+    Two pieces of a model, one kept and one left behind.
+
+    Every face is filled, which is what lets the icon work on a dark panel as
+    well as a light one: the pale fills carry the silhouette where a dark
+    outline would disappear into the background, and the dark outlines carry it
+    against a light one. Drawing the dropped piece as an unfilled outline - the
+    obvious way to say "not this one" - would make it vanish on dark, so it is
+    told apart by tone instead, the same washed-out grey the mesh view already
+    uses for geometry that is there but not being solved on.
+
+    Two solids rather than four smaller ones, set on the diagonal so they reach
+    both corners: the toolbar renders this at sixteen pixels, where a shape
+    under a third of the canvas is a smudge.
   -->
-  <g
-     style="stroke:#172a04;stroke-width:2.4;stroke-linejoin:round;stroke-linecap:round">
-    <path
-       id="piece-dropped-top"
-       style="fill:none;stroke-dasharray:4.4,3.6"
-       d="M 5,20 17,13 29,20 17,27 Z" />
-    <path
-       id="piece-dropped-bottom"
-       style="fill:none;stroke-dasharray:4.4,3.6"
-       d="M 5,44 17,37 29,44 17,51 Z" />
-    <path
-       id="piece-kept-top"
-       style="fill:#5bae0c"
-       d="M 33,20 45,13 57,20 45,27 Z" />
-    <path
-       id="piece-kept-bottom"
-       style="fill:#5bae0c"
-       d="M 33,44 45,37 57,44 45,51 Z" />
-    <path
-       id="pick-mark"
-       style="fill:none;stroke-width:5;stroke:#172a04"
-       d="M 38,32.5 43.5,38 56,25.5" />
-    <path
-       id="pick-mark-inner"
-       style="fill:none;stroke-width:2.4;stroke:#5bae0c"
-       d="M 38,32.5 43.5,38 56,25.5" />
+  <g style="stroke-linejoin:round;stroke-linecap:round;stroke-width:2.4">
+    <!-- dropped: the piece the filter leaves out, further back -->
+    <g style="stroke:#2e3436">
+      <path id="drop-left" style="fill:#babdb6" d="M 3,14.5 18,23 18,40 3,31.5 Z" />
+      <path id="drop-right" style="fill:#d3d7cf" d="M 33,14.5 18,23 18,40 33,31.5 Z" />
+      <path id="drop-top" style="fill:#eeeeec" d="M 18,6 33,14.5 18,23 3,14.5 Z" />
+    </g>
+    <!-- kept: the piece a checked entity stands for, nearer and drawn over it -->
+    <g style="stroke:#172a04">
+      <path id="keep-left" style="fill:#5bae0c" d="M 30,32.5 45,41 45,58 30,49.5 Z" />
+      <path id="keep-right" style="fill:#8ae234" d="M 60,32.5 45,41 45,58 60,49.5 Z" />
+      <path id="keep-top" style="fill:#b7f269" d="M 45,24 60,32.5 45,41 30,32.5 Z" />
+    </g>
   </g>
 </svg>

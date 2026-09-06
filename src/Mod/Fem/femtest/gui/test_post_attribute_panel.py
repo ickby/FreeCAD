@@ -34,7 +34,7 @@ import FreeCADGui
 import Fem
 import Part
 
-from PySide import QtCore
+from PySide import QtCore, QtGui
 
 import ObjectsFem
 
@@ -99,6 +99,13 @@ class TestPostAttributePanelGui(unittest.TestCase):
         self.analysis.addObject(self.pipeline)
         self.document.recompute()
         self.pipeline.attribute(solve_mesh, self.analysis)
+        self.document.recompute()
+
+        # The same result loaded a second time and deliberately left alone, so
+        # the panel can be asked what it does with a result nobody attributed.
+        self.bare_pipeline = self.document.addObject("Fem::FemPostPipeline", "Bare")
+        self.bare_pipeline.load(result)
+        self.analysis.addObject(self.bare_pipeline)
         self.document.recompute()
 
         self.filter = ObjectsFem.makePostFilterAttribute(self.document, self.pipeline)
@@ -182,3 +189,44 @@ class TestPostAttributePanelGui(unittest.TestCase):
 
         self.assertEqual(self.filter.Attribute, "Component")
         self.assertEqual(list(self.filter.Elements), ["Solid2"])
+
+    def test_the_name_column_takes_what_the_counts_do_not_need(self):
+        """A dotted path is as long as the model makes it; a count is not."""
+        panel = self._panel()
+        tree = panel.widget.ElementTree
+        header = tree.header()
+
+        if hasattr(header, "sectionResizeMode"):
+            mode = header.sectionResizeMode
+            stretch = QtGui.QHeaderView.ResizeMode.Stretch
+            to_contents = QtGui.QHeaderView.ResizeMode.ResizeToContents
+        else:
+            mode = header.resizeMode
+            stretch = QtGui.QHeaderView.Stretch
+            to_contents = QtGui.QHeaderView.ResizeToContents
+
+        # The names take whatever the counts leave over, at any panel width,
+        # rather than the even split that cut them off halfway across an
+        # otherwise empty panel.
+        self.assertEqual(mode(0), stretch)
+        self.assertEqual(mode(1), to_contents)
+        self.assertFalse(header.stretchLastSection())
+        self.assertEqual(tree.columnWidth(0) + tree.columnWidth(1), tree.viewport().width())
+
+    def test_a_result_without_attribution_says_so(self):
+        """An empty tree reads as breakage, so the reason replaces it."""
+        bare = ObjectsFem.makePostFilterAttribute(self.document, self.bare_pipeline)
+        self.document.recompute()
+        panel = task_post_attributefilter._TaskPanel(bare.ViewObject)
+
+        self.assertFalse(panel.widget.ElementTree.isVisibleTo(panel.widget))
+        self.assertTrue(panel.widget.MessageLabel.isVisibleTo(panel.widget))
+        self.assertNotEqual(panel.widget.MessageLabel.text(), "")
+        # Nothing to group by, so nothing to choose either.
+        self.assertFalse(panel.widget.AttributeComboBox.isEnabled())
+
+    def test_an_attributed_result_shows_the_tree_and_not_the_message(self):
+        panel = self._panel()
+        self.assertTrue(panel.widget.ElementTree.isVisibleTo(panel.widget))
+        self.assertFalse(panel.widget.MessageLabel.isVisibleTo(panel.widget))
+        self.assertTrue(panel.widget.AttributeComboBox.isEnabled())

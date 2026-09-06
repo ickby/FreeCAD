@@ -74,11 +74,66 @@ class _TaskPanel(base_fempostpanel._BasePostTaskPanel):
 
         self._attribution = post_attributefilter.Attribution(self.obj.getInputData())
 
+        self.__configure_columns()
         self._enumPropertyToCombobox(self.obj, "Attribute", self.widget.AttributeComboBox)
         self.__build_tree()
+        self.__show_state()
 
         self.widget.AttributeComboBox.currentTextChanged.connect(self._attribute_changed)
         self.widget.ElementTree.itemChanged.connect(self._item_changed)
+
+    def __configure_columns(self):
+        """Give the names the whole width and the counts only what they need.
+
+        Both columns share the width evenly otherwise, so a name is cut off
+        halfway across an empty panel while the count column sits mostly blank
+        beside it. The count is a handful of digits and can be measured; the
+        names are dotted paths that are as long as the model makes them, so
+        whatever is left over belongs to them.
+        """
+        tree = self.widget.ElementTree
+        tree.setTextElideMode(QtCore.Qt.ElideMiddle)
+        header = tree.header()
+        header.setStretchLastSection(False)
+        if hasattr(header, "setSectionResizeMode"):
+            set_mode = header.setSectionResizeMode
+            stretch = QtGui.QHeaderView.ResizeMode.Stretch
+            to_contents = QtGui.QHeaderView.ResizeMode.ResizeToContents
+        else:
+            set_mode = header.setResizeMode
+            stretch = QtGui.QHeaderView.Stretch
+            to_contents = QtGui.QHeaderView.ResizeToContents
+        set_mode(0, stretch)
+        set_mode(1, to_contents)
+
+    def __show_state(self):
+        """Say what is on offer, including when the answer is nothing.
+
+        A result that was never attributed leaves the tree empty, and an empty
+        tree looks like a filter that has lost its data rather than one that
+        never had any. So the empty tree is replaced by the reason for it, and
+        the combo box - which would offer the one fallback entry and nothing to
+        do with it - is switched off.
+        """
+        attributed = bool(self._attribution.entities)
+
+        self.widget.ElementTree.setVisible(attributed)
+        self.widget.HelpLabel.setVisible(attributed)
+        self.widget.MessageLabel.setVisible(not attributed)
+        self.widget.AttributeComboBox.setEnabled(attributed)
+
+        if not attributed:
+            self.widget.MessageLabel.setText(
+                translate(
+                    "FEM",
+                    "This result carries no attribution, so there is nothing to filter by "
+                    "and the result is passed through unchanged.\n\n"
+                    "Only a result computed by a solver run of this analysis knows which "
+                    "entity, component and material each of its cells belongs to. A result "
+                    "read from a file, or one computed before the analysis recorded it, "
+                    "carries none. Re-run the solver to attribute it.",
+                )
+            )
 
     def __build_tree(self):
         """Fill the tree for the attribute currently chosen."""
@@ -170,6 +225,7 @@ class _TaskPanel(base_fempostpanel._BasePostTaskPanel):
         # The checked entities are the same entities under any attribute, so the
         # choice survives a regrouping and only the tree around it is rebuilt.
         self.__build_tree()
+        self.__show_state()
         self._recompute()
 
     def _item_changed(self, item, column):

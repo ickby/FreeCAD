@@ -103,6 +103,27 @@ AnalysisViewState* FemInstanceViewHelper::viewState() const
     return AnalysisViewState::forAnalysis(analysis);
 }
 
+void FemInstanceViewHelper::onViewStateChanged()
+{
+    if (m_renderingEnabled) {
+        applyViewStateChange();
+    }
+}
+
+void FemInstanceViewHelper::setRenderingEnabled(bool on)
+{
+    if (on == m_renderingEnabled) {
+        return;
+    }
+    m_renderingEnabled = on;
+    if (on) {
+        // Every change made while it slept was ignored, so nothing that was
+        // worked out before it can be trusted now.
+        m_viewStateCacheValid = false;
+        onViewStateChanged();
+    }
+}
+
 void FemInstanceViewHelper::connectViewState()
 {
     ensureViewStateConnection();

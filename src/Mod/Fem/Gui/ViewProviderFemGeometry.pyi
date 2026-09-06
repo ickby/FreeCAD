@@ -45,21 +45,15 @@ class ViewProviderFemGeometry(ViewProviderDocumentObject):
         """Rebuild 3D selection highlight from the current Gui.Selection"""
         ...
 
-    def setChainPreview(self, on: bool, /) -> None:
+    def getChainRole(self) -> str:
         """
-        Show this geometry while it is edited as a chain step.
+        What this object is in its geometry chain right now.
 
-        The geometry group is hidden for the duration so its result does not
-        overlap the shape being picked on.
+        "Owner" draws the result of its chain, "Step" draws nothing because the
+        owner draws its result instead, "Subject" is the geometry an open panel
+        is picked on, and "SteppedAside" is an owner making room for a subject
+        below it.
         """
-        ...
-
-    def isChainPreview(self) -> bool:
-        """True while this shape stands in for the chain result, see setChainPreview()."""
-        ...
-
-    def isChainRenderSuppressed(self) -> bool:
-        """True while a chain step preview hides this group's render."""
         ...
 
     def setPreselectPromotion(self, on: bool, /) -> None:

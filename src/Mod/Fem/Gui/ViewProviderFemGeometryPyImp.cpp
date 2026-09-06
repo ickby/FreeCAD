@@ -85,36 +85,26 @@ PyObject* ViewProviderFemGeometryPy::syncSelectionHighlight(PyObject* args)
     Py_Return;
 }
 
-PyObject* ViewProviderFemGeometryPy::setChainPreview(PyObject* args)
-{
-    PyObject* pyOn = nullptr;
-    if (!PyArg_ParseTuple(args, "O!", &PyBool_Type, &pyOn)) {
-        return nullptr;
-    }
-    this->getViewProviderFemGeometryPtr()->setChainPreview(PyObject_IsTrue(pyOn) != 0);
-    Py_Return;
-}
-
-PyObject* ViewProviderFemGeometryPy::isChainPreview(PyObject* args)
+PyObject* ViewProviderFemGeometryPy::getChainRole(PyObject* args)
 {
     if (!PyArg_ParseTuple(args, "")) {
         return nullptr;
     }
-    if (this->getViewProviderFemGeometryPtr()->isChainPreview()) {
-        Py_RETURN_TRUE;
+    const char* name = "Owner";
+    switch (this->getViewProviderFemGeometryPtr()->chainRole()) {
+        case ViewProviderFemGeometry::ChainRole::Step:
+            name = "Step";
+            break;
+        case ViewProviderFemGeometry::ChainRole::Subject:
+            name = "Subject";
+            break;
+        case ViewProviderFemGeometry::ChainRole::SteppedAside:
+            name = "SteppedAside";
+            break;
+        case ViewProviderFemGeometry::ChainRole::Owner:
+            break;
     }
-    Py_RETURN_FALSE;
-}
-
-PyObject* ViewProviderFemGeometryPy::isChainRenderSuppressed(PyObject* args)
-{
-    if (!PyArg_ParseTuple(args, "")) {
-        return nullptr;
-    }
-    if (this->getViewProviderFemGeometryPtr()->isChainRenderSuppressed()) {
-        Py_RETURN_TRUE;
-    }
-    Py_RETURN_FALSE;
+    return Py::new_reference_to(Py::String(name));
 }
 
 PyObject* ViewProviderFemGeometryPy::setPreselectPromotion(PyObject* args)

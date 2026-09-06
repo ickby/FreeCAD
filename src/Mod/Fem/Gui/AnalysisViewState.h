@@ -83,6 +83,25 @@ FemGuiExport void setStageMask(Gui::ViewProviderDocumentObject& vp, const char* 
 FemGuiExport void observeEditScopes();
 
 /**
+ * The geometry an open panel for @a edited is picked on, or null when @a edited
+ * is no geometry at all.
+ *
+ * A build step that stores element references stores them against the geometry
+ * it was handed, not against the one it produces - a partition names the faces
+ * of its input - so that input is what has to be on show for the panel to be
+ * usable, and what the view panel has to list. A step that stores no such
+ * references produces geometry rather than altering it, and there the answer is
+ * the step itself: what a geometry import is edited for is what it imports.
+ *
+ * Told apart by the element property, the same way intentFor() tells a panel
+ * that will ask for a pick from one that will not. Answering it here rather
+ * than in each setEdit() is what stopped the import from having no answer at
+ * all, which is how it came to rely on the group happening to draw the same
+ * shape.
+ */
+FemGuiExport App::DocumentObject* editSubjectFor(App::DocumentObject* edited);
+
+/**
  * The colour modes, in the order a chooser should offer them.
  *
  * Which modes there are, what each is called, and which of them mean anything
@@ -172,6 +191,19 @@ public:
     EditIntent editIntent() const
     {
         return m_editIntent;
+    }
+
+    /**
+     * The geometry on show for the open panel, or null when none is open.
+     *
+     * The one answer to "which geometry is the user looking at and picking on
+     * right now", read by the geometry view providers to know which of them
+     * draws, by the group to know that it has to step aside, and by the view
+     * panel to know whose elements to list. See editSubjectFor().
+     */
+    App::DocumentObject* editSubject() const
+    {
+        return m_editSubject;
     }
 
     /**
@@ -367,6 +399,7 @@ private:
 
     /// Object whose task panel is open, null when none is. Never persisted.
     App::DocumentObject* m_editedObject {nullptr};
+    App::DocumentObject* m_editSubject {nullptr};
     EditIntent m_editIntent {EditIntent::None};
     /// Stage to go back to when the scope closes
     ActiveStage m_editStageBefore {ActiveStage::Geometry};

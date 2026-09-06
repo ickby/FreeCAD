@@ -242,13 +242,80 @@ Fem::FemGeometry* ViewProviderFemGeometry::chainOwner() const
     return nullptr;
 }
 
+ViewProviderFemGeometry::ChainRole ViewProviderFemGeometry::chainRole() const
+{
+    auto* obj = getObject();
+    if (!obj) {
+        return ChainRole::Owner;
+    }
+
+    auto* state = m_viewStateBinding.state();
+    auto* subject = state ? state->editSubject() : nullptr;
+    if (subject && subject == obj) {
+        return ChainRole::Subject;
+    }
+    if (isChainStep()) {
+        return ChainRole::Step;
+    }
+    // The owner of the chain the subject belongs to has to make room for it.
+    if (subject) {
+        if (auto* ext = obj->getExtensionByType<App::GroupExtension>(true);
+            ext && ext->hasObject(subject)) {
+            return ChainRole::SteppedAside;
+        }
+    }
+    return ChainRole::Owner;
+}
+
+const char* ViewProviderFemGeometry::maskFor(ChainRole role, ActiveStage stage) const
+{
+    switch (role) {
+        case ChainRole::Step:
+            return ViewMode::Hidden;
+        case ChainRole::SteppedAside:
+            // A switch traverses one child only, and the children of a
+            // GeoFeatureGroup hang under the extension-owned "Group" mask.
+            // Hiding outright would cut off the subject along with this
+            // object's own result, leaving nothing to look at or pick.
+            return getDisplayMaskMode(ViewMode::Group) ? ViewMode::Group : ViewMode::Hidden;
+        case ChainRole::Owner:
+        case ChainRole::Subject:
+            // The two draw for different reasons and under the same rule. The
+            // stage is not overridden for a subject: opening the panel put the
+            // stage on Geometry through the edit scope, and if the user moves
+            // it from there while the panel is open that is his to decide.
+            break;
+    }
+    return stage == ActiveStage::Geometry ? ViewMode::Default : ViewMode::Hidden;
+}
+
+void ViewProviderFemGeometry::applyChainVisuals()
+{
+    if (!isAttachedToDocument()) {
+        return;
+    }
+
+    const ChainRole role = chainRole();
+    const bool draws = (role == ChainRole::Owner || role == ChainRole::Subject);
+
+    // A step that has just stopped being one has been ignoring its shape, so it
+    // has to be caught up before anything asks it to draw.
+    if (draws && m_wasChainStep) {
+        pushShapeToHelper();
+    }
+    m_wasChainStep = (role == ChainRole::Step);
+
+    // Told outright rather than left to work it out from the mask: a helper
+    // rendering under a mask nobody traverses is work nobody sees.
+    m_geometry.setRenderingEnabled(draws);
+
+    auto* state = m_viewStateBinding.state();
+    setStageMask(*this, maskFor(role, state ? state->activeStage() : ActiveStage::Geometry));
+}
+
 void ViewProviderFemGeometry::applyChainRole()
 {
     const bool step = isChainStep();
-    if (step == m_isChainStep) {
-        return;
-    }
-    m_isChainStep = step;
 
     // A build step is not a thing you can look at on its own: the group holds
     // the result and renders it. Take the visibility control away instead of
@@ -257,18 +324,14 @@ void ViewProviderFemGeometry::applyChainRole()
     setToggleVisibility(
         step ? ToggleVisibilityMode::NoToggleVisibility : ToggleVisibilityMode::CanToggleVisibility
     );
-    if (step) {
-        setStageMask(*this, ViewMode::Hidden);
+    if (step && !Visibility.getValue()) {
+        // Visibility is not the user's to set for a step, so it must not be
+        // left off: the object would be unable to draw even as the subject of
+        // an open panel, with no switch left to turn it back on.
+        Visibility.setValue(true);
     }
-    else {
-        // Shape changes were ignored while this was a step, so the helper has
-        // to be caught up before it can be rendered again.
-        pushShapeToHelper();
-        setStageMask(*this, ViewMode::Default);
-        // Rebuilds the render and lets the active stage have the final say on
-        // the mask. applyChainRole is a no-op from there, the role is set.
-        onViewStateChanged();
-    }
+
+    applyChainVisuals();
 }
 
 void ViewProviderFemGeometry::refreshChainSteps()
@@ -329,72 +392,6 @@ void ViewProviderFemGeometry::setChainResult(bool result)
     signalChangeIcon();
 }
 
-ViewProviderFemGeometry* ViewProviderFemGeometry::groupViewProvider(Fem::FemGeometry* group) const
-{
-    if (!group) {
-        return nullptr;
-    }
-    auto* doc = Gui::Application::Instance->getDocument(group->getDocument());
-    if (!doc) {
-        return nullptr;
-    }
-    return Base::freecad_cast<ViewProviderFemGeometry*>(doc->getViewProvider(group));
-}
-
-const char* ViewProviderFemGeometry::suppressedMaskMode() const
-{
-    // A switch traverses one child only, and the children of a GeoFeatureGroup
-    // hang under the extension-owned "Group" mask. Hiding the group outright
-    // would therefore cut off the previewed step along with the group's own
-    // result, leaving nothing to look at or pick. Stepping aside onto the
-    // children mask drops the result and keeps the step reachable instead.
-    return getDisplayMaskMode(ViewMode::Group) ? ViewMode::Group : ViewMode::Hidden;
-}
-
-void ViewProviderFemGeometry::setChainRenderSuppressed(bool on)
-{
-    if (on == m_suppressChainRender) {
-        return;
-    }
-    m_suppressChainRender = on;
-    onViewStateChanged();
-}
-
-void ViewProviderFemGeometry::setChainPreview(bool on)
-{
-    if (on == m_chainPreview) {
-        return;
-    }
-    m_chainPreview = on;
-
-    if (on) {
-        pushShapeToHelper();
-
-        if (auto* group = chainOwner()) {
-            if (auto* gvp = groupViewProvider(group)) {
-                gvp->setChainRenderSuppressed(true);
-                // By name, because the group can be removed while the panel is
-                // open and a cached pointer would dangle on the way out.
-                m_previewSuppressedGroup = group->getNameInDocument();
-            }
-        }
-    }
-    else if (!m_previewSuppressedGroup.empty()) {
-        auto* obj = getObject();
-        if (obj && obj->getDocument()) {
-            auto* group = Base::freecad_cast<Fem::FemGeometry*>(
-                obj->getDocument()->getObject(m_previewSuppressedGroup.c_str())
-            );
-            if (auto* gvp = group ? groupViewProvider(group) : nullptr) {
-                gvp->setChainRenderSuppressed(false);
-            }
-        }
-        m_previewSuppressedGroup.clear();
-    }
-
-    onViewStateChanged();
-}
-
 QIcon ViewProviderFemGeometry::mergeColorfulOverlayIcons(const QIcon& orig) const
 {
     QIcon icon = orig;
@@ -413,39 +410,7 @@ QIcon ViewProviderFemGeometry::mergeColorfulOverlayIcons(const QIcon& orig) cons
 
 void ViewProviderFemGeometry::onViewStateChanged()
 {
-    // Only the mask: what is drawn under it is the helper's, and it follows the
-    // same state on a connection of its own.
-    applyChainRole();
-    if (m_isChainStep && !m_chainPreview) {
-        // Nothing to show and nothing to filter: the group renders the result.
-        setStageMask(*this, ViewMode::Hidden);
-        return;
-    }
-    if (m_suppressChainRender) {
-        setStageMask(*this, suppressedMaskMode());
-        return;
-    }
-
-    auto* state = m_viewStateBinding.state();
-    if (!state) {
-        // No stage to consult, but the mask still has to be opened. Without
-        // this a previewed step keeps the Hidden mask applyChainRole left
-        // behind, and a group coming out of suppression never gets its render
-        // back, leaving an empty viewport either way.
-        setStageMask(*this, ViewMode::Default);
-        return;
-    }
-
-    // Exclusive geometry/mesh visibility is ActiveStage, not hand-rolled VP
-    // flags. Always the own render: the group draws the result of its chain and
-    // the steps below it draw nothing, so the extension-owned Group mask would
-    // leave an empty view. A previewed step overrides the stage, because picking
-    // geometry for a chain step is a geometry operation by definition.
-    const ActiveStage stage = state->activeStage();
-    setStageMask(
-        *this,
-        (m_chainPreview || stage == ActiveStage::Geometry) ? ViewMode::Default : ViewMode::Hidden
-    );
+    applyChainVisuals();
 }
 
 /// Hand the current shape to the helper, which is what redraws it.
@@ -490,25 +455,15 @@ void ViewProviderFemGeometry::attach(App::DocumentObject* pcObj)
 
 void ViewProviderFemGeometry::setDisplayMode(const char* ModeName)
 {
-    if (m_isChainStep && !m_chainPreview) {
-        setStageMask(*this, ViewMode::Hidden);
-        return;
-    }
-    if (m_suppressChainRender) {
-        setStageMask(*this, suppressedMaskMode());
-        return;
-    }
-    if (ModeName) {
-        setStageMask(
-            *this,
-            strcmp(ModeName, ViewMode::Hidden) == 0 ? ViewMode::Hidden : ViewMode::Default
-        );
-    }
+    // The mask this asks for is only one of the things that has a say; the
+    // chain and the stage have the others, and applyChainVisuals weighs them.
+    (void)ModeName;
+    applyChainVisuals();
 }
 
 std::vector<std::string> ViewProviderFemGeometry::getDisplayModes() const
 {
-    if (m_isChainStep && !m_chainPreview) {
+    if (chainRole() == ChainRole::Step) {
         return {};
     }
     return {"Surface", "Wireframe"};
@@ -719,9 +674,13 @@ void ViewProviderFemGeometry::onSelectionChanged(const Gui::SelectionChanges& /*
 void ViewProviderFemGeometry::updateData(const App::Property* prop)
 {
     Fem::FemGeometry* geometryObject = getObject<Fem::FemGeometry>();
-    if (prop == &geometryObject->Shape && (!isChainStep() || m_chainPreview)) {
+    if (prop == &geometryObject->Shape) {
         ensureViewStateConnection();
-        pushShapeToHelper();
+        // A step whose result the group draws keeps no picture of its own, and
+        // catches up in applyChainVisuals if it is ever asked for one.
+        if (chainRole() != ChainRole::Step) {
+            pushShapeToHelper();
+        }
     }
 
     // Joining or leaving the chain is what makes a step a step, and the step

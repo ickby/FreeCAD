@@ -94,11 +94,12 @@ public:
     void setElementSubsetMask(std::vector<unsigned char> mask);
 
     void syncStageVisibility();
-    void onViewStateChanged() override;
 
     FemMeshRenderer& renderer();
 
 protected:
+    void applyViewStateChange() override;
+
     /// Register the grid with the state that was just bound, so it can classify it.
     void onViewStateBound() override;
     /// Take the grid back off the state before letting go of it.

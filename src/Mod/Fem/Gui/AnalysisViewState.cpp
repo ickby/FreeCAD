@@ -36,6 +36,7 @@
 #include "ViewProviderAnalysis.h"
 
 #include <App/DocumentObject.h>
+#include <App/PropertyLinks.h>
 #include <Base/Console.h>
 #include <Base/Tools.h>
 #include <Gui/Application.h>
@@ -93,6 +94,28 @@ void FemGui::setStageMask(Gui::ViewProviderDocumentObject& vp, const char* mode)
     if (!vp.Visibility.getValue()) {
         vp.Gui::ViewProvider::hide();
     }
+}
+
+App::DocumentObject* FemGui::editSubjectFor(App::DocumentObject* edited)
+{
+    if (!edited || !edited->isDerivedFrom<Fem::FemGeometry>()) {
+        return nullptr;
+    }
+    // Elements are named against the geometry this step was handed, so that is
+    // the geometry the panel needs on show. Without such a property the step
+    // makes geometry rather than altering it, and it is its own subject.
+    if (!edited->getPropertyByName("Elements")) {
+        return edited;
+    }
+    if (auto* base = freecad_cast<App::PropertyLink*>(edited->getPropertyByName("Base"))) {
+        if (auto* input = base->getValue()) {
+            return input;
+        }
+    }
+    // A step that wants an input and has none: nothing to show it on. Its own
+    // shape is not the answer, that is what it would have produced from the
+    // input it is missing.
+    return nullptr;
 }
 
 const std::vector<ColorMode>& FemGui::allColorModes()
@@ -464,6 +487,7 @@ void AnalysisViewState::beginEdit(App::DocumentObject* edited, EditIntent intent
     }
 
     m_editedObject = edited;
+    m_editSubject = editSubjectFor(edited);
     m_editIntent = intent;
     m_editStageBefore = activeStage();
     m_editStageApplied = ActiveStage::NoStage;
@@ -492,6 +516,7 @@ void AnalysisViewState::endEdit(App::DocumentObject* edited)
     const ActiveStage before = m_editStageBefore;
 
     m_editedObject = nullptr;
+    m_editSubject = nullptr;
     m_editIntent = EditIntent::None;
     m_editStageApplied = ActiveStage::NoStage;
 

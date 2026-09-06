@@ -483,7 +483,7 @@ void FemGeometryViewHelper::updateFromShape(
     updateVTK();
 }
 
-void FemGeometryViewHelper::onViewStateChanged()
+void FemGeometryViewHelper::applyViewStateChange()
 {
     if (!m_attached && !m_displayModesAdded) {
         return;

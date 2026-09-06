@@ -162,27 +162,23 @@ def _vp_object(viewprovider):
         return None
 
 
-def _chain_preview_input(viewprovider):
+def _edit_subject(viewprovider):
     """
-    Shape that an edited geometry chain step is picked on, or None for any other
+    Geometry that an edited geometry object is picked on, or None for any other
     editor.
 
-    A step builds on its input and holds references into it, so that is the
-    shape drawn in its place while the step is open — and the one the panel has
-    to describe, down to which parts are on screen.
+    The same answer the 3D view draws for the panel, asked of FemGui so that the
+    two cannot disagree: the input for a step holding references into it, the
+    object itself for one that holds none. The tree then lists what is on
+    screen, so hiding a part clears the way to the one behind it and clicking a
+    row selects on the object the panel is waiting to hear about.
     """
     obj = _vp_object(viewprovider)
     if obj is None:
         return None
     try:
-        base = getattr(obj, "Base", None)
-        if base is None:
-            return None
-        view = base.ViewObject
-        if view is None or not hasattr(view, "isChainPreview"):
-            return None
-        return base if view.isChainPreview() else None
-    except (AttributeError, ReferenceError, RuntimeError):
+        return FemGui.geometryEditSubject(obj)
+    except (AttributeError, ReferenceError, RuntimeError, TypeError):
         return None
 
 
@@ -1360,15 +1356,14 @@ class GeometryExplorer(QtGui.QTreeView):
             return
 
     def slotInEdit(self, viewprovider):
-        """
-        Follow an edited chain step onto its input geometry.
-
-        The tree then lists what the 3D view draws, so hiding a part clears the
-        way to the one behind it and clicking a row selects on the object the
-        step's panel is waiting to hear about.
-        """
-        base = _chain_preview_input(viewprovider)
+        """Follow an edited geometry object onto the geometry it is picked on."""
+        base = _edit_subject(viewprovider)
         if base is None or self._edit_step is not None:
+            return
+        if base is self.geom_obj:
+            # An editor for the geometry the tree already describes has nothing
+            # to take it to, and treating it as a step would put the tree into
+            # the narrower mode an open step wants.
             return
         if base not in self._geometry_chain():
             return

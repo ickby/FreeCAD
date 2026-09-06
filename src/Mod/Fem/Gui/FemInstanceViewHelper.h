@@ -114,10 +114,39 @@ public:
     void connectViewState();
     void disconnectViewState();
 
-    /** Redraw what the state of the analysis now says this instance looks like. */
-    virtual void onViewStateChanged() = 0;
+    /**
+     * Whether this instance draws at all.
+     *
+     * Switched off it keeps its scene graph and its binding but does no work:
+     * the state may change as it likes and nothing is recomputed until it is
+     * switched back on, which is what a build step wants - its picture belongs
+     * to the group that holds the result. Switching it back on rebuilds at
+     * once, since everything it slept through has still to be caught up with.
+     *
+     * Not the same as being switched to a hidden display mask. The mask says
+     * what a traversal draws; this says whether the work of preparing it is
+     * done at all, and a helper left rendering under a mask nobody traverses
+     * is exactly the waste the mask cannot express.
+     */
+    void setRenderingEnabled(bool on);
+    bool isRenderingEnabled() const
+    {
+        return m_renderingEnabled;
+    }
+
+    /**
+     * Redraw what the state of the analysis now says this instance looks like.
+     *
+     * Does nothing while rendering is switched off. Not virtual on purpose: the
+     * check belongs to every helper, and a subclass overriding this would be
+     * one that quietly does the work anyway.
+     */
+    void onViewStateChanged();
 
 protected:
+    /// Redraw, called only when this instance is one that draws.
+    virtual void applyViewStateChange() = 0;
+
     /** Bind to the state of the analysis this instance is in, if it changed. */
     void ensureViewStateConnection();
     AnalysisViewState* viewState() const;
@@ -161,6 +190,7 @@ protected:
 
     ViewStateBinding m_binding;
     bool m_viewStateCacheValid {false};
+    bool m_renderingEnabled {true};
 };
 
 }  // namespace FemGui

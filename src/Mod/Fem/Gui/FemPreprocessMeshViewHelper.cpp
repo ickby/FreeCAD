@@ -340,7 +340,7 @@ void FemPreprocessMeshViewHelper::applyViewState(bool meshChanged)
     m_renderer.update();
 }
 
-void FemPreprocessMeshViewHelper::onViewStateChanged()
+void FemPreprocessMeshViewHelper::applyViewStateChange()
 {
     // Display modes are only added by a helper that owns the stage switch of
     // its view provider. An instance renders under masks its import view

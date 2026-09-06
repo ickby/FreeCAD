@@ -92,6 +92,13 @@ public:
             "removeActiveAnalysisObserver(object) -- Remove a previously registered observer."
         );
         add_varargs_method(
+            "geometryEditSubject",
+            &Module::geometryEditSubject,
+            "geometryEditSubject(obj) -- The geometry an open panel for obj is picked on: "
+            "the input of a step that stores element references, the step itself for one "
+            "that stores none, and None for anything that is no geometry."
+        );
+        add_varargs_method(
             "colorModes",
             &Module::colorModes,
             "colorModes([stage]) -- The colour modes the view state offers, in the order "
@@ -262,6 +269,20 @@ private:
         }
         return nullptr;
     }
+    Py::Object geometryEditSubject(const Py::Tuple& args)
+    {
+        PyObject* object = nullptr;
+        if (!PyArg_ParseTuple(args.ptr(), "O!", &(App::DocumentObjectPy::Type), &object)) {
+            throw Py::Exception();
+        }
+        auto* edited = static_cast<App::DocumentObjectPy*>(object)->getDocumentObjectPtr();
+        auto* subject = editSubjectFor(edited);
+        if (!subject) {
+            return Py::None();
+        }
+        return Py::Object(subject->getPyObject(), true);
+    }
+
     Py::Object colorModes(const Py::Tuple& args)
     {
         const char* stageName = nullptr;

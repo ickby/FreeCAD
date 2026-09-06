@@ -295,12 +295,10 @@ class TestViewPanelGui(unittest.TestCase):
         deliver; the stage is not the panel's to set, so that goes through the
         edit scope of the view state, which is what the observer opens.
         """
-        view_geometry_base.set_input_preview(self.part, True)
         self.explorer.slotInEdit(self.part.ViewObject)
         FemGui.getAnalysisViewState(self.analysis).beginEdit(self.part, "Geometry")
 
     def _leave_edit(self):
-        view_geometry_base.set_input_preview(self.part, False)
         self.explorer.slotResetEdit(self.part.ViewObject)
         FemGui.getAnalysisViewState(self.analysis).endEdit(self.part)
 
@@ -458,15 +456,20 @@ class TestViewPanelGui(unittest.TestCase):
             "and the block belongs to nothing but itself",
         )
 
-    def test_an_unrelated_editor_leaves_the_tree_alone(self):
-        """Only a step that previews its input takes the tree with it."""
-        self.explorer.slotInEdit(self.group.ViewObject)
+    def test_an_editor_for_something_that_is_no_geometry_leaves_the_tree_alone(self):
+        """Only an editor picked on geometry takes the tree with it."""
+        self.explorer.slotInEdit(self.analysis.ViewObject)
         self.assertIs(self.explorer._tree_object(), self.group)
         self.assertIsNone(self.explorer.edit_obj)
 
-    def test_a_step_that_is_not_previewing_leaves_the_tree_alone(self):
-        self.explorer.slotInEdit(self.part.ViewObject)
+    def test_editing_the_chain_owner_leaves_the_tree_alone(self):
+        """
+        The owner is already what the tree describes, so an editor for it has
+        nowhere to take it - unlike a step, which is picked on its input.
+        """
+        self.explorer.slotInEdit(self.group.ViewObject)
         self.assertIs(self.explorer._tree_object(), self.group)
+        self.assertIsNone(self.explorer.edit_obj)
 
     def test_the_tree_survives_the_step_being_deleted_mid_edit(self):
         self._enter_edit()

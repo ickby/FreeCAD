@@ -106,7 +106,6 @@ public:
 
     void attachToSeparator(SoSeparator* root);
     void ensureDisplayModes(SoSeparator* hiddenSeparator);
-    void onViewStateChanged() override;
 
     /**
      * @a shape in the frame of its own analysis.
@@ -192,6 +191,9 @@ public:
      * marked toplevel down onto the faces it is built from.
      */
     const Base::Color* elementHighlightColor(const std::string& element) const;
+
+protected:
+    void applyViewStateChange() override;
 
 private:
     /** The VTK ids of everything that is not hidden, and who owns each of them. */

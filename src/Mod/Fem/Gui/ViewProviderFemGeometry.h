@@ -97,22 +97,22 @@ public:
     void setChainResult(bool result);
 
     /**
-     * While a chain step is edited, show its own shape for picking instead of
-     * staying hidden. Hides the geometry group for the duration.
+     * What this object is in its chain right now, which is what decides
+     * whether it draws.
+     *
+     * Read rather than stored: it follows from the chain the object sits in and
+     * from the geometry the open panel is picked on, both of which are known
+     * elsewhere and can change without this object being told. Keeping a copy
+     * is how the old flags came to disagree with each other.
      */
-    void setChainPreview(bool on);
-    /** True while this shape stands in for the chain result, see setChainPreview(). */
-    bool isChainPreview() const
+    enum class ChainRole
     {
-        return m_chainPreview;
-    }
-    void setChainRenderSuppressed(bool on);
-    bool isChainRenderSuppressed() const
-    {
-        return m_suppressChainRender;
-    }
-    ViewProviderFemGeometry* groupViewProvider(Fem::FemGeometry* group) const;
-    const char* suppressedMaskMode() const;
+        Owner,        ///< holds the result of a chain (or is in none): draws it
+        Step,         ///< a build step; the owner draws its result instead
+        Subject,      ///< the geometry the open panel is picked on: draws for it
+        SteppedAside  ///< owner of a chain whose subject is drawing: shows its children
+    };
+    ChainRole chainRole() const;
 
     std::string getElement(const SoDetail*) const override;
     SoDetail* getDetail(const char*) const override;
@@ -201,6 +201,18 @@ protected:
     /// Hand the current shape to the helper, which is what redraws it.
     void pushShapeToHelper();
 
+    /**
+     * Put the mask, the helper and the shape where @a role and the stage say.
+     *
+     * The single place any of the three is decided. Everything that can change
+     * the answer - the chain, the open panel, the stage, the display mode -
+     * comes through here rather than reaching for a mask of its own.
+     */
+    void applyChainVisuals();
+
+    /// The display mask @a role calls for while @a stage is the one on show.
+    const char* maskFor(ChainRole role, ActiveStage stage) const;
+
     void ensureViewStateConnection();
     void onViewStateChanged();
     AnalysisViewState* viewState() const;
@@ -227,12 +239,11 @@ protected:
 
     ViewStateBinding m_viewStateBinding;
 
-    // Chain role: a step renders nothing, the result step carries a tree badge
-    bool m_isChainStep {false};
+    // The result step carries a tree badge; nothing else here draws anything.
     bool m_isChainResult {false};
-    bool m_chainPreview {false};
-    bool m_suppressChainRender {false};
-    std::string m_previewSuppressedGroup;
+    // Whether this object was a build step when its role was last applied, so
+    // that joining or leaving a chain can be noticed and acted on.
+    bool m_wasChainStep {false};
     // Chain members of the last refresh, to hand their visual back when they go
     std::set<std::string> m_chainMembers;
 };

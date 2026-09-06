@@ -36,6 +36,7 @@ import Part
 # SwitchNode hands out a Coin node, which needs the pivy bindings loaded
 from pivy import coin  # noqa: F401
 
+import FemGui
 import ObjectsFem
 
 from femguiutils import selection_handoff
@@ -181,7 +182,9 @@ class TestGeometryPartitionGui(unittest.TestCase):
                 Part.makeBox(10, 10, 10, FreeCAD.Vector(30, 0, 0)),
             ]
         )
+        self.analysis = ObjectsFem.makeAnalysis(self.document)
         self.group = ObjectsFem.makeGeometryGroup(self.document)
+        self.analysis.addObject(self.group)
         self.imp = ObjectsFem.makeGeometryImport(self.document)
         self.imp.Import = [source]
         self.group.Group = [self.imp]
@@ -189,7 +192,16 @@ class TestGeometryPartitionGui(unittest.TestCase):
         self.part = ObjectsFem.makeGeometryPartition(self.document)
         self.group.Group = [self.imp, self.part]
         self.document.recompute()
+        FemGui.setActiveAnalysis(self.analysis)
+        self.state = FemGui.getAnalysisViewState(self.analysis)
         FreeCADGui.Selection.clearSelection()
+
+    def _enter_edit(self):
+        """Open the edit scope of the partition, which is what puts its input on show."""
+        self.state.beginEdit(self.part, "Geometry")
+
+    def _leave_edit(self):
+        self.state.endEdit(self.part)
 
     def tearDown(self):
         FreeCADGui.Selection.clearSelection()
@@ -222,7 +234,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
         self.assertEqual(_mask_mode(self.group.ViewObject), "Default")
         self.assertEqual(_mask_mode(self.imp.ViewObject), "Hidden")
 
-        view_geometry_base.set_input_preview(self.part, True)
+        self._enter_edit()
         self.assertEqual(
             _mask_mode(self.imp.ViewObject),
             "Default",
@@ -233,16 +245,16 @@ class TestGeometryPartitionGui(unittest.TestCase):
             "Group",
             "the group must drop its own result but keep its children reachable",
         )
-        self.assertTrue(self.group.ViewObject.isChainRenderSuppressed())
+        self.assertEqual(self.group.ViewObject.getChainRole(), "SteppedAside")
 
-        view_geometry_base.set_input_preview(self.part, False)
+        self._leave_edit()
         self.assertEqual(_mask_mode(self.imp.ViewObject), "Hidden")
         self.assertEqual(
             _mask_mode(self.group.ViewObject),
             "Default",
             "the group has to render again once the panel is closed",
         )
-        self.assertFalse(self.group.ViewObject.isChainRenderSuppressed())
+        self.assertEqual(self.group.ViewObject.getChainRole(), "Owner")
 
     def test_the_previewed_input_really_reaches_the_screen(self):
         """
@@ -255,7 +267,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
         source = _drawn_extent(self.group.ViewObject)
         self.assertIsNotNone(source, "the group renders the chain result to begin with")
 
-        view_geometry_base.set_input_preview(self.part, True)
+        self._enter_edit()
         drawn = _drawn_extent(self.group.ViewObject)
         self.assertIsNotNone(
             drawn,
@@ -268,7 +280,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
             "the input geometry has to be pickable, that is what the panel is for",
         )
 
-        view_geometry_base.set_input_preview(self.part, False)
+        self._leave_edit()
         restored = _drawn_extent(self.group.ViewObject)
         self.assertIsNotNone(restored, "closing the panel must bring the result back")
         for got, want in zip(restored, source):
@@ -281,7 +293,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
         configured recomputes to a pass-through. Neither may take the input
         geometry off the screen.
         """
-        view_geometry_base.set_input_preview(self.part, True)
+        self._enter_edit()
         self.document.recompute()
         self.assertEqual(_mask_mode(self.group.ViewObject), "Group")
         self.assertEqual(_mask_mode(self.imp.ViewObject), "Default")
@@ -290,7 +302,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
             "a recompute behind the panel must not empty the viewport",
         )
         self.assertTrue(_pickable_at(self.group.ViewObject, 10, 5))
-        view_geometry_base.set_input_preview(self.part, False)
+        self._leave_edit()
 
     def test_double_click_edit_shows_the_input(self):
         """
@@ -313,17 +325,17 @@ class TestGeometryPartitionGui(unittest.TestCase):
 
     def test_preview_is_idempotent(self):
         for _ in range(2):
-            view_geometry_base.set_input_preview(self.part, True)
+            self._enter_edit()
         self.assertEqual(_mask_mode(self.imp.ViewObject), "Default")
         for _ in range(2):
-            view_geometry_base.set_input_preview(self.part, False)
+            self._leave_edit()
         self.assertEqual(_mask_mode(self.group.ViewObject), "Default")
 
     def test_preview_offers_display_modes_on_the_step(self):
         self.assertEqual(self.imp.ViewObject.listDisplayModes(), [])
-        view_geometry_base.set_input_preview(self.part, True)
+        self._enter_edit()
         self.assertEqual(self.imp.ViewObject.listDisplayModes(), ["Surface", "Wireframe"])
-        view_geometry_base.set_input_preview(self.part, False)
+        self._leave_edit()
         self.assertEqual(self.imp.ViewObject.listDisplayModes(), [])
 
     # -- picking ------------------------------------------------------------
@@ -672,7 +684,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
         With the preview on, because that is when the input step renders and a
         mark can reach the screen at all.
         """
-        view_geometry_base.set_input_preview(self.part, True)
+        self._enter_edit()
         panel = task_geometry_partition._PartitionTaskPanel(self.part)
         try:
             self.assertEqual(
@@ -695,13 +707,13 @@ class TestGeometryPartitionGui(unittest.TestCase):
             )
         finally:
             panel.deactivate()
-            view_geometry_base.set_input_preview(self.part, False)
+            self._leave_edit()
 
     def test_panel_marks_are_gone_once_it_closes(self):
         self.part.Elements = [(self.imp, ("Solid1",))]
         self.document.recompute()
 
-        view_geometry_base.set_input_preview(self.part, True)
+        self._enter_edit()
         try:
             panel = task_geometry_partition._PartitionTaskPanel(self.part)
             self.assertEqual(
@@ -719,7 +731,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
                 self.assertEqual(self.imp.ViewObject.getElementHighlight(role), [])
             self.assertEqual(self._marked_face_count(task_geometry_partition.MARK_TARGETS), 0)
         finally:
-            view_geometry_base.set_input_preview(self.part, False)
+            self._leave_edit()
 
     def test_panel_marks_points_only_for_the_method_that_uses_them(self):
         """
@@ -789,7 +801,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
         self.part.Tool = (datum, "")
         self.document.recompute()
 
-        view_geometry_base.set_input_preview(self.part, True)
+        self._enter_edit()
         panel = task_geometry_partition._PartitionTaskPanel(self.part)
         try:
             preview = _tool_preview_node(self.imp.ViewObject)
@@ -808,7 +820,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
             )
         finally:
             panel.deactivate()
-            view_geometry_base.set_input_preview(self.part, False)
+            self._leave_edit()
 
     def test_tool_preview_is_cleared_when_the_panel_closes(self):
         datum = self.document.addObject("Part::DatumPlane", "Datum")
@@ -821,7 +833,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
         self.part.Tool = (datum, "")
         self.document.recompute()
 
-        view_geometry_base.set_input_preview(self.part, True)
+        self._enter_edit()
         panel = task_geometry_partition._PartitionTaskPanel(self.part)
         preview = _tool_preview_node(self.imp.ViewObject)
         self.assertGreater(_preview_coord_count(preview), 0)
@@ -831,7 +843,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
             0,
             "closing the panel must drop the cutting-tool overlay",
         )
-        view_geometry_base.set_input_preview(self.part, False)
+        self._leave_edit()
 
     def test_tool_preview_outside_the_solid_is_not_pickable(self):
         """
@@ -848,7 +860,7 @@ class TestGeometryPartitionGui(unittest.TestCase):
         self.part.Tool = (datum, "")
         self.document.recompute()
 
-        view_geometry_base.set_input_preview(self.part, True)
+        self._enter_edit()
         panel = task_geometry_partition._PartitionTaskPanel(self.part)
         try:
             # The tool plane sits at x=10 and extends far past the solid in Y.
@@ -863,4 +875,4 @@ class TestGeometryPartitionGui(unittest.TestCase):
             )
         finally:
             panel.deactivate()
-            view_geometry_base.set_input_preview(self.part, False)
+            self._leave_edit()

@@ -71,33 +71,45 @@ def move_step(obj, offset):
     doc.recompute()
 
 
-def set_input_preview(obj, on):
-    """Show the input shape of a chain step while its task panel is open."""
-    base = obj.Base
-    if base is not None and base.ViewObject is not None:
-        base.ViewObject.setChainPreview(on)
+def edit_subject(obj):
+    """
+    The geometry an open panel for obj is picked on, or None.
+
+    Asked of FemGui rather than worked out here, so that the rule - the input
+    for a step that stores element references, the step itself for one that
+    does not - is stated once. Which geometry is drawn for the panel follows
+    from the same answer, and is arranged by the edit scope; nothing here has
+    to switch a render on.
+    """
+    import FemGui
+
+    return FemGui.geometryEditSubject(obj)
 
 
 def set_input_marks(obj, role, elements, color=None):
     """
-    Colour the elements a chain step refers to on the input shape it is picked
-    from, so the panel and the 3D view agree on what is already chosen.
+    Colour the elements a chain step refers to on the geometry it is picked on,
+    so the panel and the 3D view agree on what is already chosen.
+
+    Addressed to the edit subject rather than to Base: the marks belong on
+    whatever is drawn for the panel, and for a step that makes geometry rather
+    than altering it that is the step itself.
 
     The role keeps one panel's marks apart from another's; passing no elements
     drops that role.
     """
-    base = obj.Base
-    if base is not None and base.ViewObject is not None:
-        base.ViewObject.setElementHighlight(role, list(elements), color)
+    subject = edit_subject(obj)
+    if subject is not None and subject.ViewObject is not None:
+        subject.ViewObject.setElementHighlight(role, list(elements), color)
 
 
 def clear_input_marks(obj, *roles):
-    """Drop the given roles from the input shape of a chain step."""
-    base = obj.Base
-    if base is None or base.ViewObject is None:
+    """Drop the given roles from the geometry a chain step is picked on."""
+    subject = edit_subject(obj)
+    if subject is None or subject.ViewObject is None:
         return
     for role in roles:
-        base.ViewObject.clearElementHighlight(role)
+        subject.ViewObject.clearElementHighlight(role)
 
 
 def set_tool_preview(obj, preview):
@@ -107,20 +119,20 @@ def set_tool_preview(obj, preview):
     preview is a PartitionToolPreview, or None to clear. Mode is kept on the
     Python side for later display variants; the VP tessellates the shape only.
     """
-    base = obj.Base
-    if base is None or base.ViewObject is None:
+    subject = edit_subject(obj)
+    if subject is None or subject.ViewObject is None:
         return
     if preview is None:
-        base.ViewObject.clearToolPreview()
+        subject.ViewObject.clearToolPreview()
         return
-    base.ViewObject.setToolPreview(preview.shape, None, TOOL_PREVIEW_TRANSPARENCY)
+    subject.ViewObject.setToolPreview(preview.shape, None, TOOL_PREVIEW_TRANSPARENCY)
 
 
 def clear_tool_preview(obj):
-    """Drop the cutting-tool overlay from the input shape of a chain step."""
-    base = obj.Base
-    if base is not None and base.ViewObject is not None:
-        base.ViewObject.clearToolPreview()
+    """Drop the cutting-tool overlay from the geometry a chain step is picked on."""
+    subject = edit_subject(obj)
+    if subject is not None and subject.ViewObject is not None:
+        subject.ViewObject.clearToolPreview()
 
 
 class VPGeometryGroup(view_base_femobject.VPBaseFemObject):
@@ -215,13 +227,13 @@ class VPGeometryPartition(VPGeometryStep):
     def setEdit(self, vobj, mode=0):
         from femtaskpanels import task_geometry_partition
 
-        set_input_preview(vobj.Object, True)
+        # Nothing to switch on here: opening the panel opens an edit scope, and
+        # the scope is what puts the geometry this step is picked on on show.
         return super().setEdit(
             vobj, mode, task_geometry_partition._PartitionTaskPanel, hide_mesh=False
         )
 
     def unsetEdit(self, vobj, mode=0):
-        set_input_preview(vobj.Object, False)
         clear_tool_preview(vobj.Object)
         return super().unsetEdit(vobj, mode)
 

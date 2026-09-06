@@ -205,6 +205,30 @@ private:
     /// Ask the next execute() for work, and make sure a recompute reaches it.
     void requestRebuild(bool withTopology);
 
+    /**
+     * Empty the mesh of every child, leaving the mesher and its settings.
+     *
+     * What goes is the mesh data alone: element sizes, refinements, algorithms
+     * and the components a child claims are the user's work and survive, so
+     * meshing again is one press rather than a setup done twice.
+     */
+    void clearChildMeshes();
+
+    /**
+     * Revision of the geometry the children were meshed against.
+     *
+     * Not persisted, and not to be: the counter it copies lives in memory and
+     * starts afresh with every session, so a number read back from a file
+     * would disagree with it on every open and throw away a mesh that is
+     * perfectly good. A restored document is taken to hold a mesh made for the
+     * geometry saved beside it, which is the only reading that makes sense.
+     */
+    std::size_t m_meshedRevision {0};
+    bool m_meshedRevisionKnown {false};
+    /// True while clearChildMeshes() runs, so the changes it makes are not
+    /// mistaken for a child that has been meshed again.
+    bool m_clearingChildMeshes {false};
+
     bool m_meshRebuildRequested {true};
     bool m_topologyRebuildRequested {true};
     std::size_t m_mergeRevision {0};

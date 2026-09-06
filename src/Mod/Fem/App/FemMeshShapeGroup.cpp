@@ -194,6 +194,13 @@ void FemMeshShapeGroup::reconnectChildSignals()
 
 void FemMeshShapeGroup::slotChildChanged(const App::DocumentObject& obj, const App::Property& prop)
 {
+    if (m_clearingChildMeshes) {
+        // Emptying them is our own doing, and the rebuild it calls for was
+        // asked for there. Answering here as though a child had been meshed
+        // again would enforce a recompute from inside the one running.
+        return;
+    }
+
     auto* meshObj = Base::freecad_cast<FemMeshObject*>(&obj);
     if (!meshObj) {
         return;
@@ -491,8 +498,53 @@ std::string FemMeshShapeGroup::validateComponents(bool* hasOverlap) const
     return msg.str();
 }
 
+void FemMeshShapeGroup::clearChildMeshes()
+{
+    Base::StateLocker lock(m_clearingChildMeshes, true);
+
+    bool cleared = false;
+    for (auto* obj : Group.getValues()) {
+        auto* meshObj = Base::freecad_cast<FemMeshObject*>(obj);
+        if (!meshObj || meshCounts(meshObj->FemMesh.getValue()).first == 0) {
+            continue;
+        }
+        meshObj->FemMesh.setValue(Fem::FemMesh());
+        cleared = true;
+    }
+
+    if (cleared) {
+        // The merge and everything read off it described the mesh that is now
+        // gone, so both start over - onto nothing, until the user meshes again.
+        m_meshRebuildRequested = true;
+        m_topologyRebuildRequested = true;
+    }
+}
+
 App::DocumentObjectExecReturn* FemMeshShapeGroup::execute()
 {
+    // A mesh is made for one shape and fits no other, and one kept past a
+    // change to the geometry is worse than none: it looks like a mesh of what
+    // is on screen and is not one. The revision counts rebuilds of the
+    // geometry's components, which is what its own execute() does when a new
+    // Shape was written, so a difference here says the children were meshed
+    // against a geometry that no longer exists. Reading it is O(1) where
+    // comparing the shapes would cost about as much as meshing them, and would
+    // still answer the wrong question: a shape can come back geometrically
+    // identical with its faces renumbered, which leaves the mesh fitting and
+    // its groups pointing at the wrong places.
+    //
+    // Dependencies recompute first and everything in the geometry's InList is
+    // then forced to follow, so by the time this runs the revision is already
+    // the one belonging to the shape now published.
+    if (auto* geometry = Base::freecad_cast<FemGeometry*>(Shape.getValue())) {
+        const std::size_t revision = geometry->revision();
+        if (m_meshedRevisionKnown && revision != m_meshedRevision) {
+            clearChildMeshes();
+        }
+        m_meshedRevision = revision;
+        m_meshedRevisionKnown = true;
+    }
+
     // The Group link makes us a dependent of every child, so FreeCAD sends a
     // recompute for anything at all that happens to one - a mesher setting, a
     // label, a component assignment. Almost none of that changes the merge, and

@@ -2523,6 +2523,39 @@ class TestExecuteDrivenOutputs(unittest.TestCase):
 
     # -- what asks for nothing ---------------------------------------------
 
+    def test_a_geometry_change_clears_the_meshes(self):
+        """
+        A mesh is made for one shape and fits no other, so a geometry that has
+        been rebuilt takes the meshes made against it with it. The mesher stays:
+        its settings are the user's work and meshing again is one press.
+        """
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        geom.Shape = Part.makeBox(10, 10, 10)
+        group = ObjectsFem.makeMeshShapeGroup(self.document, "Mesh", geometry=geom)
+        child = self.document.addObject("Fem::FemMeshShapeBaseObjectPython", "MeshA")
+        group.Group = [child]
+        child.FemMesh = _make_tet_mesh()[0]
+        self.document.recompute()
+        self.assertGreater(child.FemMesh.NodeCount, 0)
+
+        # A recompute that leaves the geometry alone must leave the mesh alone.
+        self.document.recompute()
+        self.assertGreater(
+            child.FemMesh.NodeCount,
+            0,
+            "only a rebuilt geometry invalidates a mesh, not any recompute",
+        )
+
+        geom.Shape = Part.makeBox(20, 10, 10)
+        self.document.recompute()
+        self.assertEqual(
+            child.FemMesh.NodeCount, 0, "the mesh of a geometry that changed has to go"
+        )
+        self.assertEqual(group.FemMesh.NodeCount, 0, "and so does the merge of it")
+        self.assertIsNotNone(
+            self.document.getObject("MeshA"), "the mesher itself is not thrown away"
+        )
+
     def test_mesher_parameter_change_merges_nothing(self):
         """
         A mesher setting reaches the group as a recompute and stops there.

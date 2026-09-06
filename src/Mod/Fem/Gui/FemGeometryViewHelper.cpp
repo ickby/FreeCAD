@@ -30,8 +30,12 @@
 # include <Inventor/details/SoLineDetail.h>
 # include <Inventor/details/SoPointDetail.h>
 # include <Inventor/nodes/SoCoordinate3.h>
+# include <Inventor/nodes/SoDepthBuffer.h>
 # include <Inventor/nodes/SoDrawStyle.h>
 # include <Inventor/nodes/SoIndexedFaceSet.h>
+# include <Inventor/nodes/SoIndexedLineSet.h>
+# include <Inventor/nodes/SoIndexedPointSet.h>
+# include <Inventor/nodes/SoLightModel.h>
 # include <Inventor/nodes/SoMaterial.h>
 # include <Inventor/nodes/SoNormal.h>
 # include <Inventor/nodes/SoPickStyle.h>
@@ -208,6 +212,37 @@ FemGeometryViewHelper::FemGeometryViewHelper()
     m_overlayfaces = new SoIndexedFaceSet();
     m_overlayfaces->ref();
 
+    m_highlightoverlay = new SoSeparator();
+    m_highlightoverlay->ref();
+    m_highlightoverlaydepth = new SoDepthBuffer();
+    m_highlightoverlaydepth->ref();
+    // The marks sit exactly on the edges they mark, so the depth test has to let
+    // an equal value through or the two would fight over the same pixels. Depth
+    // stays unwritten and the test is not switched off: a mark is a lasting
+    // thing and must not shine through the solid it is on the far side of.
+    m_highlightoverlaydepth->function.setValue(SoDepthBuffer::LEQUAL);
+    m_highlightoverlaydepth->write.setValue(FALSE);
+    m_highlightoverlaylinebinding = new SoMaterialBinding();
+    m_highlightoverlaylinebinding->ref();
+    m_highlightoverlaylinebinding->value = SoMaterialBinding::PER_FACE;
+    m_highlightoverlaylinematerial = new SoMaterial();
+    m_highlightoverlaylinematerial->ref();
+    m_highlightoverlaypointbinding = new SoMaterialBinding();
+    m_highlightoverlaypointbinding->ref();
+    m_highlightoverlaypointbinding->value = SoMaterialBinding::PER_VERTEX;
+    m_highlightoverlaypointmaterial = new SoMaterial();
+    m_highlightoverlaypointmaterial->ref();
+    m_highlightoverlaystyle = new SoDrawStyle();
+    m_highlightoverlaystyle->ref();
+    // Wider and larger than the plain ones, so a mark reads as a mark even where
+    // it lies on top of the edge it marks.
+    m_highlightoverlaystyle->lineWidth.setValue(4.0f);
+    m_highlightoverlaystyle->pointSize.setValue(9.0f);
+    m_highlightoverlaylines = new SoIndexedLineSet();
+    m_highlightoverlaylines->ref();
+    m_highlightoverlaypoints = new SoIndexedPointSet();
+    m_highlightoverlaypoints->ref();
+
     // The overlay fields of SoBrepFaceSet default to a red highlight, which is
     // not the colour the user picked for one.
     m_faces->highlightColor = preferenceColor("HighlightColor", SbColor(1.0f, 0.6f, 0.0f));
@@ -237,6 +272,15 @@ FemGeometryViewHelper::~FemGeometryViewHelper()
     m_overlaynormalBinding->unref();
     m_overlaynormals->unref();
     m_overlayfaces->unref();
+    m_highlightoverlay->unref();
+    m_highlightoverlaydepth->unref();
+    m_highlightoverlaylinebinding->unref();
+    m_highlightoverlaylinematerial->unref();
+    m_highlightoverlaypointbinding->unref();
+    m_highlightoverlaypointmaterial->unref();
+    m_highlightoverlaystyle->unref();
+    m_highlightoverlaylines->unref();
+    m_highlightoverlaypoints->unref();
 }
 
 void FemGeometryViewHelper::setSelectionPrefix(const std::string& prefix)
@@ -272,6 +316,26 @@ void FemGeometryViewHelper::setElementHighlight(
     }
 
     updateColors();
+    updateElementHighlight();
+}
+
+const Base::Color* FemGeometryViewHelper::idHighlightColor(vtkIdType id) const
+{
+    if (m_highlights.empty()) {
+        return nullptr;
+    }
+    // A mark on a toplevel covers the faces below it, and m_id_elements is what
+    // ties a rendered face back to the toplevels it belongs to.
+    auto it = m_id_elements.find(id);
+    if (it == m_id_elements.end()) {
+        return nullptr;
+    }
+    for (const auto& owner : it->second) {
+        if (const auto* color = elementHighlightColor(owner)) {
+            return color;
+        }
+    }
+    return nullptr;
 }
 
 const Base::Color* FemGeometryViewHelper::highlightColorFor(
@@ -282,36 +346,24 @@ const Base::Color* FemGeometryViewHelper::highlightColorFor(
     if (m_highlights.empty()) {
         return nullptr;
     }
-    auto match = [this, id](const std::string& name) -> const Base::Color* {
-        if (name.empty()) {
-            return nullptr;
-        }
-        // Marks name elements the way a reference does, relative to the instance
-        // they were picked on.
-        const std::string named = m_selectionPrefix + name;
-        // Backwards: of two roles naming the same element, the one set last wins.
-        for (auto it = m_highlights.rbegin(); it != m_highlights.rend(); ++it) {
-            if (it->elements.contains(named)) {
-                return &it->color;
-            }
-            // A mark on a solid has to reach the faces it is built from.
-            for (const auto& mark : it->elements) {
-                if (mark.starts_with(m_selectionPrefix)
-                    && idHasElement(id, mark.substr(m_selectionPrefix.size()))) {
-                    return &it->color;
-                }
-            }
-        }
-        return nullptr;
-    };
-    if (const Base::Color* color = match(element)) {
-        return color;
-    }
+    // What is being coloured is a face, and a mark it carries in its own right
+    // wins: the caller names the toplevel the classification keys on, and a
+    // mark on that toplevel is the weaker claim of the two. Without this order
+    // a face marked outright is swallowed by a mark on the solid it belongs to.
     const std::string face = elementForShapeId(id, "Face");
-    if (face != element) {
-        return match(face);
+    if (!face.empty()) {
+        if (const auto* color = elementHighlightColor(face)) {
+            return color;
+        }
     }
-    return nullptr;
+    if (!element.empty() && element != face) {
+        if (const auto* color = elementHighlightColor(element)) {
+            return color;
+        }
+    }
+    // A mark on any toplevel this face belongs to, which is how a marked solid
+    // reaches the faces it is built from.
+    return idHighlightColor(id);
 }
 
 void FemGeometryViewHelper::setSuppressedComponents(const std::vector<long>& indices)
@@ -356,6 +408,30 @@ void FemGeometryViewHelper::attachToSeparator(SoSeparator* root)
     ghost->addChild(m_overlaynormalBinding);
     ghost->addChild(m_overlaynormals);
     ghost->addChild(m_overlayfaces);
+
+    // Marked edges and vertices, drawn last so they land over the plain ones.
+    // The coordinates are the same node the normal render uses, so a mark costs
+    // an index list and nothing else. Unpickable, because a mark must not stand
+    // between the user and the element underneath it.
+    auto* highlightPick = new SoPickStyle();
+    highlightPick->style.setValue(SoPickStyle::Style::UNPICKABLE);
+    m_highlightoverlay->addChild(highlightPick);
+    // Unlit, so the mark comes out in the colour that was asked for. The normals
+    // in scope belong to the faces and would shade it into something else.
+    auto* highlightLight = new SoLightModel();
+    highlightLight->model.setValue(SoLightModel::BASE_COLOR);
+    m_highlightoverlay->addChild(highlightLight);
+    m_highlightoverlay->addChild(m_highlightoverlaydepth);
+    m_highlightoverlay->addChild(m_highlightoverlaystyle);
+    m_highlightoverlay->addChild(m_coordinates);
+    m_highlightoverlay->addChild(m_highlightoverlaylinebinding);
+    m_highlightoverlay->addChild(m_highlightoverlaylinematerial);
+    m_highlightoverlay->addChild(m_highlightoverlaylines);
+    m_highlightoverlay->addChild(m_highlightoverlaypointbinding);
+    m_highlightoverlay->addChild(m_highlightoverlaypointmaterial);
+    m_highlightoverlay->addChild(m_highlightoverlaypoints);
+    root->addChild(m_highlightoverlay);
+
     m_attached = true;
     m_attachedSeparator = root;
 }
@@ -658,6 +734,125 @@ void FemGeometryViewHelper::applySelectionHighlight()
     }
     appendPartIndices(volumePreselect, m_faces->highlightPartIndex);
     m_faces->touch();
+
+    // The marks yield to the selection, so they follow it. This is also the one
+    // place every rebuild passes through, by way of resetSelectionVisuals.
+    updateElementHighlight();
+}
+
+std::set<std::string> FemGeometryViewHelper::elementHighlight(const std::string& role) const
+{
+    for (const auto& entry : m_highlights) {
+        if (entry.role == role) {
+            return entry.elements;
+        }
+    }
+    return {};
+}
+
+const Base::Color* FemGeometryViewHelper::elementHighlightColor(const std::string& element) const
+{
+    if (element.empty() || m_highlights.empty()) {
+        return nullptr;
+    }
+    // Marks name elements the way a reference does, relative to the instance
+    // they were picked on.
+    const std::string named = m_selectionPrefix + element;
+    // Backwards: of two roles naming the same element, the one set last wins.
+    for (auto it = m_highlights.rbegin(); it != m_highlights.rend(); ++it) {
+        if (it->elements.contains(named)) {
+            return &it->color;
+        }
+    }
+    return nullptr;
+}
+
+void FemGeometryViewHelper::updateElementHighlight()
+{
+    m_highlightoverlaylines->coordIndex.setNum(0);
+    m_highlightoverlaypoints->coordIndex.setNum(0);
+    if (m_highlights.empty()) {
+        return;
+    }
+
+    // Only elements named outright, never one inherited from a toplevel: a mark
+    // on a solid reads from its faces, and drawing its edges and vertices too
+    // would swamp the ones marked in their own right.
+    //
+    // A marked element that is also selected or hovered keeps the feedback of
+    // the selection: drawing the mark over it would swallow the very colour that
+    // tells the user their click landed. Faces need no such rule, there
+    // SoBrepFaceSet paints the selection over the material by itself.
+    const auto markedColor = [this](const std::string& element) -> const Base::Color* {
+        if (element.empty() || m_selected.count(element) > 0
+            || m_preselected.count(element) > 0) {
+            return nullptr;
+        }
+        return elementHighlightColor(element);
+    };
+
+    std::vector<int32_t> indices;
+    std::vector<Base::Color> colors;
+
+    // Edges: every polyline of m_lines is one line cell, in the order of
+    // m_lineids, so walking the runs pairs an index range with its shape id.
+    const int32_t* source = m_lines->coordIndex.getValues(0);
+    const int sourceCount = m_lines->coordIndex.getNum();
+    std::size_t polyline = 0;
+    int runStart = 0;
+    for (int i = 0; i < sourceCount; ++i) {
+        if (source[i] >= 0) {
+            continue;
+        }
+        if (polyline < m_lineids.size()) {
+            const auto shapeId = m_lineids[polyline];
+            if (const auto* color = markedColor(elementForShapeId(shapeId, "Edge"))) {
+                indices.insert(indices.end(), source + runStart, source + i);
+                indices.push_back(-1);
+                colors.push_back(*color);
+            }
+        }
+        ++polyline;
+        runStart = i + 1;
+    }
+
+    if (!indices.empty()) {
+        m_highlightoverlaylines->coordIndex.setNum(static_cast<int>(indices.size()));
+        int32_t* target = m_highlightoverlaylines->coordIndex.startEditing();
+        std::copy(indices.begin(), indices.end(), target);
+        m_highlightoverlaylines->coordIndex.finishEditing();
+
+        m_highlightoverlaylinematerial->diffuseColor.setNum(static_cast<int>(colors.size()));
+        for (std::size_t i = 0; i < colors.size(); ++i) {
+            m_highlightoverlaylinematerial->diffuseColor
+                .set1Value(static_cast<int>(i), colors[i].r, colors[i].g, colors[i].b);
+        }
+    }
+
+    // Vertices: SoBrepPointSet draws the leading coordinates in the order of
+    // m_pointids, the same mapping elementFromDetail resolves a picked point through.
+    indices.clear();
+    colors.clear();
+    for (std::size_t i = 0; i < m_pointids.size(); ++i) {
+        const auto shapeId = m_pointids[i];
+        if (const auto* color = markedColor(elementForShapeId(shapeId, "Vertex"))) {
+            indices.push_back(static_cast<int32_t>(i));
+            colors.push_back(*color);
+        }
+    }
+
+    if (!indices.empty()) {
+        m_highlightoverlaypoints->coordIndex.setNum(static_cast<int>(indices.size()));
+        int32_t* target = m_highlightoverlaypoints->coordIndex.startEditing();
+        std::copy(indices.begin(), indices.end(), target);
+        m_highlightoverlaypoints->coordIndex.finishEditing();
+
+        m_highlightoverlaypointmaterial->diffuseColor.setNum(static_cast<int>(colors.size()));
+        for (std::size_t i = 0; i < colors.size(); ++i) {
+            m_highlightoverlaypointmaterial->diffuseColor
+                .set1Value(static_cast<int>(i), colors[i].r, colors[i].g, colors[i].b);
+        }
+    }
 }
 
 void FemGeometryViewHelper::resetSelectionVisuals()
@@ -1325,7 +1520,8 @@ void FemGeometryViewHelper::update3D()
             m_line_id_to_index.emplace(shape_id, static_cast<int>(m_lineids.size()));
             m_lineids.push_back(shape_id);
         }
-        else if (mesh_type == IVtk_MeshType::MT_FreeVertex) {
+        else if (mesh_type == IVtk_MeshType::MT_FreeVertex
+                 || mesh_type == IVtk_MeshType::MT_SharedVertex) {
             m_point_id_to_index.emplace(shape_id, static_cast<int>(m_pointids.size()));
             m_pointids.push_back(shape_id);
         }

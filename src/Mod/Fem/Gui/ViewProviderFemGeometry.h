@@ -22,53 +22,26 @@
 
 #pragma once
 
-#include <map>
 #include <set>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include <App/PropertyStandard.h>
 #include <Gui/ViewProviderDocumentObject.h>
 #include <Gui/ViewProviderFeaturePython.h>
 
-#include <IVtkOCC_Shape.hxx>
-#include <IVtkTools_ShapeDataSource.hxx>
-#include <IVtkTools_SubPolyDataFilter.hxx>
-#include <vtkCleanPolyData.h>
-#include <vtkClipClosedSurface.h>
-#include <vtkExtractCellsByType.h>
-#include <vtkGeometryFilter.h>
-#include <vtkPolyDataNormals.h>
-#include <vtkTableBasedClipDataSet.h>
-
-#include <Inventor/fields/SoSFColor.h>
-
 #include <Base/Color.h>
 #include <Mod/Part/App/TopoShape.h>
 
 #include "AnalysisViewState.h"
+#include "FemGeometryViewHelper.h"
 #include "FemViewTypes.h"
 
-class SoCoordinate3;
 class SoSeparator;
-class SoNormalBinding;
-class SoNormal;
-class SoMaterial;
-class SoMaterialBinding;
-class SoIndexedFaceSet;
-class SoIndexedLineSet;
-class SoIndexedPointSet;
-class SoShapeHints;
-class SoDrawStyle;
-class SoDepthBuffer;
 class SoSwitch;
 
 namespace PartGui
 {
-class SoBrepPointSet;
-class SoBrepEdgeSet;
-class SoBrepFaceSet;
 class SoPreviewShape;
 }
 
@@ -78,9 +51,14 @@ namespace FemGui
 /**
  * View provider for Fem::FemGeometry.
  *
- * Display filter, dimension mode, wireframe and clipping come from
- * AnalysisViewState (not owned as properties). Geometry overlay is rendered
- * only here.
+ * Draws nothing itself. A FemGeometryViewHelper renders the shape, here as an
+ * instance with no path prefix and the identity frame - what a placed import
+ * is a generalisation of - so the geometry of an analysis and the geometry of
+ * an import placed in one are drawn by the same code.
+ *
+ * What is left here is what only a view provider can do: the display masks,
+ * the Python object, the picking hooks the framework calls, and the chain of
+ * build steps, which is about the geometry's history rather than its picture.
  */
 class FemGuiExport ViewProviderFemGeometry: public Gui::ViewProviderDocumentObject
 {
@@ -153,7 +131,7 @@ public:
     void setPreselectPromotion(bool on);
     bool isPreselectPromotion() const
     {
-        return m_preselectPromotion;
+        return m_geometry.isPreselectPromotion();
     }
 
     /**
@@ -204,38 +182,24 @@ public:
     PyObject* getPyObject() override;
 
 protected:
-    void updateColors();
-    void updateVTK();
-    /**
-     * Clip m_visdata against the active planes and cap the cut open solids.
-     *
-     * Runs on every view state change, so a failure must leave the geometry
-     * usable: on error the unclipped data of this step survives.
-     *
-     * @param clipper Active clip planes of the view state.
-     * @param passthrough_ids Shape ids that made it through the visibility
-     *        filter; only those solids get a cap face.
-     */
-    void applyClipPlanes(
-        const std::map<std::string, ClippingPlane>& clipper,
-        DimensionMode dimMode,
-        const IVtk_ShapeIdList& passthrough_ids
-    );
-    void update3D();
-    void updateGeometryOverlay();
-    void applySelectionHighlight();
-    /**
-     * Drop selection state that indexes into the part table and rebuild it.
-     * Every mesh rebuild renumbers the parts, so both the Coin selection
-     * contexts and our overlay fields would otherwise point at foreign faces.
-     */
-    void resetSelectionVisuals();
     /** Map a Selection message onto a shape element of this geometry, or empty. */
     std::string elementFromSelection(
         const char* docName,
         const char* objName,
         const char* subName
     ) const;
+
+    /**
+     * The analysis this geometry is drawn under, or null.
+     *
+     * Preferring the analysis that owns it in the tree over the active one:
+     * relying on ActiveAnalysisObserver alone misses the case where the view
+     * provider attaches before the analysis is marked active.
+     */
+    Fem::FemAnalysis* owningAnalysis() const;
+
+    /// Hand the current shape to the helper, which is what redraws it.
+    void pushShapeToHelper();
 
     void ensureViewStateConnection();
     void onViewStateChanged();
@@ -246,132 +210,20 @@ protected:
     /** Refresh the roles of the steps below this group. */
     void refreshChainSteps();
 
-    /**
-     * Rebuild the edge and vertex marks.
-     *
-     * SoBrepEdgeSet and SoBrepPointSet take one colour for the whole set, so
-     * marked edges and vertices cannot be recoloured in place the way faces
-     * can. They are drawn again on top instead, from the same coordinates, in
-     * the colour of their mark. Only elements named outright end up here, never
-     * ones inherited from a marked toplevel.
-     */
-    void updateElementHighlight();
-    /** Element name of a vtk shape id, @a fallbackPrefix if its type is odd. */
-    std::string elementForShapeId(vtkIdType id, const char* fallbackPrefix) const;
-    /** Colour marking any element the shape with this vtk id belongs to. */
-    const Base::Color* idHighlightColor(vtkIdType id) const;
-    /**
-     * Colour marking a rendered face, by its own name or by a toplevel it
-     * belongs to, so a mark on a solid reaches the faces under it.
-     */
-    const Base::Color* highlightColorForPart(const std::string& element, vtkIdType id) const;
+    /// Everything this object draws.
+    FemGeometryViewHelper m_geometry;
 
-    /** Record that the shape with this vtk id belongs to a toplevel element. */
-    void addIdElement(vtkIdType id, const std::string& element);
-    /** Whether the shape with this vtk id belongs to that toplevel element. */
-    bool idHasElement(vtkIdType id, const std::string& element) const;
-    /** Whether the shape with this vtk id belongs to any of these elements. */
-    bool idHasAnyElement(vtkIdType id, const std::set<std::string>& elements) const;
-    /** Toplevel element used to colour the shape with this vtk id, or empty. */
-    std::string idElementForColor(vtkIdType id) const;
-    /** Volume toplevels that own this element, or empty. */
-    std::vector<std::string> volumeOwnersOf(const std::string& element) const;
-
-    // vtk elements
-    vtkSmartPointer<vtkPolyData> m_visdata;
-    vtkSmartPointer<vtkPolyData> m_visgeometryoverlay;
-
-    IVtkOCC_Shape::Handle m_shape;
-    vtkSmartPointer<IVtkTools_ShapeDataSource> m_vtksource;
-    vtkSmartPointer<IVtkTools_SubPolyDataFilter> m_vtkshapefilter;
-    // Surface clip: TableBasedClip → GeometryFilter. The clipper keeps the
-    // Shape_ID/mesh-type cell arrays attached to the surviving cells.
-    // Solid interiors: ShapeDataSource → CleanPolyData → ClipClosedSurface.
-    vtkSmartPointer<vtkTableBasedClipDataSet> m_vtkclipfilter;
-    vtkSmartPointer<vtkGeometryFilter> m_vtkclipgeometryfilter;
-    vtkSmartPointer<vtkCleanPolyData> m_vtkclipcleaner;
-    vtkSmartPointer<vtkClipClosedSurface> m_vtkclipsurfacefilter;
-    vtkSmartPointer<IVtkTools_ShapeDataSource> m_vtkclipshapesource;
-    vtkSmartPointer<vtkPolyDataNormals> m_vtkclipnormals;
-
-    vtkSmartPointer<vtkExtractCellsByType> m_vtkgeometryoverlayextract;
-
-    // Idx in vector corresponds to FaceIndex / LineIndex / PointIndex of the BrepSets
-    std::vector<vtkIdType> m_faceids;
-    std::vector<vtkIdType> m_lineids;
-    std::vector<vtkIdType> m_pointids;
-    // One VTK shape id per SoBrepFaceSet part (BREP face); materials use PER_PART
-    std::vector<vtkIdType> m_part_shape_ids;
-
-    // Prebuilt maps for getDetail / selection (avoids linear scans on preselect)
-    std::unordered_map<vtkIdType, int> m_face_id_to_part_index;
-    std::unordered_map<vtkIdType, int> m_line_id_to_index;
-    std::unordered_map<vtkIdType, int> m_point_id_to_index;
-
-    // A face can belong to several toplevel elements: an embedded import
-    // general-fuses overlapping solids, so the interface face is shared by both
-    // neighbours. Every owner is recorded; the first one is used for colouring.
-    std::map<vtkIdType, std::vector<std::string>> m_id_elements;
-
-    std::set<std::string> m_selected;
-    std::set<std::string> m_preselected;
-    bool m_preselectPromotion {false};
-
-    // Marked elements per role, in the order the roles were first set, so a
-    // later role wins where two of them name the same element.
-    struct ElementHighlight
-    {
-        std::string role;
-        std::set<std::string> elements;
-        Base::Color color;
-    };
-    std::vector<ElementHighlight> m_elementHighlights;
-
-    // coin display nodes
+    // coin display nodes owned here rather than by the helper: the masks the
+    // stage switches between, and the tool preview, which is an affordance of
+    // an open panel rather than a picture of the geometry.
     SoSeparator* m_separator {nullptr};
     SoSeparator* m_hidden {nullptr};
-    SoMaterialBinding* m_facematerialbinding {nullptr};
-    SoMaterialBinding* m_pointlinematerialbinding {nullptr};
-    SoMaterial* m_facematerial {nullptr};
-    SoMaterial* m_pointlinematerial {nullptr};
-    SoShapeHints* m_shapehints {nullptr};
-    SoDrawStyle* m_pointlinestyle {nullptr};
-    SoCoordinate3* m_coordinates {nullptr};
-    SoNormalBinding* m_normalBinding {nullptr};
-    SoNormal* m_normals {nullptr};
-    PartGui::SoBrepPointSet* m_markers {nullptr};
-    PartGui::SoBrepEdgeSet* m_lines {nullptr};
-    PartGui::SoBrepFaceSet* m_faces {nullptr};
-
-    // geometry overlay (owned only by this view provider)
-    SoMaterial* m_geometryoverlaymaterial {nullptr};
-    SoMaterialBinding* m_geometryoverlaymaterialbinding {nullptr};
-    SoCoordinate3* m_geometryoverlaycoordinates {nullptr};
-    SoNormalBinding* m_geometryoverlaynormalBinding {nullptr};
-    SoNormal* m_geometryoverlaynormals {nullptr};
-    SoIndexedFaceSet* m_geometryoverlay {nullptr};
-
-    // Marked edges and vertices, drawn over the plain ones from the same
-    // coordinates. Own separator, so the depth and style settings it needs stay
-    // out of the way of the normal render.
-    SoSeparator* m_highlightoverlay {nullptr};
-    SoDepthBuffer* m_highlightoverlaydepth {nullptr};
-    SoMaterialBinding* m_highlightoverlaylinebinding {nullptr};
-    SoMaterial* m_highlightoverlaylinematerial {nullptr};
-    SoMaterialBinding* m_highlightoverlaypointbinding {nullptr};
-    SoMaterial* m_highlightoverlaypointmaterial {nullptr};
-    SoDrawStyle* m_highlightoverlaystyle {nullptr};
-    SoIndexedLineSet* m_highlightoverlaylines {nullptr};
-    SoIndexedPointSet* m_highlightoverlaypoints {nullptr};
 
     // Cutting-tool preview while a chain-step panel is open (e.g. partition).
     // Switched out while no tool is set: an empty preview still holds a point
     // at the origin, and a bounding box drawn around that reaches back to it.
     SoSwitch* m_toolPreviewSwitch {nullptr};
     PartGui::SoPreviewShape* m_toolPreview {nullptr};
-
-    SoSFColor m_colorhighlight;
-    SoSFColor m_colorselection;
 
     ViewStateBinding m_viewStateBinding;
 
@@ -383,15 +235,6 @@ protected:
     std::string m_previewSuppressedGroup;
     // Chain members of the last refresh, to hand their visual back when they go
     std::set<std::string> m_chainMembers;
-
-    // Cached view-state snapshot so colour-mode switches skip VTK rebuild
-    bool m_viewStateCacheValid {false};
-    DimensionMode m_cachedDimMode {DimensionMode::Highest};
-    bool m_cachedWireframe {false};
-    ColorMode m_cachedColorMode {ColorMode::Subelement};
-    ActiveStage m_cachedStage {ActiveStage::Geometry};
-    std::set<std::string> m_cachedHidden;
-    std::map<std::string, ClippingPlane> m_cachedClips;
 };
 
 using ViewProviderFemGeometryPython = Gui::ViewProviderFeaturePythonT<ViewProviderFemGeometry>;

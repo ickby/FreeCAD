@@ -55,11 +55,16 @@ class Z88Tools(ObjectTools):
     def __init__(self, obj):
         super().__init__(obj)
         self.model_file = ""
+        # The mesh this run solves, kept for as long as the run lasts. Once the
+        # results are read it is the only thing that can still say what they
+        # were computed from.
+        self.mesh = None
 
     def prepare(self):
         self._clear_results()
 
         mesh_obj = membertools.get_mesh_to_solve(self.analysis)
+        self.mesh = mesh_obj
         meshdatagetter = meshsetsgetter.MeshSetsGetter(
             self.analysis,
             self.obj,
@@ -173,9 +178,18 @@ class Z88Tools(ObjectTools):
 
         grid = self.load_mesh()
         self.load_result(grid)
-        if self.obj.DisplaceMesh:
-            self.generate_disp_mesh(grid)
         pipeline.Data = grid
+
+        # Before the mesh is deformed: a result cell is matched to the cell it
+        # was meshed from by where it sits, and a mesh moved by its own
+        # displacement field no longer sits where it was meshed.
+        if self.mesh:
+            pipeline.attribute(self.mesh, self.analysis)
+
+        if self.obj.DisplaceMesh:
+            displaced = pipeline.Data
+            self.generate_disp_mesh(displaced)
+            pipeline.Data = displaced
 
         if create and FreeCAD.GuiUp:
             # default display mode

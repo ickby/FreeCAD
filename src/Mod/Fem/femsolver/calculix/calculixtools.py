@@ -55,12 +55,17 @@ class CalculiXTools(ObjectTools):
     def __init__(self, obj):
         super().__init__(obj)
         self.model_file = ""
+        # The mesh this run solves, kept for as long as the run lasts. Once the
+        # results are read it is the only thing that can still say what they
+        # were computed from.
+        self.mesh = None
 
     def prepare(self):
 
         self._clear_results()
 
         mesh_obj = membertools.get_mesh_to_solve(self.analysis)
+        self.mesh = mesh_obj
         message = check_member_for_solver_calculix(
             self.analysis,
             self.obj,
@@ -195,9 +200,22 @@ class CalculiXTools(ObjectTools):
                 reader.Update()
                 multi_block = reader.GetOutput()
                 multi_block = self._generate_derived_result(multi_block)
-                if self.obj.DisplaceMesh:
-                    multi_block = self._generate_disp_mesh(multi_block)
                 pipeline.Data = multi_block
+
+                # Which entity, component and material every cell belongs to,
+                # resolved here because here is the last place that knows: the
+                # mesh that was solved is still in hand and the materials are
+                # still the ones it was solved with.
+                #
+                # Before the mesh is deformed, and that order is not incidental.
+                # A result cell is matched to the cell it was meshed from by
+                # where it sits, and a mesh moved by its own displacement field
+                # no longer sits where it was meshed.
+                if self.mesh:
+                    pipeline.attribute(self.mesh, self.analysis)
+
+                if self.obj.DisplaceMesh:
+                    pipeline.Data = self._generate_disp_mesh(pipeline.Data)
                 break
 
         pipeline.renameArrays(self.frd_var_conversion(self.obj.AnalysisType))

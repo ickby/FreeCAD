@@ -503,6 +503,20 @@ void ViewProviderFemPostObject::updateVtk()
     {
         // The surface / wireframe / outline extraction that turns the filter
         // output into the polygons Coin is handed.
+        //
+        // Where the drawn thing is a surface with its edges over it, the two
+        // halves are run one at a time first, so the report says which of them
+        // the time went on. The update that follows then finds both done.
+        if (m_currentAlgorithm == m_surfaceEdges) {
+            {
+                FEM_PERF_SCOPE("post.render.vtk.surface");
+                m_surface->Update();
+            }
+            {
+                FEM_PERF_SCOPE("post.render.vtk.edges");
+                m_wireframeSurface->Update();
+            }
+        }
         FEM_PERF_SCOPE("post.render.vtk");
         m_currentAlgorithm->Update();
     }

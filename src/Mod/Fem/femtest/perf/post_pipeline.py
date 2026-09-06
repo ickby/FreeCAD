@@ -415,6 +415,29 @@ def run(nodes_per_axis=NODES_PER_AXIS, document=None, keep=True):
             )
         )
 
+    # ---- drawing, through one renderer and then the other -------------
+    #
+    # The same hide, with the result drawn the way the mesh view draws one: a
+    # surface with the element edges over it. Both renderers are marked stage by
+    # stage, so what each spends extracting the geometry and writing it into
+    # Coin can be laid side by side.
+    #
+    # Hidden and shown again, because that is what the mesh row does, and one
+    # redraw against two would not be a comparison. Measured here, before the
+    # other filters exist, because every filter of a pipeline executes when one
+    # of them does and three of them would be three times the work.
+    if hidden is not None:
+        filter_obj.ViewObject.DisplayMode = "Surface with Edges"
+        set_elements([])
+        document.recompute()
+
+        def hide_and_show():
+            set_elements(keep_names)
+            set_elements([])
+
+        add(measure("post renderer: hide and show  [Surface with Edges]", hide_and_show))
+        filter_obj.ViewObject.DisplayMode = "Surface"
+
     # ---- the other filters --------------------------------------------
     #
     # Two operations a user repeats without thinking: dragging the warp factor,

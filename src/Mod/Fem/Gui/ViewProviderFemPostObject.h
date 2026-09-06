@@ -33,6 +33,7 @@
 #include <vtkExtractEdges.h>
 #include <vtkGeometryFilter.h>
 #include <vtkOutlineCornerFilter.h>
+#include <vtkUnstructuredGridGeometryFilter.h>
 #include <vtkSmartPointer.h>
 #include <vtkVertexGlyphFilter.h>
 
@@ -166,10 +167,14 @@ protected:
 
     vtkSmartPointer<vtkPolyDataAlgorithm> m_currentAlgorithm;
     vtkSmartPointer<vtkGeometryFilter> m_surface;
+    /// The outer faces kept as faces, for data whose elements are curved
+    vtkSmartPointer<vtkUnstructuredGridGeometryFilter> m_faces3D;
     vtkSmartPointer<vtkAppendPolyData> m_surfaceEdges;
     vtkSmartPointer<vtkOutlineCornerFilter> m_outline;
     vtkSmartPointer<vtkExtractEdges> m_wireframe, m_wireframeSurface;
     vtkSmartPointer<vtkVertexGlyphFilter> m_points, m_pointsSurface;
+    /// Whether the data last set up carries elements with curved edges
+    bool m_curvedData {false};
 
 private:
     void updateProperties();

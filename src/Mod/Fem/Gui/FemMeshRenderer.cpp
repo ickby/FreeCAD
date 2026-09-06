@@ -129,27 +129,6 @@ inline std::uint64_t edgeKey(vtkIdType a, vtkIdType b)
 }
 
 /// Whether any element of the mesh carries points between its corners.
-bool hasCurvedCells(vtkUnstructuredGrid* grid)
-{
-    // The distinct types, which the grid works out once and remembers, rather
-    // than the type of every cell of a mesh that may run to millions.
-    auto* types = grid->GetDistinctCellTypesArray();
-    if (!types) {
-        return false;
-    }
-    for (vtkIdType i = 0; i < types->GetNumberOfTuples(); ++i) {
-#if VTK_VERSION_NUMBER < VTK_VERSION_CHECK(9, 6, 0)
-        const bool linear = vtkCellTypes::IsLinear(types->GetValue(i)) != 0;
-#else
-        const bool linear = vtkCellTypeUtilities::IsLinear(types->GetValue(i)) != 0;
-#endif
-        if (!linear) {
-            return true;
-        }
-    }
-    return false;
-}
-
 vtkSmartPointer<vtkThreshold> makeMaskThreshold(const char* arrayname)
 {
     auto filter = vtkSmartPointer<vtkThreshold>::New();
@@ -632,7 +611,7 @@ void FemMeshRenderer::setMesh(vtkSmartPointer<vtkUnstructuredGrid> mesh)
     // first, as faces, and the surface is then made of those. That way round
     // costs a little, and the other way round costs a great deal more, the
     // surface filter having a path for straight elements that this has not.
-    m_curvedmesh = m_vtkmesh && hasCurvedCells(m_vtkmesh);
+    m_curvedmesh = FemVisibilityMask::hasCurvedCells(m_vtkmesh);
     m_vtkpolyfilter->SetInputConnection(
         m_curvedmesh ? m_vtkfacefilter->GetOutputPort() : m_vtkclipper->GetOutputPort()
     );

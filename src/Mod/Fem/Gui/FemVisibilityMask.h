@@ -31,6 +31,7 @@
 
 #include "FemViewTypes.h"
 
+#include <vtkDataSet.h>
 #include <vtkSmartPointer.h>
 #include <vtkUnstructuredGrid.h>
 
@@ -67,6 +68,21 @@ public:
 
     /** VTK cell type -> topological dimension (0..3), or -1 if unknown. */
     static int dimensionOfCellType(int vtkCellType);
+
+    /**
+     * Whether @a data holds any element with points between its corners.
+     *
+     * The two renderers both have to know, because a curved element is the one
+     * case where the surface filter cannot be asked for the element edges: it
+     * triangulates a curved face over its midpoints, and the sides of those
+     * triangles cut across the face rather than round it.
+     *
+     * Answered from the distinct cell types, which a grid works out once and
+     * remembers, rather than from the type of every cell of a mesh that may run
+     * to millions. Anything that is not an unstructured grid carries no curved
+     * element to begin with.
+     */
+    static bool hasCurvedCells(vtkDataSet* data);
 
     /** Stable string key for cell-type filter / classification (e.g. "tetra10"). */
     static std::string cellTypeKey(int vtkCellType);

@@ -787,6 +787,7 @@ SET(FemGuiTests_SRCS
     femtest/gui/test_palette.py
     femtest/gui/test_reference_selection.py
     femtest/gui/test_post_modelfilter.py
+    femtest/gui/test_post_render.py
     femtest/gui/test_view_panel.py
 )
 

@@ -73,6 +73,7 @@
 #endif
 #include "ViewProviderAnalysis.h"
 #include "FemPerfLog.h"
+#include "FemVisibilityMask.h"
 #include "ViewProviderFemPostObject.h"
 
 #include <Base/Tools.h>
@@ -261,11 +262,14 @@ ViewProviderFemPostObject::ViewProviderFemPostObject()
     m_points = vtkSmartPointer<vtkVertexGlyphFilter>::New();
     m_pointsSurface = vtkSmartPointer<vtkVertexGlyphFilter>::New();
     m_surface = vtkSmartPointer<vtkGeometryFilter>::New();
+    // The outer faces of a curved result, kept whole. The surface filter would
+    // triangulate them, and the sides of those triangles are not the element
+    // edges; setupPipeline() puts this in front of it where it is needed.
+    m_faces3D = vtkSmartPointer<vtkUnstructuredGridGeometryFilter>::New();
     m_wireframe = vtkSmartPointer<vtkExtractEdges>::New();
     m_wireframeSurface = vtkSmartPointer<vtkExtractEdges>::New();
     m_surfaceEdges = vtkSmartPointer<vtkAppendPolyData>::New();
     m_pointsSurface->AddInputConnection(m_surface->GetOutputPort());
-    m_wireframeSurface->AddInputConnection(m_surface->GetOutputPort());
     m_surfaceEdges->AddInputConnection(m_surface->GetOutputPort());
     m_surfaceEdges->AddInputConnection(m_wireframeSurface->GetOutputPort());
 
@@ -936,7 +940,34 @@ bool ViewProviderFemPostObject::setupPipeline()
     m_outline->SetInputData(dset);
     m_points->SetInputData(dset);
     m_wireframe->SetInputData(dset);
-    m_surface->SetInputData(dset);
+
+    // Where the surface, and the edges drawn on top of it, are read from.
+    //
+    // A result of straight elements needs no help: the surface filter hands out
+    // one polygon per face and the sides of those polygons are the element
+    // edges. A curved one it triangulates over the midpoints - which is right
+    // for the surface, and wrong for the edges, because the sides of the little
+    // triangles cut across the face. So the outer faces are gathered first, as
+    // faces, and both the surface and the edges are taken from those. The
+    // surface comes out the same either way; the edges come out as the elements
+    // have them rather than as the triangulation left them.
+    const bool curved = FemVisibilityMask::hasCurvedCells(dset);
+    if (curved != m_curvedData || !m_surface->GetNumberOfInputConnections(0)) {
+        m_curvedData = curved;
+        if (curved) {
+            m_surface->SetInputConnection(m_faces3D->GetOutputPort());
+            m_wireframeSurface->SetInputConnection(m_faces3D->GetOutputPort());
+        }
+        else {
+            m_wireframeSurface->SetInputConnection(m_surface->GetOutputPort());
+        }
+    }
+    if (curved) {
+        m_faces3D->SetInputData(dset);
+    }
+    else {
+        m_surface->SetInputData(dset);
+    }
 
     return true;
 }

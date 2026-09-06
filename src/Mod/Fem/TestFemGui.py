@@ -38,6 +38,7 @@ from femtest.gui.test_import_selection import TestImportSelectionGui as FemGuiTe
 from femtest.gui.test_geometry_dimension import TestGeometryDimensionGui as FemGuiTest12
 from femtest.gui.test_edit_scope import TestEditScopeGui as FemGuiTest13
 from femtest.gui.test_post_modelfilter import TestPostModelFilterGui as FemGuiTest14
+from femtest.gui.test_post_render import TestPostRenderGui as FemGuiTest15
 
 # dummy usage to get flake8 and lgtm quiet
 False if FemGuiTest01.__name__ else True
@@ -54,3 +55,4 @@ False if FemGuiTest11.__name__ else True
 False if FemGuiTest12.__name__ else True
 False if FemGuiTest13.__name__ else True
 False if FemGuiTest14.__name__ else True
+False if FemGuiTest15.__name__ else True

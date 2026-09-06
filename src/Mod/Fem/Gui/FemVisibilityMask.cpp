@@ -21,8 +21,12 @@
 # include <algorithm>
 # include <functional>
 # include <vtkCellData.h>
+# include <vtkCellTypes.h>
 # include <vtkDataArray.h>
 # include <vtkDataSet.h>
+# if VTK_VERSION_NUMBER >= VTK_VERSION_CHECK(9, 6, 0)
+#  include <vtkCellTypeUtilities.h>
+# endif
 # include <vtkIntArray.h>
 # include <vtkStringArray.h>
 # include <vtkUnstructuredGrid.h>
@@ -36,6 +40,29 @@
 #include <Mod/Fem/App/FemMeshDimension.h>
 
 using namespace FemGui;
+
+bool FemVisibilityMask::hasCurvedCells(vtkDataSet* data)
+{
+    auto* grid = vtkUnstructuredGrid::SafeDownCast(data);
+    if (!grid) {
+        return false;
+    }
+    auto* types = grid->GetDistinctCellTypesArray();
+    if (!types) {
+        return false;
+    }
+    for (vtkIdType i = 0; i < types->GetNumberOfTuples(); ++i) {
+#if VTK_VERSION_NUMBER < VTK_VERSION_CHECK(9, 6, 0)
+        const bool linear = vtkCellTypes::IsLinear(types->GetValue(i)) != 0;
+#else
+        const bool linear = vtkCellTypeUtilities::IsLinear(types->GetValue(i)) != 0;
+#endif
+        if (!linear) {
+            return true;
+        }
+    }
+    return false;
+}
 
 namespace
 {

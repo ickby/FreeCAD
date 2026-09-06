@@ -31,6 +31,8 @@
 #include <gp_XYZ.hxx>
 #include <TopoDS_Shape.hxx>
 
+#include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -61,6 +63,37 @@ class FemAnalysis;
 class FemAnalysisImport;
 class FemGeometry;
 class FemMeshShapeGroup;
+
+/**
+ * One material of an analysis, with the elements it names.
+ *
+ * The references are dotted paths, so an element of a placed instance reads
+ * "Import1.Solid3" and one of the analysis itself just "Solid3". A material
+ * with no reference at all claims everything no other material speaks for,
+ * which is what @a emptyRefs marks; whether it may do so depends on where it
+ * came from, hence @a inherited.
+ */
+struct FemExport MaterialAssignment
+{
+    App::DocumentObject* obj {nullptr};
+    /// Stable identity, the MaterialName where there is one, else the object name
+    std::string key;
+    /// Display label
+    std::string label;
+    /// The material names nothing, so it stands for whatever is left over
+    bool emptyRefs {false};
+    /// The material came in through an import rather than out of the analysis
+    bool inherited {false};
+    /// Dotted element paths the material names
+    std::vector<std::string> refs;
+};
+
+/// The material an element was given, as materialOfElements() reports it.
+struct FemExport MaterialOfElement
+{
+    std::string key;
+    std::string label;
+};
 
 class FemExport Tools
 {
@@ -167,6 +200,48 @@ public:
     */
     static std::vector<std::pair<std::string, std::vector<std::string>>> importedMeshComponents(
         const Fem::FemAnalysis* analysis
+    );
+    /*!
+     The toplevel elements *analysis* holds, as dotted paths.
+
+     Both what its own geometry models and what its imports place, because the
+     two are the same thing to anything that assigns per element: a material or
+     a colour has to speak for an instance element as much as for a native one.
+
+     *geometry* is what the elements of the analysis itself are read from; pass
+     null when the analysis builds none.
+    */
+    static std::set<std::string> analysisToplevelElements(
+        const Fem::FemAnalysis* analysis,
+        const Fem::FemGeometry* geometry
+    );
+    /*!
+     The materials of *analysis*, its own first and the inherited ones after.
+
+     Resolving a material is not a display question - a solve has to know what
+     it is solving with, and it runs without a GUI - so the walk lives here
+     rather than beside the colouring that also uses it. Recursive over the
+     imports, and keyed by the whole import chain the way
+     femtools/importmembers.py names its member views, which keeps these keys
+     and the solver member names in step.
+    */
+    static std::vector<Fem::MaterialAssignment> analysisMaterials(const Fem::FemAnalysis* analysis);
+    /*!
+     The material each element of *analysis* was given.
+
+     Every element some material names is listed, plus every toplevel element
+     the analysis holds - the geometry's own and the ones its imports place.
+     An element no material names is absent from the map, and that absence is
+     the whole of what "no material" means here: the caller decides whether to
+     show it as a category of its own or leave it out.
+
+     *geometry* is what the toplevel elements of the analysis itself are read
+     from; pass null when the analysis builds none.
+    */
+    static std::map<std::string, Fem::MaterialOfElement> materialOfElements(
+        const Fem::FemAnalysis* analysis,
+        const Fem::FemGeometry* geometry,
+        const std::vector<Fem::MaterialAssignment>& materials
     );
     /*!
      The mesh container of an analysis, or nullptr.

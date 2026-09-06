@@ -201,6 +201,7 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
              << "FEM_PostFilterClipRegion"
              << "FEM_PostFilterContours"
 # ifdef FC_USE_VTK_PYTHON
+             << "FEM_PostFilterAttribute"
              << "FEM_PostFilterGlyph"
 # endif
              << "FEM_PostFilterDataAlongLine"
@@ -361,6 +362,7 @@ Gui::MenuItem* Workbench::setupMenuBar() const
              << "FEM_PostFilterClipRegion"
              << "FEM_PostFilterContours"
 # ifdef FC_USE_VTK_PYTHON
+             << "FEM_PostFilterAttribute"
              << "FEM_PostFilterGlyph"
 # endif
              << "FEM_PostFilterDataAlongLine"

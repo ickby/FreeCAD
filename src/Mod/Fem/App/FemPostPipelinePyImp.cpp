@@ -24,9 +24,13 @@
 
 #include <Python.h>
 
+#include <App/DocumentObjectPy.h>
 #include <Base/FileInfo.h>
 #include <Base/UnitPy.h>
 
+#include "FemAnalysis.h"
+#include "FemMesh.h"
+#include "FemMeshPy.h"
 #include "FemPostPipeline.h"
 #include "FemPostPipelinePy.h"
 #include "FemPostPipelinePy.cpp"
@@ -321,6 +325,69 @@ PyObject* FemPostPipelinePy::addArrayFromFunction(PyObject* args)
     }
 
     getFemPostPipelinePtr()->addArrayFromFunction(functions);
+
+    Py_Return;
+}
+
+PyObject* FemPostPipelinePy::attribute(PyObject* args)
+{
+    PyObject* pyMesh = nullptr;
+    PyObject* pyAnalysis = nullptr;
+    if (!PyArg_ParseTuple(args, "OO", &pyMesh, &pyAnalysis)) {
+        return nullptr;
+    }
+
+    // The mesh that was solved is either a mesh object or the solve assembly
+    // built from one, and the assembly is a Python stand-in rather than a
+    // document object. Both carry the same two attributes, so both are read
+    // the same way and neither is named here.
+    Py::Object meshHolder(pyMesh);
+    if (!meshHolder.hasAttr("FemMesh")) {
+        PyErr_SetString(PyExc_TypeError, "mesh argument carries no FemMesh");
+        return nullptr;
+    }
+    Py::Object femMesh = meshHolder.getAttr("FemMesh");
+    if (!PyObject_TypeCheck(femMesh.ptr(), &FemMeshPy::Type)) {
+        PyErr_SetString(PyExc_TypeError, "FemMesh of the mesh argument is not a Fem mesh");
+        return nullptr;
+    }
+
+    // Which instance a cell came from is something only the solve assembly
+    // knows, and it is a Python stand-in rather than a document object. A mesh
+    // object carries a CellSources of its own that names the child mesh each
+    // cell came out of - a different question with the same name, and reading
+    // it as an import path would attribute the whole mesh to nothing. So the
+    // paths are taken from the assembly alone; for a mesh object they are empty,
+    // which is exactly what "every cell belongs to the analysis itself" says.
+    std::vector<std::string> cellSources;
+    const bool isDocumentObject = PyObject_TypeCheck(pyMesh, &App::DocumentObjectPy::Type);
+    if (!isDocumentObject && meshHolder.hasAttr("CellSources")) {
+        Py::Sequence sources(meshHolder.getAttr("CellSources"));
+        cellSources.reserve(sources.size());
+        for (const auto& source : sources) {
+            cellSources.push_back(Py::String(source).as_std_string("utf-8"));
+        }
+    }
+
+    const FemAnalysis* analysis = nullptr;
+    if (pyAnalysis != Py_None) {
+        if (!PyObject_TypeCheck(pyAnalysis, &App::DocumentObjectPy::Type)) {
+            PyErr_SetString(PyExc_TypeError, "analysis argument is not a document object");
+            return nullptr;
+        }
+        auto* obj = static_cast<App::DocumentObjectPy*>(pyAnalysis)->getDocumentObjectPtr();
+        analysis = Base::freecad_cast<FemAnalysis*>(obj);
+        if (!analysis) {
+            PyErr_SetString(PyExc_TypeError, "analysis argument is not a Fem analysis");
+            return nullptr;
+        }
+    }
+
+    getFemPostPipelinePtr()->attribute(
+        *static_cast<FemMeshPy*>(femMesh.ptr())->getFemMeshPtr(),
+        cellSources,
+        analysis
+    );
 
     Py_Return;
 }

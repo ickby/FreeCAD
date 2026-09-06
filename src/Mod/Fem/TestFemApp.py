@@ -53,6 +53,7 @@ from femtest.app.test_preprocess import TestExecuteDrivenOutputs as FemTest28
 from femtest.app.test_selection_rules import TestSelectionRules as FemTest26
 from femtest.app.test_gmsh import TestGMSHEntityOrder as FemTest24
 from femtest.app.test_netgen import TestNetgenEntityOrder as FemTest25
+from femtest.app.test_attribution import TestResultAttribution as FemTest29
 
 # dummy usage to get flake8 and lgtm quiet
 False if FemTest01.__name__ else True
@@ -82,3 +83,4 @@ False if FemTest25.__name__ else True
 False if FemTest26.__name__ else True
 False if FemTest27.__name__ else True
 False if FemTest28.__name__ else True
+False if FemTest29.__name__ else True

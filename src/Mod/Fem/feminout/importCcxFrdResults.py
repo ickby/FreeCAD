@@ -60,12 +60,19 @@ def insert(filename, docname):
 
 
 # ********* module specific methods *********
+def _collect(pipelines, pipeline):
+    """Note down a pipeline the caller asked to be told about."""
+    if pipelines is not None and pipeline is not None:
+        pipelines.append(pipeline)
+
+
 def setupPipeline(doc, analysis, results_name, result_data):
+    """Load *result_data* into a pipeline and return it, or None if there is none."""
     import ObjectsFem
     from . import importToolsFem
 
     if not "BUILD_FEM_VTK" in FreeCAD.__cmake__:
-        return
+        return None
 
     # create a results pipeline (dependent on user settings)
     pipeline_name = "Pipeline_" + results_name
@@ -111,8 +118,21 @@ def setupPipeline(doc, analysis, results_name, result_data):
         # restore pipeline visibility
         pipeline_obj.ViewObject.Visibility = pipeline_visibility
 
+    return pipeline_obj
 
-def importFrd(filename, analysis=None, result_name_prefix="", result_analysis_type=""):
+
+def importFrd(
+    filename, analysis=None, result_name_prefix="", result_analysis_type="", pipelines=None
+):
+    """Read a CalculiX .frd file into result objects and post-processing pipelines.
+
+    Pass a list as *pipelines* to be told which pipelines the data was loaded
+    into. Attribution is the reason there is a way to ask: only the caller that
+    ran the analysis can say what the results were computed from, and only these
+    pipelines are the ones it just filled. Everything else - this function is
+    the File->Open import path as well - leaves the argument out and gets the
+    behaviour it always had.
+    """
     import ObjectsFem
     from . import importToolsFem
 
@@ -236,7 +256,7 @@ def importFrd(filename, analysis=None, result_name_prefix="", result_analysis_ty
 
                 # if we have multiple results we delay the pipeline creation
                 if number_of_increments == 1:
-                    setupPipeline(doc, analysis, results_name, [res_obj])
+                    _collect(pipelines, setupPipeline(doc, analysis, results_name, [res_obj]))
                 else:
                     multistep_value.append(step_time)
                     multistep_result.append(res_obj)
@@ -261,17 +281,20 @@ def importFrd(filename, analysis=None, result_name_prefix="", result_analysis_ty
                         unit = FreeCAD.Units.Unit()
                         description = "Unknown"
 
-                setupPipeline(
-                    doc,
-                    analysis,
-                    results_name,
-                    [multistep_result, multistep_value, unit, description],
+                _collect(
+                    pipelines,
+                    setupPipeline(
+                        doc,
+                        analysis,
+                        results_name,
+                        [multistep_result, multistep_value, unit, description],
+                    ),
                 )
 
         elif result_analysis_type == "check":
             results_name = f"{result_name_prefix}Check"
             res_obj = make_result_mesh(results_name)
-            setupPipeline(doc, analysis, results_name, [res_obj])
+            _collect(pipelines, setupPipeline(doc, analysis, results_name, [res_obj]))
             if analysis:
                 analysis.addObject(res_obj)
 
@@ -296,7 +319,7 @@ def importFrd(filename, analysis=None, result_name_prefix="", result_analysis_ty
                 results_name = "Results"
             res_obj = ObjectsFem.makeResultMechanical(doc, results_name)
             res_obj.Mesh = result_mesh_object
-            setupPipeline(doc, analysis, results_name, [res_obj])
+            _collect(pipelines, setupPipeline(doc, analysis, results_name, [res_obj]))
             # TODO, node numbers in result obj could be set
             if analysis:
                 analysis.addObject(res_obj)

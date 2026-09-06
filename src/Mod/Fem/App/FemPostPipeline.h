@@ -44,6 +44,10 @@
 namespace Fem
 {
 
+class FemAnalysis;
+class FemMesh;
+
+
 class FemExport FemPostPipeline: public Fem::FemPostObject, public Fem::FemPostGroupExtension
 {
     PROPERTY_HEADER_WITH_EXTENSIONS(Fem::FemPostPipeline);
@@ -78,6 +82,19 @@ public:
     void scale(double s);
     void renameArrays(const std::map<std::string, std::string>& names);
     void addArrayFromFunction(const std::map<std::string, std::string>& functions);
+    /**
+     * Store on the loaded data what the analysis it came from was made of.
+     *
+     * Deliberately not part of load(): loading a result and knowing which
+     * analysis produced it are two different pieces of knowledge, and the file
+     * import path has only the first. Whoever ran the analysis calls this, and
+     * everything else carries no attribution and says so.
+     */
+    void attribute(
+        FemMesh& mesh,
+        const std::vector<std::string>& cellSources,
+        const FemAnalysis* analysis
+    );
 
     // load from results
     void load(FemResultObject* res);

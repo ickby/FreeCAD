@@ -48,6 +48,11 @@ class ElmerTools(ObjectTools):
     def __init__(self, obj):
         super().__init__(obj)
         self.model_file = ""
+        # The mesh this run solves, kept for as long as the run lasts. The
+        # writer rebuilds it on every call, and rebuilding it again to attribute
+        # the results would merge the analysis a second time - deterministic,
+        # but wasted work and quietly wrong if the document moved in between.
+        self.mesh = None
         self._result_format = ""
         self.frames_info = writer.FRAMES_INFO
         self.frames_values_file = ""
@@ -58,6 +63,7 @@ class ElmerTools(ObjectTools):
         self.frames_info = w.frames_info
         self.frames_values_file = w.frames_values_file
         mesh = w.getMesh()
+        self.mesh = mesh
         mesh_file = os.path.join(self.obj.WorkingDirectory, "mesh.unv")
         mesh.FemMesh.write(mesh_file)
 
@@ -148,6 +154,12 @@ class ElmerTools(ObjectTools):
         except Exception:
             # do nothing
             pass
+
+        # The identity of the model, resolved while the mesh that was solved
+        # and the materials it was solved with are still the ones in hand.
+        if self.mesh:
+            pipeline.attribute(self.mesh, self.analysis)
+
         if create:
             # default display mode
             pipeline.ViewObject.DisplayMode = "Surface"

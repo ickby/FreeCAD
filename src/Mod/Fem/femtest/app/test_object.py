@@ -83,11 +83,11 @@ class TestObjectCreate(unittest.TestCase):
         # analysis itself is not in analysis group --> 1
         # import group children: the analysis import --> 1
         # vtk post pipeline children: region, scalar, cut, wrap, contour --> 5
-        # vtk python post objects: glyph, 6x data extraction --> 7
+        # vtk python post objects: glyph, attribution, 6x data extraction --> 8
 
         subtraction = 23
         if vtk_objects_used:
-            subtraction += 12
+            subtraction += 13
             if not ("BUILD_FEM_VTK_PYTHON" in FreeCAD.__cmake__):
                 # remove the 3 data visualization objects that would be in the Analysis
                 # if they would be available (Lineplot, histogram, table)
@@ -99,9 +99,9 @@ class TestObjectCreate(unittest.TestCase):
         # have been counted, but will not be executed to create objects
         failed = 0
         if vtk_objects_used and not ("BUILD_FEM_VTK_PYTHON" in FreeCAD.__cmake__):
-            # the 7 objects also counted in subtraction, +3 additional objects that are
+            # the 8 objects also counted in subtraction, +3 additional objects that are
             # added directly to the analysis
-            failed += 10
+            failed += 11
 
         self.assertEqual(len(doc.Objects), count_defmake - failed)
 
@@ -153,12 +153,8 @@ class TestObjectType(unittest.TestCase):
         from femtools.femutils import type_of_obj
 
         self.assertEqual("Fem::FemAnalysis", type_of_obj(ObjectsFem.makeAnalysis(doc)))
-        self.assertEqual(
-            "Fem::FemAnalysisImport", type_of_obj(ObjectsFem.makeAnalysisImport(doc))
-        )
-        self.assertEqual(
-            "App::DocumentObjectGroup", type_of_obj(ObjectsFem.makeImportGroup(doc))
-        )
+        self.assertEqual("Fem::FemAnalysisImport", type_of_obj(ObjectsFem.makeAnalysisImport(doc)))
+        self.assertEqual("App::DocumentObjectGroup", type_of_obj(ObjectsFem.makeImportGroup(doc)))
         self.assertEqual(
             "Fem::ConstantVacuumPermittivity",
             type_of_obj(ObjectsFem.makeConstantVacuumPermittivity(doc)),
@@ -362,9 +358,7 @@ class TestObjectType(unittest.TestCase):
         from femtools.femutils import is_of_type
 
         self.assertTrue(is_of_type(ObjectsFem.makeAnalysis(doc), "Fem::FemAnalysis"))
-        self.assertTrue(
-            is_of_type(ObjectsFem.makeAnalysisImport(doc), "Fem::FemAnalysisImport")
-        )
+        self.assertTrue(is_of_type(ObjectsFem.makeAnalysisImport(doc), "Fem::FemAnalysisImport"))
         self.assertTrue(is_of_type(ObjectsFem.makeImportGroup(doc), "App::DocumentObjectGroup"))
         self.assertTrue(
             is_of_type(
@@ -1060,12 +1054,8 @@ class TestObjectType(unittest.TestCase):
         doc = self.document
 
         self.assertTrue(ObjectsFem.makeAnalysis(doc).isDerivedFrom("Fem::FemAnalysis"))
-        self.assertTrue(
-            ObjectsFem.makeAnalysisImport(doc).isDerivedFrom("Fem::FemAnalysisImport")
-        )
-        self.assertTrue(
-            ObjectsFem.makeImportGroup(doc).isDerivedFrom("App::DocumentObjectGroup")
-        )
+        self.assertTrue(ObjectsFem.makeAnalysisImport(doc).isDerivedFrom("Fem::FemAnalysisImport"))
+        self.assertTrue(ObjectsFem.makeImportGroup(doc).isDerivedFrom("App::DocumentObjectGroup"))
         self.assertTrue(
             ObjectsFem.makeConstantVacuumPermittivity(doc).isDerivedFrom("Fem::ConstraintPython")
         )
@@ -1359,6 +1349,7 @@ def create_all_fem_objects_doc(doc):
         ObjectsFem.makePostVtkFilterContours(doc, vres)
         if "BUILD_FEM_VTK_PYTHON" in FreeCAD.__cmake__:
             ObjectsFem.makePostFilterGlyph(doc, vres)
+            ObjectsFem.makePostFilterAttribute(doc, vres)
 
             # data extraction objects
             lp = analysis.addObject(ObjectsFem.makePostLineplot(doc))[0]

@@ -25,17 +25,23 @@
 
 
 #include <Python.h>
+#include <algorithm>
+#include <array>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <set>
+#include <unordered_map>
 
 #include <SMESHDS_Mesh.hxx>
 #include <SMESH_Mesh.hxx>
 
 #include <vtkArrayCalculator.h>
+#include <vtkCell.h>
 #include <vtkCellArray.h>
 #include <vtkCellData.h>
 #include <vtkDataArray.h>
@@ -47,8 +53,11 @@
 #include <vtkIdList.h>
 #include <vtkIntArray.h>
 #include <vtkLine.h>
+#include <vtkMath.h>
 #include <vtkMultiBlockDataSet.h>
 #include <vtkPointData.h>
+#include <vtkPoints.h>
+#include <vtkPolyData.h>
 #include <vtkPyramid.h>
 #include <vtkQuad.h>
 #include <vtkQuadraticEdge.h>
@@ -58,6 +67,7 @@
 #include <vtkQuadraticTetra.h>
 #include <vtkQuadraticTriangle.h>
 #include <vtkQuadraticWedge.h>
+#include <vtkStaticPointLocator.h>
 #include <vtkStringArray.h>
 #include <vtkTetra.h>
 #include <vtkTriangle.h>
@@ -78,7 +88,10 @@
 #include <Base/Type.h>
 
 #include "FemAnalysis.h"
+#include "FemAnalysisImport.h"
+#include "FemGeometry.h"
 #include "FemResultObject.h"
+#include "FemTools.h"
 #include "FemVTKTools.h"
 #include <SMESH_Group.hxx>
 #include <SMESHDS_GroupBase.hxx>
@@ -2221,6 +2234,444 @@ void FemVTKTools::frdToVTK(const char* filename, bool binary)
         writer->SetFileName(blockFile.c_str());
         writer->SetInputData(block);
         writer->Update();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Result attribution
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+/**
+ * Whether *name* names a geometry entity rather than something else.
+ *
+ * A mesher names the group it meshed an element into after that element, but a
+ * constraint or a solver names its groups after itself, and the two sit side by
+ * side in one mesh. Nothing marks which is which, so the naming convention has
+ * to answer it - the same one femmesh.meshtools.get_femmesh_group_type() reads.
+ */
+bool isEntityName(const std::string& name)
+{
+    for (const char* prefix : {"Solid", "Face", "Edge", "Vertex"}) {
+        const std::size_t length = std::strlen(prefix);
+        if (name.size() <= length || name.compare(0, length, prefix) != 0) {
+            continue;
+        }
+        if (std::all_of(name.begin() + length, name.end(), [](unsigned char c) {
+                return std::isdigit(c) != 0;
+            })) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Qualified name of the entity a mesh group stands for, or empty.
+ *
+ * Group names are flat - "Import1_Solid3" - because neither SMESH nor a solver
+ * deck can take a dot in a name. Splitting that back on the underscore would be
+ * guesswork the moment a source element carries one in its own name, so the
+ * flattening is never undone here: *path* is known from the cell, and the
+ * prefix it flattens to is matched rather than searched for. What is left after
+ * it is the entity, and a group whose name does not start with it belongs to
+ * some other instance or to no instance at all.
+ */
+std::string entityKeyOfGroup(const std::string& groupName, const std::string& path)
+{
+    if (path.empty()) {
+        return isEntityName(groupName) ? groupName : std::string();
+    }
+
+    std::string flat = path;
+    std::ranges::replace(flat, '.', '_');
+    flat += '_';
+    if (groupName.size() <= flat.size() || groupName.compare(0, flat.size(), flat) != 0) {
+        return {};
+    }
+    const std::string leaf = groupName.substr(flat.size());
+    return isEntityName(leaf) ? path + "." + leaf : std::string();
+}
+
+/**
+ * Import path -> the geometry the elements placed under it are named in.
+ *
+ * An element of an instance is named in the analysis the instance came from,
+ * not in the one that placed it, so resolving "Import1.Face7" to the solid it
+ * belongs to needs that analysis' geometry and no other. Recursive, because a
+ * nested instance is addressed by the whole path leading to it.
+ */
+void collectImportGeometries(
+    const Fem::FemAnalysis* analysis,
+    const std::string& prefix,
+    std::vector<const Fem::FemAnalysisImport*>& chain,
+    std::map<std::string, const Fem::FemGeometry*>& out
+)
+{
+    for (auto* imp : Fem::Tools::analysisImports(analysis)) {
+        if (std::ranges::find(chain, imp) != chain.end()) {
+            continue;
+        }
+        const char* name = imp->getNameInDocument();
+        const std::string path = prefix.empty()
+            ? std::string(name ? name : "Import")
+            : prefix + "." + (name ? name : "Import");
+        out[path] = imp->sourceGeometry();
+
+        if (auto* src = Base::freecad_cast<Fem::FemAnalysis*>(imp->Analysis.getValue())) {
+            chain.push_back(imp);
+            collectImportGeometries(src, path, chain, out);
+            chain.pop_back();
+        }
+    }
+}
+
+/**
+ * The toplevel element *entity* belongs to, under the path *entity* carries.
+ *
+ * Component and material are assigned per toplevel - the solid in 3D, the face
+ * in 2D - while a mesh group may name a face of a solid. Asking about that face
+ * has to reach the solid that owns it, and the answer keeps the path, because
+ * two instances of one source must not collapse onto a shared local name.
+ */
+std::string resolveToplevel(
+    const std::string& entity,
+    const Fem::FemGeometry* analysisGeometry,
+    const std::map<std::string, const Fem::FemGeometry*>& importGeometries
+)
+{
+    std::string path;
+    std::string leaf = entity;
+    if (const auto pos = entity.find_last_of('.'); pos != std::string::npos) {
+        path = entity.substr(0, pos);
+        leaf = entity.substr(pos + 1);
+    }
+
+    const Fem::FemGeometry* geometry = analysisGeometry;
+    if (!path.empty()) {
+        auto it = importGeometries.find(path);
+        geometry = it != importGeometries.end() ? it->second : nullptr;
+    }
+    if (!geometry) {
+        return entity;
+    }
+
+    const auto owners = geometry->getEntityOwners(leaf);
+    // A toplevel in its own right answers for itself, whoever else owns it: an
+    // embedded shell is a face of the solid it was fused into, and it is the
+    // shell that is being asked about. Otherwise the first owner speaks for it,
+    // the way a face between two solids takes one of the two.
+    if (owners.empty() || std::ranges::find(owners, leaf) != owners.end()) {
+        return entity;
+    }
+    return path.empty() ? owners.front() : path + "." + owners.front();
+}
+
+/// Centroid of a cell and the squared distance from it to the furthest node.
+void cellCentroid(vtkDataSet* grid, vtkIdType cellId, double centre[3], double& reachSquared)
+{
+    centre[0] = centre[1] = centre[2] = 0.0;
+    reachSquared = 0.0;
+
+    vtkCell* cell = grid->GetCell(cellId);
+    vtkPoints* points = cell->GetPoints();
+    const vtkIdType count = points->GetNumberOfPoints();
+    if (count == 0) {
+        return;
+    }
+
+    for (vtkIdType i = 0; i < count; ++i) {
+        double point[3];
+        points->GetPoint(i, point);
+        centre[0] += point[0];
+        centre[1] += point[1];
+        centre[2] += point[2];
+    }
+    centre[0] /= static_cast<double>(count);
+    centre[1] /= static_cast<double>(count);
+    centre[2] /= static_cast<double>(count);
+
+    for (vtkIdType i = 0; i < count; ++i) {
+        double point[3];
+        points->GetPoint(i, point);
+        reachSquared = std::max(reachSquared, vtkMath::Distance2BetweenPoints(centre, point));
+    }
+}
+
+/// The data sets a result is made of: one grid, or the blocks of a multi-frame set.
+std::vector<vtkDataSet*> resultBlocks(vtkDataObject* data)
+{
+    std::vector<vtkDataSet*> blocks;
+    if (auto* grid = vtkDataSet::SafeDownCast(data)) {
+        blocks.push_back(grid);
+    }
+    else if (auto* multi = vtkMultiBlockDataSet::SafeDownCast(data)) {
+        for (unsigned int i = 0; i < multi->GetNumberOfBlocks(); ++i) {
+            if (auto* grid = vtkDataSet::SafeDownCast(multi->GetBlock(i))) {
+                blocks.push_back(grid);
+            }
+        }
+    }
+    return blocks;
+}
+
+}  // namespace
+
+void FemVTKTools::attributeResult(
+    vtkSmartPointer<vtkDataObject> data,
+    FemMesh& mesh,
+    const std::vector<std::string>& cellSources,
+    const FemAnalysis* analysis
+)
+{
+    if (!data) {
+        return;
+    }
+    const auto blocks = resultBlocks(data);
+    if (blocks.empty()) {
+        return;
+    }
+
+    // The mesh as VTK sees it, at every element level rather than the highest
+    // one. A result only ever holds a subset of what was meshed, and a cell the
+    // assembly grid does not carry is a cell nothing can be said about, so the
+    // grid queried here has to be the wider of the two.
+    auto assembly = vtkSmartPointer<vtkUnstructuredGrid>::New();
+    std::vector<int> cellElementIds;
+    exportVTKMesh(&mesh, assembly, false, 1.0F, &cellElementIds);
+
+    const vtkIdType assemblyCells = assembly->GetNumberOfCells();
+    if (assemblyCells == 0 || static_cast<vtkIdType>(cellElementIds.size()) != assemblyCells) {
+        return;
+    }
+
+    // Cells come out grouped by element type, so the element id is not the cell
+    // index and the mapping exportVTKMesh reported has to be inverted.
+    std::unordered_map<int, vtkIdType> cellOfElement;
+    cellOfElement.reserve(cellElementIds.size());
+    for (std::size_t i = 0; i < cellElementIds.size(); ++i) {
+        cellOfElement.emplace(cellElementIds[i], static_cast<vtkIdType>(i));
+    }
+
+    // What every cell of the assembly is part of, read off the mesh groups.
+    std::vector<std::string> keyOfCell(static_cast<std::size_t>(assemblyCells));
+    if (SMESH_Mesh* smesh = mesh.getSMesh()) {
+        for (const int groupId : smesh->GetGroupIds()) {
+            SMESH_Group* group = smesh->GetGroup(groupId);
+            if (!group) {
+                continue;
+            }
+            auto* groupDS = dynamic_cast<SMESHDS_Group*>(group->GetGroupDS());
+            if (!groupDS) {
+                continue;
+            }
+            const auto type = groupDS->GetType();
+            if (type == SMDSAbs_Node || type == SMDSAbs_Ball || type == SMDSAbs_All) {
+                continue;
+            }
+
+            const std::string groupName = group->GetName();
+            auto elements = groupDS->GetElements();
+            while (elements->more()) {
+                const SMDS_MeshElement* element = elements->next();
+                const auto cell = cellOfElement.find(element->GetID());
+                if (cell == cellOfElement.end()) {
+                    continue;
+                }
+                const auto index = static_cast<std::size_t>(element->GetID() - 1);
+                const std::string path =
+                    index < cellSources.size() ? cellSources[index] : std::string();
+                if (const std::string key = entityKeyOfGroup(groupName, path); !key.empty()) {
+                    keyOfCell[static_cast<std::size_t>(cell->second)] = key;
+                }
+            }
+        }
+    }
+
+    if (std::ranges::all_of(keyOfCell, [](const std::string& key) { return key.empty(); })) {
+        // Nothing in the mesh says what it was meshed from, so there is nothing
+        // to store. Writing an empty table would only make a later reader carry
+        // the no-op contract for a case that is indistinguishable from a foreign
+        // result anyway.
+        return;
+    }
+
+    // Centroids of the assembly cells, and how far each cell reaches from its
+    // own centre. A result cell is matched to the assembly cell whose centroid
+    // is nearest, which for our own runs is an exact hit rather than an
+    // approximation: the solver was handed this very mesh and only renumbers
+    // it. The reach is what keeps that honest - a centroid that lands outside
+    // the cell it matched is not the same cell, and the result cell is left
+    // unattributed rather than given a neighbour's identity.
+    auto centroids = vtkSmartPointer<vtkPoints>::New();
+    centroids->SetNumberOfPoints(assemblyCells);
+    std::vector<double> reach(static_cast<std::size_t>(assemblyCells), 0.0);
+    for (vtkIdType i = 0; i < assemblyCells; ++i) {
+        double centre[3];
+        cellCentroid(assembly, i, centre, reach[static_cast<std::size_t>(i)]);
+        centroids->SetPoint(i, centre);
+    }
+
+    // A cell of no extent - a vertex, or a degenerate one - has no reach to
+    // speak of, so the match is judged against the size of the model instead.
+    double bounds[6];
+    assembly->GetBounds(bounds);
+    const std::array<double, 3> low {bounds[0], bounds[2], bounds[4]};
+    const std::array<double, 3> high {bounds[1], bounds[3], bounds[5]};
+    const double tolerance = std::pow(
+        std::sqrt(vtkMath::Distance2BetweenPoints(low.data(), high.data())) * 1e-6,
+        2
+    );
+
+    auto cloud = vtkSmartPointer<vtkPolyData>::New();
+    cloud->SetPoints(centroids);
+    auto locator = vtkSmartPointer<vtkStaticPointLocator>::New();
+    locator->SetDataSet(cloud);
+    locator->BuildLocator();
+
+    // Which assembly cell every result cell is, block by block. The entity
+    // table is built from these and from nothing else: a mesh knows about
+    // faces and edges a stress result never carries a cell for, and listing
+    // them would offer the user a choice that can only ever select nothing.
+    std::vector<std::vector<vtkIdType>> matchOfCell;
+    matchOfCell.reserve(blocks.size());
+    std::set<std::string> named;
+    for (auto* block : blocks) {
+        const vtkIdType cells = block->GetNumberOfCells();
+        std::vector<vtkIdType> matches(static_cast<std::size_t>(cells), -1);
+
+        for (vtkIdType i = 0; i < cells; ++i) {
+            double centre[3];
+            double unused = 0.0;
+            cellCentroid(block, i, centre, unused);
+
+            const vtkIdType match = locator->FindClosestPoint(centre);
+            if (match < 0) {
+                continue;
+            }
+            double matched[3];
+            centroids->GetPoint(match, matched);
+            if (vtkMath::Distance2BetweenPoints(centre, matched)
+                > reach[static_cast<std::size_t>(match)] + tolerance) {
+                continue;
+            }
+            const std::string& key = keyOfCell[static_cast<std::size_t>(match)];
+            if (key.empty()) {
+                continue;
+            }
+            matches[static_cast<std::size_t>(i)] = match;
+            named.insert(key);
+        }
+        matchOfCell.push_back(std::move(matches));
+    }
+
+    if (named.empty()) {
+        // The result and the mesh have nothing in common. Storing an empty
+        // table would say less than storing nothing at all.
+        return;
+    }
+
+    const std::vector<std::string> entities(named.begin(), named.end());
+    std::map<std::string, int> idOfEntity;
+    for (std::size_t i = 0; i < entities.size(); ++i) {
+        idOfEntity[entities[i]] = static_cast<int>(i);
+    }
+
+    // Component and material of every entity, resolved now and stored resolved.
+    const Fem::FemGeometry* geometry = Fem::Tools::getAnalysisGeometry(analysis);
+    std::map<std::string, std::string> componentOfElement;
+    if (geometry) {
+        const auto count = geometry->componentCount();
+        for (Fem::componentIdType i = 0; i < count; ++i) {
+            const std::string component = "Component" + std::to_string(i + 1);
+            for (const auto& name : geometry->toplevelElements(i)) {
+                componentOfElement[name] = component;
+            }
+        }
+    }
+    for (const auto& [component, elements] : Fem::Tools::importedComponents(analysis)) {
+        for (const auto& path : elements) {
+            componentOfElement[path] = component;
+        }
+    }
+
+    const auto materials = Fem::Tools::analysisMaterials(analysis);
+    const auto materialOfElement = Fem::Tools::materialOfElements(analysis, geometry, materials);
+
+    std::map<std::string, const Fem::FemGeometry*> importGeometries;
+    {
+        std::vector<const Fem::FemAnalysisImport*> chain;
+        collectImportGeometries(analysis, {}, chain, importGeometries);
+    }
+
+    auto entityTable = vtkSmartPointer<vtkStringArray>::New();
+    entityTable->SetName(ArrayAttributionEntities);
+    entityTable->SetNumberOfComponents(1);
+    auto componentTable = vtkSmartPointer<vtkStringArray>::New();
+    componentTable->SetName(ArrayAttributionComponent);
+    componentTable->SetNumberOfComponents(3);
+    auto materialTable = vtkSmartPointer<vtkStringArray>::New();
+    materialTable->SetName(ArrayAttributionMaterial);
+    materialTable->SetNumberOfComponents(3);
+
+    for (const auto& entity : entities) {
+        entityTable->InsertNextValue(entity);
+
+        // The entity itself first, because a material may name a single face of
+        // a solid, and only then the toplevel that speaks for it otherwise.
+        const std::string toplevel = resolveToplevel(entity, geometry, importGeometries);
+
+        auto component = componentOfElement.find(entity);
+        if (component == componentOfElement.end()) {
+            component = componentOfElement.find(toplevel);
+        }
+        if (component != componentOfElement.end()) {
+            componentTable->InsertNextValue(entity);
+            componentTable->InsertNextValue(component->second);
+            componentTable->InsertNextValue(component->second);
+        }
+
+        auto material = materialOfElement.find(entity);
+        if (material == materialOfElement.end()) {
+            material = materialOfElement.find(toplevel);
+        }
+        if (material != materialOfElement.end()) {
+            materialTable->InsertNextValue(entity);
+            materialTable->InsertNextValue(material->second.key);
+            materialTable->InsertNextValue(material->second.label);
+        }
+    }
+
+    for (std::size_t b = 0; b < blocks.size(); ++b) {
+        const auto& matches = matchOfCell[b];
+        auto ids = vtkSmartPointer<vtkIntArray>::New();
+        ids->SetName(ArrayEntityIds);
+        ids->SetNumberOfComponents(1);
+        ids->SetNumberOfTuples(static_cast<vtkIdType>(matches.size()));
+
+        for (std::size_t i = 0; i < matches.size(); ++i) {
+            // -1 is the sentinel for a cell nothing is known about, the same
+            // thing the empty import path means on the mesh side.
+            int id = -1;
+            if (matches[i] >= 0) {
+                const auto found = idOfEntity.find(keyOfCell[static_cast<std::size_t>(matches[i])]);
+                if (found != idOfEntity.end()) {
+                    id = found->second;
+                }
+            }
+            ids->SetValue(static_cast<vtkIdType>(i), id);
+        }
+
+        blocks[b]->GetCellData()->AddArray(ids);
+        blocks[b]->GetFieldData()->AddArray(entityTable);
+        if (componentTable->GetNumberOfValues() > 0) {
+            blocks[b]->GetFieldData()->AddArray(componentTable);
+        }
+        if (materialTable->GetNumberOfValues() > 0) {
+            blocks[b]->GetFieldData()->AddArray(materialTable);
+        }
     }
 }
 

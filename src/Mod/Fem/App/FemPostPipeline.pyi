@@ -103,6 +103,22 @@ class FemPostPipeline(FemPostObject):
         """
         ...
 
+    def attribute(self, mesh: object, analysis: DocumentObject, /) -> None:
+        """
+        Store on the loaded data which entity, component and material every cell belongs to.
+
+        Call it once, after load(), and only from code that knows this pipeline
+        holds the result of an analysis it just ran: the material stored is the
+        one the analysis was solved with, and a later reassignment must not
+        change it.
+
+        *mesh* is the mesh that was solved - a mesh object, or the solve
+        assembly built from one - and *analysis* the analysis it belongs to.
+        A result loaded from a foreign file simply never has this called on it
+        and carries no attribution, which every reader treats as a no-op.
+        """
+        ...
+
     def getOutputAlgorithm(self) -> vtkAlgorithm:
         """Returns the pipeline vtk algorithm, which generates the data passed to the pipelines filters.
 

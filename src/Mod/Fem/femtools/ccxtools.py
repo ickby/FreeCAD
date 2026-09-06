@@ -760,9 +760,17 @@ class FemToolsCcx(QtCore.QRunnable, QtCore.QObject):
 
         frd_result_file = os.path.splitext(self.inp_file_name)[0] + ".frd"
         if os.path.isfile(frd_result_file):
+            pipelines = []
             importCcxFrdResults.importFrd(
-                frd_result_file, self.analysis, "CCX_", self.solver.AnalysisType
+                frd_result_file, self.analysis, "CCX_", self.solver.AnalysisType, pipelines
             )
+            # Now, and only here, is it known what these results were computed
+            # from: this run held on to the mesh it solved, and the materials
+            # still are the ones it solved with. Stored on the pipeline, that
+            # answer outlives both.
+            if self.mesh:
+                for pipeline in pipelines:
+                    pipeline.attribute(self.mesh, self.analysis)
             for m in self.analysis.Group:
                 if m.isDerivedFrom("Fem::FemResultObject"):
                     self.results_present = True

@@ -773,6 +773,21 @@ void FemPostPipeline::addArrayFromFunction(const std::map<std::string, std::stri
     Data.setValue(data);
 }
 
+void FemPostPipeline::attribute(
+    FemMesh& mesh,
+    const std::vector<std::string>& cellSources,
+    const FemAnalysis* analysis
+)
+{
+    // Written back through setValue rather than touched in place: the property
+    // hands its data object to the source algorithm, and updating that pipeline
+    // reinitialises the very object it was given. So the arrays go onto the one
+    // we hold and the property is handed a finished grid to copy.
+    auto data = Data.getValue();
+    FemVTKTools::attributeResult(data, mesh, cellSources, analysis);
+    Data.setValue(data);
+}
+
 PyObject* FemPostPipeline::getPyObject()
 {
     if (PythonObject.is(Py::_None())) {

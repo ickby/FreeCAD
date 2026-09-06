@@ -54,6 +54,7 @@
 #include <App/DocumentObjectGroup.h>
 #include <App/GeoFeature.h>
 #include <App/PropertyLinks.h>
+#include <App/SuppressibleExtension.h>
 #include <Mod/Part/App/PartFeature.h>
 #include <Mod/Part/App/PropertyTopoShape.h>
 #include <Mod/Part/App/Tools.h>
@@ -738,4 +739,267 @@ bool Fem::Tools::getCylinderParams(
         axis = Base::Vector3d(dir.X(), dir.Y(), dir.Z());
     }
     return true;
+}
+
+namespace
+{
+
+/**
+ * Name of the element a material reference names, qualified where it has to be.
+ *
+ * A reference on an import names something of the placed instance, so the
+ * import's own name goes in front and the whole path is what identifies it.
+ * A reference on the geometry chain arrives with the object path in front of
+ * the element ("Geometry.Solid3"); only the element itself names anything of
+ * the shape, so the path is dropped.
+ */
+void appendMaterialRef(
+    App::DocumentObject* obj,
+    const std::string& sub,
+    std::vector<std::string>& refs
+)
+{
+    std::string name = sub;
+    while (!name.empty() && name.back() == '.') {
+        name.pop_back();
+    }
+    if (name.empty()) {
+        return;
+    }
+    if (auto* imp = Base::freecad_cast<Fem::FemAnalysisImport*>(obj)) {
+        const char* impName = imp->getNameInDocument();
+        refs.push_back(std::string(impName ? impName : "Import") + "." + name);
+        return;
+    }
+    const auto pos = name.find_last_of('.');
+    if (pos != std::string::npos) {
+        name = name.substr(pos + 1);
+    }
+    if (!name.empty()) {
+        refs.push_back(name);
+    }
+}
+
+/**
+ * The elements an inherited material with no references stands for.
+ *
+ * "Everything" said inside the imported analysis means everything that
+ * analysis holds, not everything the importing one does, so the claim is
+ * written out as the toplevel elements of the import and goes no further.
+ */
+void expandEmptyImportMaterialRefs(
+    Fem::FemAnalysisImport* imp,
+    const std::string& pathPrefix,
+    std::vector<std::string>& refs
+)
+{
+    auto* src = Base::freecad_cast<Fem::FemAnalysis*>(imp->Analysis.getValue());
+    auto* srcGeom = Fem::Tools::getAnalysisGeometry(src);
+    if (!srcGeom) {
+        return;
+    }
+    const char* impName = imp->getNameInDocument();
+    const std::string base =
+        pathPrefix.empty() ? std::string(impName ? impName : "Import") : pathPrefix;
+    const auto n = srcGeom->getComponents().size();
+    for (Fem::componentIdType i = 0; i < n; ++i) {
+        for (const auto& name : srcGeom->getToplevelElements(i)) {
+            refs.push_back(base + "." + name);
+        }
+    }
+}
+
+/**
+ * Stable identity of a material.
+ *
+ * The material name is preferred over the object name so two objects carrying
+ * the same material are one thing wherever they are met, in the colouring as
+ * much as in a stored result.
+ */
+std::string materialKey(App::DocumentObject* obj)
+{
+    if (auto* nameProp =
+            dynamic_cast<App::PropertyString*>(obj->getPropertyByName("MaterialName"))) {
+        const char* value = nameProp->getValue();
+        if (value && *value) {
+            return value;
+        }
+    }
+    return obj->getNameInDocument() ? obj->getNameInDocument() : "Material";
+}
+
+/// Append *obj* as a material, if it is one. Returns whether it was.
+bool appendMaterial(App::DocumentObject* obj, std::vector<Fem::MaterialAssignment>& materials)
+{
+    auto* prop = dynamic_cast<App::PropertyLinkSubList*>(obj->getPropertyByName("References"));
+    if (!prop || !obj->getPropertyByName("Material")) {
+        return false;
+    }
+
+    Fem::MaterialAssignment info;
+    info.obj = obj;
+    info.key = obj->getNameInDocument() ? obj->getNameInDocument() : "Material";
+    if (auto* nameProp =
+            dynamic_cast<App::PropertyString*>(obj->getPropertyByName("MaterialName"))) {
+        info.label = nameProp->getValue();
+    }
+    if (info.label.empty()) {
+        info.label = obj->Label.getStrValue();
+    }
+
+    const auto subsets = prop->getSubListValues();
+    if (subsets.empty()) {
+        info.emptyRefs = true;
+    }
+    else {
+        for (const auto& subset : subsets) {
+            for (const auto& sub : subset.second) {
+                appendMaterialRef(subset.first, sub, info.refs);
+            }
+        }
+        if (info.refs.empty()) {
+            info.emptyRefs = true;
+        }
+    }
+
+    materials.push_back(std::move(info));
+    return true;
+}
+
+/**
+ * Materials of the analyses reached through *analysis*' imports.
+ *
+ * Recursive, so a nested import contributes too, and keyed by the whole import
+ * chain the way femtools/importmembers.py names its member views, which keeps
+ * the material keys and the solver member names in step.
+ *
+ * An inherited material with empty references means "everything of its source
+ * analysis", so it is expanded to just that import's elements. It must not
+ * become the catch-all for the importing analysis, which is why the empty-ref
+ * bookkeeping of the native pass is deliberately not shared with this one.
+ */
+void appendInheritedMaterials(
+    const Fem::FemAnalysis* analysis,
+    const std::string& keyPrefix,
+    std::vector<const Fem::FemAnalysisImport*>& chain,
+    std::vector<Fem::MaterialAssignment>& materials
+)
+{
+    for (auto* imp : Fem::Tools::analysisImports(analysis)) {
+        if (std::ranges::find(chain, imp) != chain.end()) {
+            continue;
+        }
+        auto* src = Base::freecad_cast<Fem::FemAnalysis*>(imp->Analysis.getValue());
+        if (!src) {
+            continue;
+        }
+        const char* name = imp->getNameInDocument();
+        const std::string pathPrefix = keyPrefix.empty()
+            ? std::string(name ? name : "Import")
+            : keyPrefix + "." + (name ? name : "Import");
+
+        chain.push_back(imp);
+        for (auto* obj : src->Group.getValues()) {
+            if (!obj || Fem::Tools::isMemberSuppressed(chain, obj)) {
+                continue;
+            }
+            if (obj->hasExtension(App::SuppressibleExtension::getExtensionClassTypeId())
+                && obj->getExtensionByType<App::SuppressibleExtension>()->Suppressed.getValue()) {
+                continue;
+            }
+            if (!appendMaterial(obj, materials)) {
+                continue;
+            }
+            Fem::MaterialAssignment& added = materials.back();
+            added.key = materialKey(obj);
+            added.inherited = true;
+            if (added.emptyRefs) {
+                added.refs.clear();
+                expandEmptyImportMaterialRefs(imp, pathPrefix, added.refs);
+                added.emptyRefs = added.refs.empty();
+            }
+            else {
+                std::vector<std::string> pathRefs;
+                for (const auto& ref : added.refs) {
+                    pathRefs.push_back(pathPrefix + "." + ref);
+                }
+                added.refs = std::move(pathRefs);
+            }
+        }
+
+        appendInheritedMaterials(src, pathPrefix, chain, materials);
+        chain.pop_back();
+    }
+}
+
+}  // namespace
+
+std::set<std::string> Fem::Tools::analysisToplevelElements(
+    const Fem::FemAnalysis* analysis,
+    const Fem::FemGeometry* geometry
+)
+{
+    std::set<std::string> elements;
+    if (geometry) {
+        const auto n = geometry->getComponents().size();
+        for (Fem::componentIdType i = 0; i < n; ++i) {
+            for (const auto& name : geometry->getToplevelElements(i)) {
+                elements.insert(name);
+            }
+        }
+    }
+    for (const auto& path : Fem::Tools::importedToplevelElements(analysis)) {
+        elements.insert(path);
+    }
+    return elements;
+}
+
+std::vector<Fem::MaterialAssignment> Fem::Tools::analysisMaterials(const Fem::FemAnalysis* analysis)
+{
+    std::vector<Fem::MaterialAssignment> materials;
+    if (!analysis) {
+        return materials;
+    }
+
+    for (auto* obj : analysis->Group.getValues()) {
+        if (obj) {
+            appendMaterial(obj, materials);
+        }
+    }
+    std::vector<const Fem::FemAnalysisImport*> chain;
+    appendInheritedMaterials(analysis, std::string(), chain, materials);
+    return materials;
+}
+
+std::map<std::string, Fem::MaterialOfElement> Fem::Tools::materialOfElements(
+    const Fem::FemAnalysis* analysis,
+    const Fem::FemGeometry* geometry,
+    const std::vector<Fem::MaterialAssignment>& materials
+)
+{
+    std::map<std::string, Fem::MaterialOfElement> assignment;
+
+    // Only a material of this analysis may claim what no other material names.
+    // An inherited one is capped at its import and was already written out to
+    // the elements of that import, so it never reaches here.
+    const Fem::MaterialAssignment* fallback = nullptr;
+    for (const auto& material : materials) {
+        if (material.emptyRefs) {
+            if (!material.inherited && !fallback) {
+                fallback = &material;
+            }
+            continue;
+        }
+        for (const auto& ref : material.refs) {
+            assignment[ref] = {material.key, material.label};
+        }
+    }
+
+    if (fallback) {
+        for (const auto& element : analysisToplevelElements(analysis, geometry)) {
+            assignment.emplace(element, Fem::MaterialOfElement {fallback->key, fallback->label});
+        }
+    }
+
+    return assignment;
 }

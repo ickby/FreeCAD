@@ -877,6 +877,22 @@ def makePostVtkFilterContours(doc, base_vtk_result, name="VtkFilterContours"):
     return obj
 
 
+def makePostFilterAttribute(doc, base_vtk_result, name="Attribution"):
+    """makePostFilterAttribute(document, base_vtk_result, [name]):
+    creates a FEM post processing filter that keeps the cells of chosen model entities
+    """
+    obj = doc.addObject("Fem::PostFilterPython", name)
+    from femobjects import post_attributefilter
+
+    post_attributefilter.PostAttributeFilter(obj)
+    base_vtk_result.addObject(obj)
+    if FreeCAD.GuiUp:
+        from femviewprovider import view_post_attributefilter
+
+        view_post_attributefilter.VPPostAttributeFilter(obj.ViewObject)
+    return obj
+
+
 def makePostFilterGlyph(doc, base_vtk_result, name="Glyph"):
     """makePostVtkFilterGlyph(document, [name]):
     creates a FEM post processing filter that visualizes vector fields with glyphs

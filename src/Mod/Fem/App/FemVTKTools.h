@@ -32,9 +32,14 @@
 
 #include "FemMeshObject.h"
 
+#include <string>
+#include <vector>
+
 
 namespace Fem
 {
+class FemAnalysis;
+
 // utility class to import/export read/write vtk mesh and result
 class FemExport FemVTKTools
 {
@@ -112,6 +117,51 @@ public:
     static void addArrayFromFunction(
         vtkSmartPointer<vtkDataObject>& data,
         const std::map<std::string, std::string>& functions
+    );
+
+    /// Per-cell index into the entity table, -1 where nothing could be said.
+    /// The same array name the mesh grids use, so a filter that reads one
+    /// reads the other.
+    static constexpr const char* ArrayEntityIds = "CellEntityIds";
+    /// Field data: the entity name of every index, in index order.
+    static constexpr const char* ArrayAttributionEntities = "AttributionEntities";
+    /// Field data: entity name, component key, component label - three values
+    /// per row. Component and material are functions of the entity name, not
+    /// of the cell, so they are side tables rather than per-cell arrays.
+    static constexpr const char* ArrayAttributionComponent = "AttributionComponent";
+    /// Field data: entity name, material key, material label - three per row.
+    static constexpr const char* ArrayAttributionMaterial = "AttributionMaterial";
+
+    /**
+     * Write onto a result what the analysis it came out of was made of.
+     *
+     * A result outlives the mesh and the geometry it was computed from: both
+     * are routinely replaced, and a reloaded document may hold neither. So the
+     * answer is resolved once, here, and stored on the grid itself, where
+     * PropertyPostDataObject serialises it along with the rest of the data.
+     * What is stored is the conclusion - which entity, which component, which
+     * material - never the objects it was drawn from.
+     *
+     * The material is the one the analysis was solved with. Reassigning a
+     * material afterwards says nothing about a result that already exists, so
+     * nothing re-runs this; the caller does, once, and only where it knows the
+     * result is the one it just computed.
+     *
+     * @param data      a grid, or the multi-block set a multi-frame result is.
+     *                  Every block describes the same mesh, so all of them are
+     *                  attributed alike.
+     * @param mesh      the mesh that was solved, groups and all.
+     * @param cellSources import path of every cell of @a mesh, indexed as
+     *                  elementId - 1, as SolveAssemblyResult reports it. Empty
+     *                  entries are cells the analysis meshed itself. May be
+     *                  shorter than the mesh, which reads as all-native.
+     * @param analysis  the analysis the components and materials are read from.
+     */
+    static void attributeResult(
+        vtkSmartPointer<vtkDataObject> data,
+        FemMesh& mesh,
+        const std::vector<std::string>& cellSources,
+        const FemAnalysis* analysis
     );
 };
 }  // namespace Fem

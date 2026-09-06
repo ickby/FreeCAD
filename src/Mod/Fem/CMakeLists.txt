@@ -252,6 +252,7 @@ if(BUILD_FEM_VTK_PYTHON)
     list(APPEND FemObjects_SRCS
         femobjects/base_fempostextractors.py
         femobjects/base_fempostvisualizations.py
+        femobjects/post_attributefilter.py
         femobjects/post_glyphfilter.py
         femobjects/post_extract1D.py
         femobjects/post_extract2D.py
@@ -400,6 +401,7 @@ SET(FemTestsApp_SRCS
     femtest/app/test_mesh.py
     femtest/app/test_object.py
     femtest/app/test_open.py
+    femtest/app/test_attribution.py
     femtest/app/test_preprocess.py
     femtest/app/test_selection_rules.py
     femtest/app/test_result.py
@@ -756,6 +758,7 @@ SET(FemGuiTaskPanels_SRCS
 
 if(BUILD_FEM_VTK_PYTHON)
     list(APPEND FemGuiTaskPanels_SRCS
+        femtaskpanels/task_post_attributefilter.py
         femtaskpanels/task_post_glyphfilter.py
         femtaskpanels/task_post_histogram.py
         femtaskpanels/task_post_lineplot.py
@@ -782,6 +785,7 @@ SET(FemGuiTests_SRCS
     femtest/gui/test_open.py
     femtest/gui/test_palette.py
     femtest/gui/test_reference_selection.py
+    femtest/gui/test_post_attribute_panel.py
     femtest/gui/test_view_panel.py
 )
 
@@ -859,6 +863,7 @@ if(BUILD_FEM_VTK_PYTHON)
     list(APPEND FemGuiViewProvider_SRCS
         femviewprovider/view_base_fempostextractors.py
         femviewprovider/view_base_fempostvisualization.py
+        femviewprovider/view_post_attributefilter.py
         femviewprovider/view_post_glyphfilter.py
         femviewprovider/view_post_histogram.py
         femviewprovider/view_post_lineplot.py

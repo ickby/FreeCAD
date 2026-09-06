@@ -1441,6 +1441,22 @@ class _SolverZ88(CommandManager):
         )
 
 
+class _PostFilterAttribute(CommandManager):
+    "The FEM_PostFilterAttribute command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_PostFilterAttribute", "Attribution Filter")
+        self.accel = "F, A"
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_PostFilterAttribute",
+            "Adds a post-processing filter that keeps only the cells of chosen model entities, "
+            "grouped by subelement, component or material",
+        )
+        self.is_active = "with_vtk_selresult"
+        self.do_activated = "add_filter_set_edit"
+
+
 class _PostFilterGlyph(CommandManager):
     "The FEM_PostFilterGlyph command definition"
 
@@ -1553,6 +1569,7 @@ FreeCADGui.addCommand("FEM_SolverZ88", _SolverZ88())
 FreeCADGui.addCommand("FEM_CompSolvers", _CompSolvers())
 
 if "BUILD_FEM_VTK_PYTHON" in FreeCAD.__cmake__:
+    FreeCADGui.addCommand("FEM_PostFilterAttribute", _PostFilterAttribute())
     FreeCADGui.addCommand("FEM_PostFilterGlyph", _PostFilterGlyph())
 
     # setup all visualization commands (register by importing)

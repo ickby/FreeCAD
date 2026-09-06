@@ -108,8 +108,9 @@ public:
     // Group pipeline handling
     void filterChanged(FemPostFilter* filter) override;
     void filterPipelineChanged(FemPostFilter* filter) override;
-    /// Wire every filter of the group to the one before it, or all to the input
-    void reconnectFilters();
+    /// Wire every filter of the group to the one before it, or all to the input.
+    /// @param except a filter not to touch afterwards; see recomputeChildren().
+    void reconnectFilters(const App::DocumentObject* except = nullptr);
 
     // frame handling
     bool hasFrames();

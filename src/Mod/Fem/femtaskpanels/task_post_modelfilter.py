@@ -74,6 +74,10 @@ class _TaskPanel(base_fempostpanel._BasePostTaskPanel):
 
         # Through the object, so the panel shares the parse the filter already
         # did rather than reading half a million cells again to draw a tree.
+        # Set before the tree is filled: filling it changes items, and a change
+        # arriving while we are settling one is not a new thing the user did.
+        self._settling = False
+
         self._attribution = self.obj.Proxy.attribution(self.obj)
 
         self.__configure_columns()
@@ -210,9 +214,15 @@ class _TaskPanel(base_fempostpanel._BasePostTaskPanel):
             item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
             item.setCheckState(0, QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked)
         else:
-            item.setFlags(
-                item.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsAutoTristate
-            )
+            # Checkable, but not ItemIsAutoTristate: that hands the propagation
+            # to Qt, which walks the children one at a time and reports each as
+            # a change of its own. Every one of those is a filter to rebuild and
+            # a document to recompute, so ticking a component of eight faces
+            # recomputed eight times. The state is set from the children in
+            # __update_parent and handed to them in _item_changed instead, and
+            # what the user did stays one thing.
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            item.setCheckState(0, QtCore.Qt.Unchecked)
         return item
 
     @staticmethod
@@ -249,20 +259,25 @@ class _TaskPanel(base_fempostpanel._BasePostTaskPanel):
         self._recompute()
 
     def _item_changed(self, item, column):
-        if column != 0:
+        """One tick by the user is one write and one recompute, whatever it moved."""
+        if column != 0 or self._settling:
             return
 
         tree = self.widget.ElementTree
+        self._settling = True
         tree.blockSignals(True)
-        # A parent hands its state down; a child hands its parent a new summary.
-        if item.data(0, _KEY_ROLE) is None:
-            state = item.checkState(0)
-            if state != QtCore.Qt.PartiallyChecked:
-                for i in range(item.childCount()):
-                    item.child(i).setCheckState(0, state)
-        elif item.parent() is not None:
-            self.__update_parent(item.parent())
-        tree.blockSignals(False)
+        try:
+            # A parent hands its state down; a child hands its parent a new summary.
+            if item.data(0, _KEY_ROLE) is None:
+                state = item.checkState(0)
+                if state != QtCore.Qt.PartiallyChecked:
+                    for i in range(item.childCount()):
+                        item.child(i).setCheckState(0, state)
+            elif item.parent() is not None:
+                self.__update_parent(item.parent())
+        finally:
+            tree.blockSignals(False)
+            self._settling = False
 
         self.obj.Elements = self.__checked_keys()
         self._recompute()

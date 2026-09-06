@@ -61,6 +61,7 @@ class TestPostModelFilterGui(unittest.TestCase):
 
         self.analysis = ObjectsFem.makeAnalysis(self.document)
         geometry = ObjectsFem.makeGeometryGroup(self.document)
+        self.geometry = geometry
         self.analysis.addObject(geometry)
         source = self.document.addObject("Part::Feature", "Source")
         source.Shape = Part.makeCompound(
@@ -270,3 +271,43 @@ class TestPostModelFilterGui(unittest.TestCase):
 
         written = {name: count for name, count, _total, _self in FemGui.perfReport()}
         self.assertEqual(written.get("post.toCoin.colors", 0), 1)
+
+    def test_ticking_a_group_recomputes_once(self):
+        """One tick is one recompute, however many rows it moves.
+
+        Qt will happily propagate a parent's tick to its children itself, one at
+        a time, reporting each as a change of its own. Every one of those is a
+        filter to rebuild and a document to recompute, so ticking a component of
+        eight faces recomputed eight times - seconds, on a real result.
+        """
+        # A group of one would tick the same either way and prove nothing, so the
+        # material is widened to hold both solids and the result attributed
+        # again, which is what puts two entities under one row.
+        material = self.document.getObject("Steel")
+        material.References = [(self.geometry, ["Solid1", "Solid2"])]
+        self.document.recompute()
+        self.pipeline.attribute(membertools.get_mesh_to_solve(self.analysis), self.analysis)
+        self.document.recompute()
+
+        self.filter.Attribute = "Material"
+        panel = self._panel()
+        tree = panel.widget.ElementTree
+
+        parent = max(
+            (tree.topLevelItem(i) for i in range(tree.topLevelItemCount())),
+            key=lambda item: item.childCount(),
+        )
+        self.assertGreater(parent.childCount(), 1, "need a group of several to tick")
+
+        recomputes = []
+        original = panel._recompute
+        panel._recompute = lambda: (recomputes.append(1), original())[1]
+
+        parent.setCheckState(0, QtCore.Qt.Checked)
+
+        self.assertEqual(len(recomputes), 1)
+        # and it still wrote down every entity the group holds
+        self.assertEqual(
+            sorted(self.filter.Elements),
+            sorted(parent.child(i).text(0) for i in range(parent.childCount())),
+        )

@@ -175,9 +175,13 @@ protected:
     vtkSmartPointer<vtkVertexGlyphFilter> m_points, m_pointsSurface;
     /// Whether the data last set up carries elements with curved edges
     bool m_curvedData {false};
+    /// The data the surface is read from, kept so the routing can be redone
+    vtkSmartPointer<vtkDataSet> m_surfaceSource;
 
 private:
     void updateProperties();
+    /// Point the surface and the surface edges at whatever this mode needs
+    void routeSurface();
     void update3D();
     void WritePointData(vtkPoints* points, vtkDataArray* normals, vtkDataArray* tcoords);
     void WriteColorData(bool ResetColorBarRange);

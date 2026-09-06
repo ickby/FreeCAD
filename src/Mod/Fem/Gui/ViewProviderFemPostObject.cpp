@@ -472,6 +472,8 @@ void ViewProviderFemPostObject::setDisplayMode(const char* ModeName)
         m_currentAlgorithm = m_pointsSurface;
     }
 
+    // Which mode is drawn decides whether the faces have to be gathered first.
+    routeSurface();
     updateVtk();
 
     ViewProviderDocumentObject::setDisplayMode(ModeName);
@@ -941,35 +943,47 @@ bool ViewProviderFemPostObject::setupPipeline()
     m_points->SetInputData(dset);
     m_wireframe->SetInputData(dset);
 
-    // Where the surface, and the edges drawn on top of it, are read from.
-    //
-    // A result of straight elements needs no help: the surface filter hands out
-    // one polygon per face and the sides of those polygons are the element
-    // edges. A curved one it triangulates over the midpoints - which is right
-    // for the surface, and wrong for the edges, because the sides of the little
-    // triangles cut across the face. So the outer faces are gathered first, as
-    // faces, and both the surface and the edges are taken from those. The
-    // surface comes out the same either way; the edges come out as the elements
-    // have them rather than as the triangulation left them.
-    const bool curved = FemVisibilityMask::hasCurvedCells(dset);
-    if (curved != m_curvedData || !m_surface->GetNumberOfInputConnections(0)) {
-        m_curvedData = curved;
-        if (curved) {
-            m_surface->SetInputConnection(m_faces3D->GetOutputPort());
-            m_wireframeSurface->SetInputConnection(m_faces3D->GetOutputPort());
-        }
-        else {
-            m_wireframeSurface->SetInputConnection(m_surface->GetOutputPort());
-        }
-    }
-    if (curved) {
-        m_faces3D->SetInputData(dset);
-    }
-    else {
-        m_surface->SetInputData(dset);
-    }
+    m_curvedData = FemVisibilityMask::hasCurvedCells(dset);
+    m_faces3D->SetInputData(dset);
+    m_surfaceSource = dset;
+    routeSurface();
 
     return true;
+}
+
+void ViewProviderFemPostObject::routeSurface()
+{
+    if (!m_surfaceSource) {
+        return;
+    }
+
+    // Where the surface, and the edges drawn over it, are read from.
+    //
+    // A result of straight elements needs no help: the surface filter hands out
+    // one polygon per face, and the sides of those polygons are the element
+    // edges. A curved one it triangulates over the midpoints - right for the
+    // surface, wrong for the edges, because the sides of the little triangles
+    // cut across the face. So for those the outer faces are gathered first, as
+    // faces, and the edges are read from them.
+    //
+    // Only for the modes that draw edges, though. Gathering the faces is not
+    // free - on a quadratic result it is the greater part of what drawing costs
+    // - and plain Surface, which is what a result comes up as, never asks for
+    // an element edge. It reads the data directly and pays nothing. Where the
+    // faces are gathered anyway the surface is taken from them too, so the
+    // boundary is walked once rather than twice.
+    const bool drawsEdges =
+        m_currentAlgorithm == m_surfaceEdges || m_currentAlgorithm == m_wireframeSurface;
+    const bool viaFaces = m_curvedData && drawsEdges;
+
+    if (viaFaces) {
+        m_surface->SetInputConnection(m_faces3D->GetOutputPort());
+        m_wireframeSurface->SetInputConnection(m_faces3D->GetOutputPort());
+    }
+    else {
+        m_surface->SetInputData(m_surfaceSource);
+        m_wireframeSurface->SetInputConnection(m_surface->GetOutputPort());
+    }
 }
 
 void ViewProviderFemPostObject::onChanged(const App::Property* prop)

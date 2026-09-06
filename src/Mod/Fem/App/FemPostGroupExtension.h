@@ -56,7 +56,15 @@ public:
     // Pipeline handling
     virtual void filterChanged(FemPostFilter*) {};          // settings change in filter
     virtual void filterPipelineChanged(FemPostFilter*) {};  // pipeline change in filter
-    virtual void recomputeChildren();
+    /**
+     * Touch every member so the document runs it again.
+     *
+     * @param except a member that must not be touched, for the case where it is
+     *               the one that asked: a filter rewiring itself is already
+     *               being executed, and touching it only has the document
+     *               execute it a second time for an answer it just gave.
+     */
+    virtual void recomputeChildren(const App::DocumentObject* except = nullptr);
     virtual FemPostObject* getLastPostObject();
     virtual bool holdsPostObject(FemPostObject* obj);
 

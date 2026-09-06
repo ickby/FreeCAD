@@ -132,13 +132,15 @@ bool FemPostGroupExtension::allowObject(App::DocumentObject* obj)
 }
 
 
-void FemPostGroupExtension::recomputeChildren()
+void FemPostGroupExtension::recomputeChildren(const App::DocumentObject* except)
 {
     for (const auto& obj : Group.getValues()) {
-        obj->touch();
+        if (obj != except) {
+            obj->touch();
+        }
 
         if (obj->hasExtension(Fem::FemPostGroupExtension::getExtensionClassTypeId())) {
-            obj->getExtension<Fem::FemPostGroupExtension>()->recomputeChildren();
+            obj->getExtension<Fem::FemPostGroupExtension>()->recomputeChildren(except);
         }
     }
 }

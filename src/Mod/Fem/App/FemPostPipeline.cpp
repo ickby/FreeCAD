@@ -384,7 +384,7 @@ void FemPostPipeline::onChanged(const Property* prop)
     }
 }
 
-void FemPostPipeline::reconnectFilters()
+void FemPostPipeline::reconnectFilters(const App::DocumentObject* except)
 {
     // we check if all connections are right and add new ones if needed
     std::vector<FemPostFilter*> objs = getFilter();
@@ -424,7 +424,7 @@ void FemPostPipeline::reconnectFilters()
     }
 
     // inform the downstream pipeline
-    recomputeChildren();
+    recomputeChildren(except);
 }
 
 void FemPostPipeline::filterChanged(FemPostFilter* filter)
@@ -454,7 +454,7 @@ void FemPostPipeline::filterChanged(FemPostFilter* filter)
     }
 }
 
-void FemPostPipeline::filterPipelineChanged(FemPostFilter*)
+void FemPostPipeline::filterPipelineChanged(FemPostFilter* filter)
 {
     // One of our filters has changed its active pipeline, so the chain has to be
     // wired up again. As we are cheap we just reconnect everything.
@@ -466,7 +466,12 @@ void FemPostPipeline::filterPipelineChanged(FemPostFilter*)
     // the colours of every visible child - over every point of them - for what
     // is a rewiring of VTK ports that no one outside can see. The membership
     // has not changed here; only what one filter does with what it is given.
-    reconnectFilters();
+    //
+    // The filter that asked is left out of the recompute that follows. It is
+    // being executed right now - switching its pipeline is something it does
+    // from inside execute() - and touching it only has the document run it
+    // again for the answer it is in the middle of giving.
+    reconnectFilters(filter);
 }
 
 void FemPostPipeline::updateFrameValues()

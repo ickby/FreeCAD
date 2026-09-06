@@ -291,8 +291,20 @@ MeshTopology Fem::buildMeshTopology(
         }
     }
 
-    // A named group at the dimension of a component it touches is a toplevel
-    // of that component. Anything below that dimension names part of one.
+    // A named group holding model elements is a toplevel of the component they
+    // stand on, whatever their dimension. The shell embedded in a solid is why
+    // it cannot be the top dimension alone that decides: its triangles are
+    // solved on and are none of the solid's, so the group is a part of the
+    // model in its own right and has to be listed as one. A group of nothing
+    // but skin has no model elements to offer here and never reaches this far.
+    //
+    // Which elements are model elements is the classification the merge left
+    // behind, and it is the one thing here that the mesh cannot work out for
+    // itself: a shell fused onto a solid and the solid's own skin are the same
+    // triangles on the same nodes, and only the geometry ever said which is
+    // which. A mesh that arrives without geometry has that answered by topology
+    // instead, and an embedded shell in one is indistinguishable from skin.
+    //
     // An element stands in one component only, so one flat array over the id
     // range says whether a toplevel has claimed it, whichever component it is.
     std::vector<char> claimed(elementIdRange, 0);
@@ -300,10 +312,6 @@ MeshTopology Fem::buildMeshTopology(
     for (const auto& group : groups) {
         result.componentOfGroup[group.name] = group.byComponent.begin()->first;
         for (const auto& [comp, ids] : group.modelByComponent) {
-            const int cdim = componentDim[static_cast<std::size_t>(comp)];
-            if (group.dimension != cdim) {
-                continue;
-            }
             result.componentToplevels[static_cast<std::size_t>(comp)].push_back(group.name);
             result.dimensionOfToplevel[group.name] = group.dimension;
             auto& owned = result.elementsOfToplevel[group.name];
@@ -378,21 +386,23 @@ MeshTopology Fem::buildMeshTopology(
         return nodes;
     };
 
-    auto meet = [](const std::vector<int>& first, const std::vector<int>& second) {
-        auto a = first.begin();
+    // Whether every node of the first is a node of the second, which is what
+    // being a part of something means here. Merely meeting it is not enough and
+    // says much less than it looks: the tube of a frame runs along the block it
+    // is welded to and touches it all the way, sharing the nodes of that seam
+    // without any of it being the block's. Only where the whole of a group sits
+    // on a toplevel is it part of it.
+    auto within = [](const std::vector<int>& first, const std::vector<int>& second) {
         auto b = second.begin();
-        while (a != first.end() && b != second.end()) {
-            if (*a < *b) {
-                ++a;
-            }
-            else if (*b < *a) {
+        for (int node : first) {
+            while (b != second.end() && *b < node) {
                 ++b;
             }
-            else {
-                return true;
+            if (b == second.end() || *b != node) {
+                return false;
             }
         }
-        return false;
+        return true;
     };
 
     std::map<std::string, std::vector<int>> nodesOfToplevel;
@@ -404,30 +414,49 @@ MeshTopology Fem::buildMeshTopology(
     }
 
     // An entity belongs to the toplevels it actually touches. Two materials on
-    // one body are two toplevels of the same component, and a face between
-    // them is not part of both.
+    // one body are two toplevels of the same component, and a face between them
+    // is not part of both.
+    //
+    // Only a toplevel of a higher dimension can own one: sharing nodes is a
+    // symmetric thing to say and ownership is not, so the dimensions are what
+    // break the tie, and two solids meeting at a face stay two solids rather
+    // than each becoming part of the other. This is the whole of the rule and
+    // it asks nothing of the geometry -- a shell embedded in a solid shares
+    // every node with it and is found here, a shell that merely stands beside
+    // one shares none and is not.
     {
         FEM_PERF_SCOPE("merge.topology.entityOwners");
         for (const auto& group : groups) {
             for (const auto& [comp, ids] : group.byComponent) {
                 const auto component = static_cast<std::size_t>(comp);
-                const int cdim = componentDim[component];
-                if (group.dimension == cdim) {
-                    continue;  // toplevel, not an entity of another toplevel
-                }
                 const auto entityNodes = nodesOf(ids);
-                for (const auto& toplevel : result.componentToplevels[component]) {
-                    if (!meet(entityNodes, nodesOfToplevel[toplevel])) {
-                        continue;
-                    }
-                    result.ownersOfEntity[group.name].push_back(toplevel);
-                    result.entitiesOfToplevel[toplevel].push_back(group.name);
-                }
                 int mask = result.dimensionMaskOfEntity[group.name];
                 if (group.dimension >= 0) {
                     mask |= (1 << group.dimension);
                 }
-                if (cdim >= 0) {
+                bool owned = false;
+                for (const auto& toplevel : result.componentToplevels[component]) {
+                    if (toplevel == group.name) {
+                        continue;
+                    }
+                    auto dim = result.dimensionOfToplevel.find(toplevel);
+                    if (dim == result.dimensionOfToplevel.end()
+                        || dim->second <= group.dimension) {
+                        continue;
+                    }
+                    if (!within(entityNodes, nodesOfToplevel[toplevel])) {
+                        continue;
+                    }
+                    result.ownersOfEntity[group.name].push_back(toplevel);
+                    result.entitiesOfToplevel[toplevel].push_back(group.name);
+                    mask |= (1 << dim->second);
+                    owned = true;
+                }
+                // Nothing above it claimed it and it is no toplevel either: a
+                // group left over like this is still part of whatever the
+                // component is, which is the most that can be said for it.
+                const int cdim = componentDim[component];
+                if (!owned && !result.dimensionOfToplevel.contains(group.name) && cdim >= 0) {
                     mask |= (1 << cdim);
                 }
                 result.dimensionMaskOfEntity[group.name] = mask;

@@ -28,6 +28,7 @@
 # include <unordered_map>
 # include <TopExp_Explorer.hxx>
 # include <TopoDS.hxx>
+# include <TopoDS_Iterator.hxx>
 # include <TopoDS_Shape.hxx>
 #endif
 
@@ -254,33 +255,67 @@ void FemGeometry::build_components()
         return;
     }
 
-    // Bottom-up: collect free candidates, group by shared vertices.
-    // Do not use Part::TopoShape::getSubShapes — too slow for large shapes.
+    // The pieces the analysis is built from: the direct children of the Shape,
+    // with the compounds holding them walked through.
+    //
+    // WHAT COUNTS AS A PIECE. A piece is something handed in to be analysed --
+    // a solid, a shell, a loose face, a wire, a bar. It is emphatically not
+    // "a shape contained in nothing else", and getting that backwards is the
+    // trap this replaced. A shell fused into a solid is a face of that solid,
+    // and a bar fused through one is an edge of it; being contained is exactly
+    // what makes them interesting, and a rule that excluded contained shapes
+    // would throw away every embedded element there is. What separates a piece
+    // from the solid's own skin is not containment but provenance, and the
+    // compound records provenance: the fuse leaves the pieces it was given as
+    // the children of its result, and imprints their copies inside the shapes
+    // they cut. So the children are the pieces, and nothing else is.
+    //
+    // HOW IT WALKS. Depth first over the children, in the order they were
+    // built, descending only into compounds and compsolids -- which group
+    // pieces without being pieces themselves -- and taking everything else as
+    // it comes. Nesting is not a curiosity to guard against but the normal
+    // shape of a chain: two import steps leave [Compound, Solid], and a
+    // partition that cuts a solid leaves [Compound, Compound]. A Shape that is
+    // no compound at all, which is what a single solid assigned from a script
+    // is, is one piece and is taken whole.
+    //
+    // It is cheaper than the sweeps it replaces, which is worth having on a
+    // shape of any size: those walked the whole shape once for every kind of
+    // element they were looking for, down to its vertices, where this touches
+    // the children and stops.
+    //
+    // A shell or a wire is kept as it stands rather than opened here;
+    // getToplevelElements() is where they become the faces and edges the rest
+    // of the analysis names them by.
+    //
+    // WHAT THIS ASKS OF THE PRODUCERS. Every step that writes a Shape has to
+    // put the pieces in as children of it, and all of them do: an import
+    // compounds what it brought in, a fuse hands back its result, a partition
+    // compounds what it cut. A Shape that instead buries a piece inside another
+    // shape would have that piece go unseen -- the boundary of what this can
+    // know, and cheap to honour when writing a new step.
     std::vector<TopoDS_Shape> free_candidate;
-
-    TopExp_Explorer explorer(shape.getShape(), TopAbs_SOLID);
-    for (; explorer.More(); explorer.Next()) {
-        free_candidate.push_back(explorer.Current());
-    }
-    explorer.Init(shape.getShape(), TopAbs_SHELL, TopAbs_SOLID);
-    for (; explorer.More(); explorer.Next()) {
-        free_candidate.push_back(explorer.Current());
-    }
-    explorer.Init(shape.getShape(), TopAbs_FACE, TopAbs_SHELL);
-    for (; explorer.More(); explorer.Next()) {
-        free_candidate.push_back(explorer.Current());
-    }
-    explorer.Init(shape.getShape(), TopAbs_WIRE, TopAbs_FACE);
-    for (; explorer.More(); explorer.Next()) {
-        free_candidate.push_back(explorer.Current());
-    }
-    explorer.Init(shape.getShape(), TopAbs_EDGE, TopAbs_WIRE);
-    for (; explorer.More(); explorer.Next()) {
-        free_candidate.push_back(explorer.Current());
-    }
-    explorer.Init(shape.getShape(), TopAbs_VERTEX, TopAbs_EDGE);
-    for (; explorer.More(); explorer.Next()) {
-        free_candidate.push_back(explorer.Current());
+    {
+        std::vector<TopoDS_Shape> pending {shape.getShape()};
+        while (!pending.empty()) {
+            const TopoDS_Shape current = pending.back();
+            pending.pop_back();
+            if (current.IsNull()) {
+                continue;
+            }
+            const TopAbs_ShapeEnum type = current.ShapeType();
+            if (type != TopAbs_COMPOUND && type != TopAbs_COMPSOLID) {
+                free_candidate.push_back(current);
+                continue;
+            }
+            // Reversed, so that popping the stack hands the children back in
+            // the order the step built them and the tree lists them that way.
+            std::vector<TopoDS_Shape> children;
+            for (TopoDS_Iterator it(current); it.More(); it.Next()) {
+                children.push_back(it.Value());
+            }
+            pending.insert(pending.end(), children.rbegin(), children.rend());
+        }
     }
 
     // A candidate can bridge candidates that were seen apart from each other, so
@@ -289,6 +324,7 @@ void FemGeometry::build_components()
     // components for geometry that shares topology and is therefore one.
     ComponentUnion candidate_union(free_candidate.size());
     Part::ShapeMapHasher hasher;
+    TopExp_Explorer explorer;
     for (std::size_t i = 0; i < free_candidate.size(); ++i) {
         explorer.Init(free_candidate[i], TopAbs_VERTEX, TopAbs_SHAPE);
         for (; explorer.More(); explorer.Next()) {

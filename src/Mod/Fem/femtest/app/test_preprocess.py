@@ -100,6 +100,79 @@ def _make_tet_mesh():
     return mesh, vol, [f1, f2, f3, f4]
 
 
+def _embedded_shell(document, wrapped=False):
+    """
+    A plate fused halfway into a box, and the names the fuse leaves behind.
+
+    The piece of the plate inside the box is a face of the solid and a model
+    element in its own right at the same time, which is the whole of the
+    embedded shell case. Returns the geometry, that face, and one of the
+    edges bounding it.
+
+    wrapped hands the same surface in as a Shell rather than as a bare Face,
+    which is the difference between a shell the user extruded and a face
+    they drew. The component analysis takes free shells and free faces in
+    the same sweep and expands a shell into its faces, so the two are meant
+    to arrive as the same toplevel and be classified alike; the callers run
+    both to hold that.
+    """
+    box = Part.makeBox(10, 10, 10)
+    plate = Part.makePlane(10, 10, FreeCAD.Vector(5, 0, 5), FreeCAD.Vector(0, 0, 1))
+    geom = document.addObject("Fem::FemGeometry", "Geometry")
+    geom.Shape = box.generalFuse([Part.Shell([plate]) if wrapped else plate])[0]
+    document.recompute()
+
+    inside = [
+        name
+        for name in geom.getToplevelElements(0)
+        if name.startswith("Face") and geom.getEntityOwners(name)
+    ]
+    assert len(inside) == 1, f"the plate reaches into the box once, not {len(inside)} times"
+    face = inside[0]
+
+    shape = geom.Shape
+    bound = shape.getElement(face).Edges[0]
+    edge = next(
+        f"Edge{i}" for i, other in enumerate(shape.Edges, 1) if other.isSame(bound)
+    )
+    return geom, face, edge
+
+
+
+def _embedded_bar(document, host="Solid"):
+    """
+    A bar fused into a solid, or into a face, and the names the fuse leaves.
+
+    The 1D twin of _embedded_shell: the bar is an edge of the shape it was
+    fused into and a model element in its own right at the same time. Returns
+    the geometry, the name of the host toplevel, the bar's entity name, and an
+    edge that belongs to the host alone -- the two edges have to come out
+    differently or the bar is not being told apart from the host's own wires.
+    """
+    if host == "Solid":
+        base = Part.makeBox(10, 10, 10)
+        bar = Part.makeLine(FreeCAD.Vector(2, 5, 5), FreeCAD.Vector(8, 5, 5))
+    else:
+        base = Part.makePlane(10, 10)
+        bar = Part.makeLine(FreeCAD.Vector(0, 5, 0), FreeCAD.Vector(10, 5, 0))
+
+    geom = document.addObject("Fem::FemGeometry", "Geometry")
+    geom.Shape = base.generalFuse([bar])[0]
+    document.recompute()
+
+    toplevels = geom.getToplevelElements(0)
+    bar_name = next(name for name in toplevels if name.startswith("Edge"))
+    host_name = next(name for name in toplevels if not name.startswith("Edge"))
+    # An edge the host owns and nothing else does. A solid reaches its own edges
+    # twice, once through each face, so the owners are compared as a set.
+    plain = next(
+        f"Edge{i}"
+        for i in range(1, len(geom.Shape.Edges) + 1)
+        if set(geom.getEntityOwners(f"Edge{i}")) == {host_name}
+    )
+    return geom, host_name, bar_name, plain
+
+
 def _make_two_solid_tet_mesh():
     """Two tetrahedra in a group each, so one solid can be hidden by name."""
     mesh = Fem.FemMesh()
@@ -198,6 +271,85 @@ class TestFemGeometry(unittest.TestCase):
             "\n{0}\n{1} run FEM TestFemGeometry tests {2}\n{0}".format(
                 100 * "*", 10 * "*", 55 * "*"
             )
+        )
+
+    def test_pieces_are_found_however_deep_the_compounds_are_stacked(self):
+        """
+        Compounds and compsolids group pieces without being pieces themselves.
+
+        A chain stacks them: every step that keeps its input compounds it with
+        what it adds, so three steps leave three levels, and a partition
+        compounds the pieces it cut inside that again. A compsolid arrives the
+        same way from a glued import. None of that changes what was handed in,
+        so the walk descends through every layer of grouping and stops at the
+        first thing that is not one.
+        """
+        box = _box()
+        far = Part.makeBox(10, 10, 10, FreeCAD.Vector(20, 0, 0))
+        plate = Part.makePlane(10, 10, FreeCAD.Vector(0, 0, 30), FreeCAD.Vector(0, 0, 1))
+        glued = _box().generalFuse([Part.makeBox(10, 10, 10, FreeCAD.Vector(10, 0, 0))])[0]
+        compsolid = Part.CompSolid(glued.Solids)
+
+        for label, shape, expected in (
+            ("one level", Part.makeCompound([Part.makeCompound([box]), far]),
+             ["Solid1", "Solid2"]),
+            ("five levels", Part.makeCompound([Part.makeCompound([Part.makeCompound(
+                [Part.makeCompound([Part.makeCompound([box])])])])]), ["Solid1"]),
+            ("an empty compound has nothing to give",
+             Part.makeCompound([Part.makeCompound([]), box]), ["Solid1"]),
+            ("a compsolid is a grouping too", compsolid, ["Solid1", "Solid2"]),
+            ("and stays one when compounded",
+             Part.makeCompound([Part.makeCompound([compsolid]), plate]),
+             ["Solid1", "Solid2", "Face12"]),
+        ):
+            with self.subTest(shape=label):
+                geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+                geom.Shape = shape
+                self.document.recompute()
+                toplevels = []
+                for component in range(geom.getComponentCount()):
+                    toplevels += geom.getToplevelElements(component)
+                self.assertEqual(sorted(toplevels), sorted(expected))
+
+    def test_a_bar_fused_through_a_solid_is_one_toplevel(self):
+        """
+        The fuse leaves the bar twice over.
+
+        Once as a piece of its result, and once imprinted inside the solid as an
+        edge that belongs to no wire. Only the first was handed in to be
+        analysed; taking the second for a piece as well gives the tree two rows
+        for one bar and counts a 1D element that is not there.
+        """
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        bar = Part.makeLine(FreeCAD.Vector(2, 5, 5), FreeCAD.Vector(8, 5, 5))
+        geom.Shape = _box().generalFuse([bar])[0]
+        self.document.recompute()
+
+        toplevels = geom.getToplevelElements(0)
+        self.assertEqual(sorted(toplevels), ["Edge1", "Solid1"])
+        self.assertEqual(len(toplevels), len(set(toplevels)), "one row to a piece")
+        self.assertEqual(
+            geom.getEntityOwners("Edge1"),
+            ["Solid1", "Edge1"],
+            "and it is still the bar embedded in the solid",
+        )
+
+    def test_a_bar_landing_on_a_face_leaves_no_vertex_toplevel(self):
+        """
+        Where the bar meets the face the fuse imprints a vertex, and it belongs
+        to no edge. That is a mark the fuse left behind rather than anything
+        handed in, so it is no piece of the model and gets no row of its own.
+        """
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        bar = Part.makeLine(FreeCAD.Vector(5, 5, 0), FreeCAD.Vector(5, 5, 10))
+        geom.Shape = Part.makePlane(10, 10).generalFuse([bar])[0]
+        self.document.recompute()
+
+        toplevels = geom.getToplevelElements(0)
+        self.assertEqual(sorted(toplevels), ["Edge1", "Face1"])
+        self.assertFalse(
+            [name for name in toplevels if name.startswith("Vertex")],
+            f"a vertex the fuse imprinted is no piece: {toplevels}",
         )
 
     def test_component_detection_solid(self):
@@ -1872,6 +2024,124 @@ class TestMeshTopology(unittest.TestCase):
         self.assertEqual(toplevels, ["Component1_Volume"])
         self.assertEqual(group.getAnalysisDimension("Component1_Volume"), 3)
 
+    def test_a_shell_in_a_solid_is_a_mesh_toplevel_and_names_the_solid(self):
+        """
+        The mesh answers this for itself, from its own nodes.
+
+        A group holding model elements is a toplevel whatever its dimension, so
+        the shell is listed beside the solid rather than filed away as a part of
+        it. Which of its neighbours it belongs to is then a question about nodes
+        alone: the whole of the shell covering the block sits on the block's
+        nodes and is part of it, while the piece hanging off the side merely
+        shares the seam and is part of nothing. Meeting a solid is not being
+        inside one, and only the second is worth saying.
+        """
+        geom, covered, _ = _embedded_shell(self.document)
+        free = next(
+            name
+            for name in geom.getToplevelElements(0)
+            if name.startswith("Face") and name != covered
+        )
+
+        mesh = Fem.FemMesh()
+        for node, (x, y, z) in enumerate(
+            [
+                (0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0),
+                (0, 0, 10), (10, 0, 10), (10, 10, 10), (0, 10, 10),
+                (20, 0, 10), (20, 10, 10),
+            ],
+            start=1,
+        ):  # fmt: skip
+            mesh.addNode(x, y, z, node)
+        volume = mesh.addVolume([1, 2, 3, 4, 5, 6, 7, 8])
+        # The whole top of the block, on nothing but the block's own nodes.
+        covering = [mesh.addFace([5, 6, 7]), mesh.addFace([5, 7, 8])]
+        # Hanging off the side, holding the seam nodes 6 and 7 in common.
+        overhang = [mesh.addFace([6, 9, 10]), mesh.addFace([6, 10, 7])]
+        for name, kind, ids in (
+            ("Solid1", "Volume", [volume]),
+            (covered, "Face", covering),
+            (free, "Face", overhang),
+        ):
+            mesh.addGroupElements(mesh.addGroup(name, kind), ids)
+
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        group.Shape = geom
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+        _ = group.FemMesh
+
+        self.assertEqual(
+            sorted(group.getToplevelElements(0)),
+            sorted(["Solid1", covered, free]),
+            "a group of model elements is a toplevel whatever its dimension",
+        )
+        self.assertEqual(group.getEntityOwners(covered), ["Solid1"])
+        self.assertEqual(
+            group.getEntityOwners(free), [], "sharing a seam is not sitting inside"
+        )
+        self.assertEqual(group.getAnalysisDimension(covered), 2)
+        self.assertEqual(group.getAnalysisDimension("Solid1"), 3)
+
+    def test_a_bar_in_a_solid_is_a_mesh_toplevel_and_names_the_solid(self):
+        """
+        The 1D twin of the shell case, and a sharper test of the same rule.
+
+        A bar can touch a solid at a single node, which is all "shares nodes"
+        ever asked for, so a rule built on meeting rather than on being inside
+        would call the bar that merely ends on the block part of it. Only the
+        bar whose every node is the block's is inside it.
+        """
+        box = Part.makeBox(10, 10, 10)
+        inside = Part.makeLine(FreeCAD.Vector(2, 5, 5), FreeCAD.Vector(8, 5, 5))
+        touching = Part.makeLine(FreeCAD.Vector(10, 10, 10), FreeCAD.Vector(20, 10, 10))
+        geom = self.document.addObject("Fem::FemGeometry", "Geometry")
+        geom.Shape = box.generalFuse([inside, touching])[0]
+        self.document.recompute()
+
+        bars = [n for n in geom.getToplevelElements(0) if n.startswith("Edge")]
+        self.assertEqual(len(bars), 2, f"both bars are pieces of their own: {bars}")
+        embedded = next(n for n in bars if geom.getEntityOwners(n))
+        beside = next(n for n in bars if not geom.getEntityOwners(n))
+
+        mesh = Fem.FemMesh()
+        for node, (x, y, z) in enumerate(
+            [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0),
+             (0, 0, 10), (10, 0, 10), (10, 10, 10), (0, 10, 10), (20, 10, 10)],
+            start=1,
+        ):  # fmt: skip
+            mesh.addNode(x, y, z, node)
+        volume = mesh.addVolume([1, 2, 3, 4, 5, 6, 7, 8])
+        # Both of its nodes are the block's, so it runs inside it.
+        within = mesh.addEdge([1, 7])
+        # One end on the block and one beyond it: it meets the block, no more.
+        outside = mesh.addEdge([7, 9])
+        for name, ids in (("Solid1", [volume]),):
+            mesh.addGroupElements(mesh.addGroup(name, "Volume"), ids)
+        for name, ids in ((embedded, [within]), (beside, [outside])):
+            mesh.addGroupElements(mesh.addGroup(name, "Edge"), ids)
+
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        group.Shape = geom
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+        _ = group.FemMesh
+
+        self.assertEqual(
+            sorted(group.getToplevelElements(0)),
+            sorted(["Solid1", embedded, beside]),
+            "a bar is a toplevel of the mesh like anything else that is solved",
+        )
+        self.assertEqual(group.getEntityOwners(embedded), ["Solid1"])
+        self.assertEqual(
+            group.getEntityOwners(beside), [], "ending on the block is not running through it"
+        )
+        self.assertEqual(group.getAnalysisDimension(embedded), 1)
+
     def test_two_disconnected_solids_are_two_components(self):
         group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
         child = self.document.addObject("Fem::FemMeshObject", "MeshA")
@@ -2758,44 +3028,6 @@ class TestExportHighest(unittest.TestCase):
         entities = {name: int(value) for name, value in group.EntityDimension.items()}
         self.assertEqual(entities["Solid1"], 2)
 
-    @staticmethod
-    def _embedded_shell(document, wrapped=False):
-        """
-        A plate fused halfway into a box, and the names the fuse leaves behind.
-
-        The piece of the plate inside the box is a face of the solid and a model
-        element in its own right at the same time, which is the whole of the
-        embedded shell case. Returns the geometry, that face, and one of the
-        edges bounding it.
-
-        wrapped hands the same surface in as a Shell rather than as a bare Face,
-        which is the difference between a shell the user extruded and a face
-        they drew. The component analysis takes free shells and free faces in
-        the same sweep and expands a shell into its faces, so the two are meant
-        to arrive as the same toplevel and be classified alike; the callers run
-        both to hold that.
-        """
-        box = Part.makeBox(10, 10, 10)
-        plate = Part.makePlane(10, 10, FreeCAD.Vector(5, 0, 5), FreeCAD.Vector(0, 0, 1))
-        geom = document.addObject("Fem::FemGeometry", "Geometry")
-        geom.Shape = box.generalFuse([Part.Shell([plate]) if wrapped else plate])[0]
-        document.recompute()
-
-        inside = [
-            name
-            for name in geom.getToplevelElements(0)
-            if name.startswith("Face") and geom.getEntityOwners(name)
-        ]
-        assert len(inside) == 1, f"the plate reaches into the box once, not {len(inside)} times"
-        face = inside[0]
-
-        shape = geom.Shape
-        bound = shape.getElement(face).Edges[0]
-        edge = next(
-            f"Edge{i}" for i, other in enumerate(shape.Edges, 1) if other.isSame(bound)
-        )
-        return geom, face, edge
-
     def test_an_embedded_shell_is_one_of_its_own_owners(self):
         """
         The solid it was fused into is not all a shell inside one belongs to.
@@ -2809,7 +3041,7 @@ class TestExportHighest(unittest.TestCase):
                 self._an_embedded_shell_is_one_of_its_own_owners(wrapped)
 
     def _an_embedded_shell_is_one_of_its_own_owners(self, wrapped):
-        geom, face, edge = self._embedded_shell(self.document, wrapped)
+        geom, face, edge = _embedded_shell(self.document, wrapped)
 
         self.assertIn("Solid1", geom.getEntityOwners(face))
         self.assertIn(face, geom.getEntityOwners(face), "an embedded toplevel owns itself")
@@ -2834,7 +3066,7 @@ class TestExportHighest(unittest.TestCase):
                 self._an_embedded_shell_is_meshed_but_its_boundary_is_not(wrapped)
 
     def _an_embedded_shell_is_meshed_but_its_boundary_is_not(self, wrapped):
-        geom, face, edge = self._embedded_shell(self.document, wrapped)
+        geom, face, edge = _embedded_shell(self.document, wrapped)
 
         mesh = Fem.FemMesh()
         mesh.addNode(0, 0, 0, 1)
@@ -2865,6 +3097,59 @@ class TestExportHighest(unittest.TestCase):
         self.assertEqual(dims[volume - 1], 3)
         self.assertEqual(dims[triangle - 1], 2, "the shell inside the solid is solved on")
         self.assertEqual(dims[segment - 1], -1, "what bounds the shell is not a beam")
+
+    def test_an_embedded_bar_is_meshed_but_its_host_edges_are_not(self):
+        """
+        The 1D twin of the embedded shell, for both kinds of host.
+
+        A bar fused into a solid or a face is solved on, while the wires of the
+        host it runs through are where its elements end and are not. Nothing in
+        the mesh tells the two apart -- both are segments on the host's nodes --
+        so it is the bar being a model element of the geometry that has to carry
+        it, exactly as for the shell one dimension up.
+        """
+        for host in ("Solid", "Face"):
+            with self.subTest(host=host):
+                self._an_embedded_bar_is_meshed(host)
+
+    def _an_embedded_bar_is_meshed(self, host):
+        geom, host_name, bar, plain = _embedded_bar(self.document, host)
+
+        mesh = Fem.FemMesh()
+        for node, (x, y, z) in enumerate(
+            [(0, 0, 0), (10, 0, 0), (10, 10, 0), (0, 10, 0),
+             (0, 0, 10), (10, 0, 10), (10, 10, 10), (0, 10, 10)],
+            start=1,
+        ):  # fmt: skip
+            mesh.addNode(x, y, z, node)
+        if host == "Solid":
+            host_elements = [mesh.addVolume([1, 2, 3, 4, 5, 6, 7, 8])]
+            host_kind, host_dimension = "Volume", 3
+        else:
+            host_elements = [mesh.addFace([1, 2, 3]), mesh.addFace([1, 3, 4])]
+            host_kind, host_dimension = "Face", 2
+        beam = mesh.addEdge([1, 3])
+        host_edge = mesh.addEdge([1, 2])
+        for name, kind, ids in (
+            (host_name, host_kind, host_elements),
+            (bar, "Edge", [beam]),
+            (plain, "Edge", [host_edge]),
+        ):
+            mesh.addGroupElements(mesh.addGroup(name, kind), ids)
+
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        group.Shape = geom
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+        _ = group.FemMesh
+
+        dims = list(group.CellDimension)
+        for element in host_elements:
+            self.assertEqual(dims[element - 1], host_dimension)
+        self.assertEqual(dims[beam - 1], 1, "the bar inside the host is solved on")
+        self.assertEqual(dims[host_edge - 1], -1, "a wire of the host is no beam")
 
     def test_model_element_ids_read_the_classification(self):
         """meshtools reads the dimensions off the group instead of guessing."""

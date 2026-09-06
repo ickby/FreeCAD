@@ -415,6 +415,49 @@ class TestViewPanelGui(unittest.TestCase):
         )
         self.assertEqual(bare.tooltip(), bare.display_name(), "nothing to spell out")
 
+    def test_an_embedded_bar_names_the_solid_it_runs_through(self):
+        """
+        The badge is about dimension, not about shells.
+
+        A bar fused through a solid is an edge of it and a model element of its
+        own, the same double life a shell leads one dimension up, and the row
+        has to say so for the same reason. A bar that only stands beside the
+        block belongs to nothing else and stays bare.
+        """
+        block = self.document.addObject("Part::Feature", "Block")
+        block.Shape = Part.makeBox(10, 10, 10)
+        bars = self.document.addObject("Part::Feature", "Bars")
+        bars.Shape = Part.makeCompound(
+            [
+                # Through the middle of the block.
+                Part.makeLine(FreeCAD.Vector(2, 5, 5), FreeCAD.Vector(8, 5, 5)),
+                # Ending on a corner of it and running away.
+                Part.makeLine(FreeCAD.Vector(10, 10, 10), FreeCAD.Vector(20, 10, 10)),
+            ]
+        )
+        self.imp.Import = [block, bars]
+        self.imp.Embed = "Embed import"
+        self.document.recompute()
+
+        names = _display_names(self.explorer._model)
+        edges = sorted(name for name in names if name.startswith("Edge"))
+        self.assertEqual(len(edges), 2, f"a row for each bar: {edges}")
+        self.assertEqual(
+            len([name for name in edges if name.endswith("[1D, in Solid1]")]),
+            1,
+            f"the bar through the block says whose it is: {edges}",
+        )
+        self.assertEqual(
+            len([name for name in edges if name.endswith("[1D]")]),
+            1,
+            f"the bar beside it has nothing to add: {edges}",
+        )
+        self.assertEqual(
+            sorted(name for name in names if name.startswith("Solid")),
+            ["Solid1 [3D]"],
+            "and the block belongs to nothing but itself",
+        )
+
     def test_an_unrelated_editor_leaves_the_tree_alone(self):
         """Only a step that previews its input takes the tree with it."""
         self.explorer.slotInEdit(self.group.ViewObject)

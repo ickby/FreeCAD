@@ -128,6 +128,24 @@ def set_tool_preview(obj, preview):
     subject.ViewObject.setToolPreview(preview.shape, None, TOOL_PREVIEW_TRANSPARENCY)
 
 
+def set_shape_preview(obj, shape, color=None, transparency=TOOL_PREVIEW_TRANSPARENCY):
+    """
+    Show any shape over the geometry a chain step edits.
+
+    The same overlay the partition step shows its cutting plane on. Nothing
+    about it is particular to a cutting tool: a step that makes faces can show
+    the faces it would make, which is worth more to the user than a description
+    of them.
+    """
+    subject = edit_subject(obj)
+    if subject is None or subject.ViewObject is None:
+        return
+    if shape is None or shape.isNull():
+        subject.ViewObject.clearToolPreview()
+        return
+    subject.ViewObject.setToolPreview(shape, color, transparency)
+
+
 def clear_tool_preview(obj):
     """Drop the cutting-tool overlay from the geometry a chain step is picked on."""
     subject = edit_subject(obj)
@@ -236,6 +254,29 @@ class VPGeometryPartition(VPGeometryStep):
     def unsetEdit(self, vobj, mode=0):
         clear_tool_preview(vobj.Object)
         return super().unsetEdit(vobj, mode)
+
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        return None
+
+
+class VPGeometryShellBuilder(VPGeometryStep):
+    """View provider for GeometryShellBuilder."""
+
+    def __init__(self, vobj):
+        super().__init__(vobj)
+
+    def getIcon(self):
+        return ":/icons/FEM_GeometryShellBuilder.svg"
+
+    def setEdit(self, vobj, mode=0):
+        from femtaskpanels import task_geometry_shellbuilder
+
+        return super().setEdit(
+            vobj, mode, task_geometry_shellbuilder._ShellBuilderTaskPanel, hide_mesh=False
+        )
 
     def dumps(self):
         return None

@@ -674,6 +674,23 @@ class ReferenceSlot(QtGui.QFrame):
         layout.addLayout(status_row)
         self.setLayout(layout)
 
+    def set_visible_rows(self, rows):
+        """
+        Hold the pick area to a number of rows instead of letting it sprawl.
+
+        A pick list is a tree, and a tree asks for room enough to be worth
+        scrolling. That is the wrong instinct for a box that takes two faces,
+        and on a crowded panel it is the wrong instinct for any of them: the
+        height it takes is height the panel's own list does not get. A slot that
+        does not ask keeps the size it always had.
+        """
+        if self.list is None:
+            return
+        height = self.list.sizeHintForRow(0)
+        if height <= 0:
+            height = QtGui.QFontMetrics(self.list.font()).height() + 6
+        self.list.setFixedHeight(rows * height + 2 * self.list.frameWidth())
+
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
 

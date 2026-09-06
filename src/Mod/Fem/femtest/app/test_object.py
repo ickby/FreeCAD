@@ -253,6 +253,9 @@ class TestObjectType(unittest.TestCase):
         self.assertEqual(
             "Fem::GeometryPartition", type_of_obj(ObjectsFem.makeGeometryPartition(doc))
         )
+        self.assertEqual(
+            "Fem::GeometryShellBuilder", type_of_obj(ObjectsFem.makeGeometryShellBuilder(doc))
+        )
         materialsolid = ObjectsFem.makeMaterialSolid(doc)
         self.assertEqual("Fem::MaterialCommon", type_of_obj(ObjectsFem.makeMaterialFluid(doc)))
         self.assertEqual("Fem::MaterialCommon", type_of_obj(materialsolid))
@@ -456,6 +459,9 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(is_of_type(ObjectsFem.makeGeometryGroup(doc), "Fem::GeometryGroup"))
         self.assertTrue(is_of_type(ObjectsFem.makeGeometryImport(doc), "Fem::GeometryImport"))
         self.assertTrue(is_of_type(ObjectsFem.makeGeometryPartition(doc), "Fem::GeometryPartition"))
+        self.assertTrue(
+            is_of_type(ObjectsFem.makeGeometryShellBuilder(doc), "Fem::GeometryShellBuilder")
+        )
         materialsolid = ObjectsFem.makeMaterialSolid(doc)
         self.assertTrue(is_of_type(ObjectsFem.makeMaterialFluid(doc), "Fem::MaterialCommon"))
         self.assertTrue(is_of_type(materialsolid, "Fem::MaterialCommon"))
@@ -824,6 +830,10 @@ class TestObjectType(unittest.TestCase):
         geometry_partition = ObjectsFem.makeGeometryPartition(doc)
         self.assertTrue(is_derived_from(geometry_partition, "Fem::GeometryPartition"))
 
+        # GeometryShellBuilder
+        geometry_shellbuilder = ObjectsFem.makeGeometryShellBuilder(doc)
+        self.assertTrue(is_derived_from(geometry_shellbuilder, "Fem::GeometryShellBuilder"))
+
         # Material Fluid
         material_fluid = ObjectsFem.makeMaterialFluid(doc)
         self.assertTrue(is_derived_from(material_fluid, "App::DocumentObject"))
@@ -1148,6 +1158,9 @@ class TestObjectType(unittest.TestCase):
         self.assertTrue(
             ObjectsFem.makeGeometryPartition(doc).isDerivedFrom("Fem::FemGeometryPython")
         )
+        self.assertTrue(
+            ObjectsFem.makeGeometryShellBuilder(doc).isDerivedFrom("Fem::FemGeometryPython")
+        )
         materialsolid = ObjectsFem.makeMaterialSolid(doc)
         self.assertTrue(
             ObjectsFem.makeMaterialFluid(doc).isDerivedFrom("App::MaterialObjectPython")
@@ -1316,6 +1329,7 @@ def create_all_fem_objects_doc(doc):
     analysis.addObject(ObjectsFem.makeGeometryGroup(doc))
     analysis.addObject(ObjectsFem.makeGeometryImport(doc))
     analysis.addObject(ObjectsFem.makeGeometryPartition(doc))
+    analysis.addObject(ObjectsFem.makeGeometryShellBuilder(doc))
 
     analysis.addObject(ObjectsFem.makeMaterialFluid(doc))
     mat = analysis.addObject(ObjectsFem.makeMaterialSolid(doc))[0]

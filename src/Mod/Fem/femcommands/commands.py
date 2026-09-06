@@ -142,6 +142,21 @@ class _GeometryPartition(CommandManager):
         self.do_activated = "add_geometry_set_edit"
 
 
+class _GeometryShellBuilder(CommandManager):
+    "The FEM_GeometryShellBuilder command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.pixmap = "FEM_GeometryShellBuilder"
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_GeometryShellBuilder", "Shell Builder")
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_GeometryShellBuilder",
+            "Replaces thin solids by faces that carry a shell thickness",
+        )
+        self.is_active = "with_geometry_chain_input"
+        self.do_activated = "add_geometry_set_edit"
+
+
 class _ClippingPlaneAdd(CommandManager):
     "The FEM_ClippingPlaneAdd command definition"
 
@@ -1504,6 +1519,7 @@ FreeCADGui.addCommand("FEM_Analysis", _Analysis())
 FreeCADGui.addCommand("FEM_AnalysisImport", _AnalysisImport())
 FreeCADGui.addCommand("FEM_GeometryImport", _GeometryImport())
 FreeCADGui.addCommand("FEM_GeometryPartition", _GeometryPartition())
+FreeCADGui.addCommand("FEM_GeometryShellBuilder", _GeometryShellBuilder())
 FreeCADGui.addCommand("FEM_ClippingPlaneAdd", _ClippingPlaneAdd())
 FreeCADGui.addCommand("FEM_ClippingPlaneRemoveAll", _ClippingPlaneRemoveAll())
 FreeCADGui.addCommand("FEM_ConstantVacuumPermittivity", _ConstantVacuumPermittivity())

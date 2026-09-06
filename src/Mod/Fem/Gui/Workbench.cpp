@@ -120,6 +120,7 @@ Gui::ToolBarItem* Workbench::setupToolBars() const
     geometry->setCommand("Geometry preprocessing");
     *geometry << "FEM_GeometryImport"
               << "FEM_GeometryPartition"
+              << "FEM_GeometryShellBuilder"
               << "FEM_AnalysisImport";
 
     Gui::ToolBarItem* electromag = new Gui::ToolBarItem(root);
@@ -250,6 +251,7 @@ Gui::MenuItem* Workbench::setupMenuBar() const
     geomprep->setCommand("&Geometry preprocessing");
     *geomprep << "FEM_GeometryImport"
               << "FEM_GeometryPartition"
+              << "FEM_GeometryShellBuilder"
               << "FEM_AnalysisImport";
 
     Gui::MenuItem* elec = new Gui::MenuItem;

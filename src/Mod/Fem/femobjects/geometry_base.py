@@ -26,6 +26,7 @@ __author__ = "Stefan Tröger"
 __url__ = "https://www.freecad.org"
 
 import Part
+from FreeCAD import Base
 
 from . import base_fempythonobject
 
@@ -72,6 +73,24 @@ class GeometryBase(base_fempythonobject.BaseFemPythonObject):
     def setup_properties(self, obj):
         for prop in self._get_properties():
             prop.add_to_object(obj)
+
+    def onDocumentRestored(self, obj):
+        """
+        Give an older document the properties its step has since gained.
+
+        A property is written to the file only if it was there when the file
+        was saved, and a step restored without one throws the moment its
+        execute reaches for it - leaving the step invalid and its result the
+        stale shape from the last save, which looks like the tool quietly
+        ignoring every setting. Adding what is missing on the way in is what
+        lets a step gain a setting without breaking the documents that were
+        made before it had one.
+        """
+        for prop in self._get_properties():
+            try:
+                obj.getPropertyByName(prop.name)
+            except Base.PropertyError:
+                prop.add_to_object(obj)
 
     def _get_properties(self):
         return [

@@ -118,6 +118,22 @@ def makeGeometryPartition(doc, name="GeometryPartition"):
     return obj
 
 
+def makeGeometryShellBuilder(doc, name="GeometryShellBuilder"):
+    """Add a shell builder step to the analysis geometry chain."""
+    obj = doc.addObject("Fem::FemGeometryPython", name)
+    from femobjects import geometry_shellbuilder
+
+    geometry_shellbuilder.GeometryShellBuilder(obj)
+    if FreeCAD.GuiUp:
+        try:
+            from femviewprovider import view_geometry_base
+
+            view_geometry_base.VPGeometryShellBuilder(obj.ViewObject)
+        except ImportError:
+            pass
+    return obj
+
+
 # ********* constant objects *********************************************************************
 def makeConstantVacuumPermittivity(doc, name="ConstantVacuumPermittivity"):
     """makeConstantVacuumPermittivity(document, [name]):

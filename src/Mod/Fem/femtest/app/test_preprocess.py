@@ -5429,3 +5429,2133 @@ class TestAnalysisImport(unittest.TestCase):
 
         self.assertNotEqual(inner.SourceRevision, before[0])
         self.assertNotEqual(outer.SourceRevision, before[1], "the outer instance draws Leg too")
+
+
+def _same_curve(one, other, tolerance=1e-6):
+    """Whether two edges that meet lie on one and the same underlying curve."""
+    kind = type(one.Curve).__name__
+    if kind != type(other.Curve).__name__:
+        return False
+    if kind == "Line":
+        along = one.tangentAt((one.FirstParameter + one.LastParameter) / 2.0)
+        across = other.tangentAt((other.FirstParameter + other.LastParameter) / 2.0)
+        if abs(abs(along.dot(across)) - 1.0) > tolerance:
+            return False
+        between = other.Vertexes[0].Point - one.Vertexes[0].Point
+        return (between - along * between.dot(along)).Length < tolerance
+    if kind == "Circle":
+        return (
+            abs(one.Curve.Radius - other.Curve.Radius) < tolerance
+            and (one.Curve.Center - other.Curve.Center).Length < tolerance
+        )
+    return False
+
+
+class TestGeometryShellBuilder(unittest.TestCase):
+    fcc_print("import TestGeometryShellBuilder")
+
+    def setUp(self):
+        self.document = FreeCAD.newDocument(self.__class__.__name__)
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.document.Name)
+
+    def _chain(self, *shapes):
+        """Geometry group holding an import of shapes plus a shell builder step."""
+        sources = []
+        for i, shape in enumerate(shapes):
+            obj = self.document.addObject("Part::Feature", f"Source{i}")
+            obj.Shape = shape
+            sources.append(obj)
+
+        group = ObjectsFem.makeGeometryGroup(self.document)
+        imp = ObjectsFem.makeGeometryImport(self.document)
+        imp.Import = sources
+        group.Group = [imp]
+        self.document.recompute()
+
+        shell = ObjectsFem.makeGeometryShellBuilder(self.document)
+        group.Group = [imp, shell]
+        self.document.recompute()
+        self.assertEqual(shell.Base, imp, "the group must wire the step input")
+        return group, imp, shell
+
+    @staticmethod
+    def _tube():
+        """Square hollow section, rounded inside and out, constant 1.5 wall."""
+
+        def bar(size, radius, offset):
+            box = Part.makeBox(size, size, 200, FreeCAD.Vector(offset, offset, 0))
+            long_edges = [
+                edge
+                for edge in box.Edges
+                if abs(edge.Vertexes[0].Point.z - edge.Vertexes[1].Point.z) > 1e-7
+            ]
+            return box.makeFillet(radius, long_edges)
+
+        return bar(25, 3.0, 0).cut(bar(22, 1.5, 1.5))
+
+    @staticmethod
+    def _flexure():
+        """A 0.6 mm blade between two stubs, as one solid."""
+        return (
+            Part.makeBox(12, 10, 12, FreeCAD.Vector(0, 0, -5.7))
+            .fuse(Part.makeBox(38, 10, 0.6, FreeCAD.Vector(12, 0, 0)))
+            .fuse(Part.makeBox(12, 10, 12, FreeCAD.Vector(50, 0, -5.7)))
+            .removeSplitter()
+        )
+
+    def test_plate_becomes_one_face(self):
+        _, _, shell = self._chain(Part.makeBox(40, 30, 4))
+        self.assertEqual(len(shell.Shape.Solids), 0, "the solid must be gone")
+        self.assertEqual(len(shell.Shape.Faces), 1)
+        self.assertAlmostEqual(shell.Shape.Faces[0].Area, 1200.0, delta=1e-6)
+        self.assertEqual(len(shell.Thickness), 1)
+        self.assertAlmostEqual(shell.Thickness[0], 4.0, delta=1e-6)
+
+    def test_skin_offset_keeps_the_face_and_records_the_offset(self):
+        _, _, shell = self._chain(Part.makeBox(40, 30, 4))
+        shell.Method = "Skin offset"
+        shell.Side = "Outer"
+        self.document.recompute()
+
+        face = shell.Shape.Faces[0]
+        self.assertAlmostEqual(face.Area, 1200.0, delta=1e-6)
+        # The surface is one of the two wall faces rather than anything built
+        # between them, and the offset says which. Which of the two counts as
+        # the outer one is arbitrary for a lone plate - both are the same
+        # distance from its centre - so the test only asks that it is a wall.
+        self.assertAlmostEqual(abs(shell.Offset[0]), 0.5, delta=1e-9)
+        self.assertIn(round(face.CenterOfMass.z, 6), (0.0, 4.0))
+
+    def test_midsurface_sits_between_the_walls(self):
+        _, _, shell = self._chain(Part.makeBox(40, 30, 4))
+        shell.Method = "Midsurface"
+        self.document.recompute()
+
+        self.assertAlmostEqual(shell.Offset[0], 0.0, delta=1e-9)
+        self.assertAlmostEqual(shell.Shape.Faces[0].CenterOfMass.z, 2.0, delta=1e-6)
+
+    def test_tube_midsurface_conserves_the_material(self):
+        tube = self._tube()
+        _, _, shell = self._chain(tube)
+        shell.Method = "Midsurface"
+        self.document.recompute()
+
+        self.assertEqual(len(shell.Shape.Faces), 8, "four flats and four corners")
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        self.assertAlmostEqual(carried, tube.Volume, delta=tube.Volume * 1e-6)
+
+    def test_tube_skin_offset_over_counts_the_corners(self):
+        tube = self._tube()
+        _, _, shell = self._chain(tube)
+        shell.Method = "Skin offset"
+        self.document.recompute()
+
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        # Keeping the outer skin puts the sheet on the longer perimeter, which
+        # is the corner arcs of the profile being counted at the wrong radius.
+        self.assertGreater(carried, tube.Volume * 1.04)
+        self.assertLess(carried, tube.Volume * 1.06)
+
+    def test_a_thick_body_is_left_alone(self):
+        block = Part.makeBox(20, 20, 20)
+        _, _, shell = self._chain(block)
+        self.assertEqual(len(shell.Shape.Solids), 1, "nothing here is a wall")
+        self.assertAlmostEqual(shell.Shape.Volume, block.Volume, delta=1e-6)
+        self.assertEqual(list(shell.Thickness), [])
+
+    def test_a_wall_between_stubs_is_cut_out_and_the_stubs_stay(self):
+        flexure = self._flexure()
+        _, _, shell = self._chain(flexure)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = 2.0
+        self.document.recompute()
+
+        # The blade is a fourteenth of the body, so it is cut free at both
+        # transitions: it becomes a face and the two stubs come back as solids,
+        # capped by the very cut that freed the blade.
+        solids = shell.Shape.Solids
+        self.assertEqual(len(solids), 2, "both stubs must survive")
+        for solid in solids:
+            self.assertTrue(solid.isClosed(), "a cut piece must be a closed solid")
+            self.assertTrue(solid.isValid())
+
+        carried = sum(solid.Volume for solid in solids) + sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        self.assertAlmostEqual(carried, flexure.Volume, delta=flexure.Volume * 1e-9)
+
+    def test_a_wall_that_cannot_be_cut_free_is_refused(self):
+        # A boss standing on a plate leaves the plate's wall pairing perfectly
+        # well, but the wall runs to the outside of the body on every side, so
+        # there is no transition to cut at and no way to keep the boss.
+        part = Part.makeBox(40, 30, 4).fuse(
+            Part.makeBox(10, 10, 10, FreeCAD.Vector(15, 10, 4))
+        ).removeSplitter()
+        _, _, shell = self._chain(part)
+        self.document.recompute()
+
+        self.assertEqual(len(shell.Shape.Solids), 1, "the body stays whole")
+        self.assertAlmostEqual(shell.Shape.Volume, part.Volume, delta=1e-6)
+
+    def test_corner_sheets_are_trimmed_against_each_other(self):
+        bracket = (
+            Part.makeBox(70, 45, 4)
+            .fuse(Part.makeBox(70, 4, 30, FreeCAD.Vector(0, 41, 4)))
+            .removeSplitter()
+        )
+        _, _, shell = self._chain(bracket)
+        shell.Method = "Midsurface"
+        self.document.recompute()
+
+        # Both mid-surfaces run into the corner; trimming each to where the
+        # other crosses it makes the material add up exactly.
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        self.assertAlmostEqual(carried, bracket.Volume, delta=bracket.Volume * 1e-9)
+
+    def test_skin_offset_still_claims_the_corner_twice(self):
+        bracket = (
+            Part.makeBox(70, 45, 4)
+            .fuse(Part.makeBox(70, 4, 30, FreeCAD.Vector(0, 41, 4)))
+            .removeSplitter()
+        )
+        _, _, shell = self._chain(bracket)
+        shell.Method = "Skin offset"
+        self.document.recompute()
+
+        # Two skins kept on the outside of a corner never cross, so there is no
+        # cut to make and both carry the corner. The excess is one t squared
+        # along the corner, which is what the warning is about.
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        self.assertAlmostEqual(carried - bracket.Volume, 4.0 * 4.0 * 70.0, delta=1e-6)
+
+    @staticmethod
+    def _tapered_plate():
+        """A plate 4 mm thick at one end and 6 mm at the other."""
+        profile = Part.makePolygon(
+            [
+                FreeCAD.Vector(0, 0, 0),
+                FreeCAD.Vector(40, 0, 0),
+                FreeCAD.Vector(40, 0, 6),
+                FreeCAD.Vector(0, 0, 4),
+                FreeCAD.Vector(0, 0, 0),
+            ]
+        )
+        return Part.Face(profile).extrude(FreeCAD.Vector(0, 30, 0))
+
+    def _face_name(self, shape, point):
+        """Name of the face whose centre of mass sits at a point."""
+        for index, face in enumerate(shape.Faces, 1):
+            if (face.CenterOfMass - point).Length < 1e-6:
+                return f"Face{index}"
+        raise AssertionError(f"no face centred at {point}")
+
+    def test_a_taper_is_refused_by_the_search_and_taken_from_a_pick(self):
+        plate = self._tapered_plate()
+        _, imp, shell = self._chain(plate)
+        shell.MaxThickness = 8.0
+        self.document.recompute()
+
+        # The thickness runs from 4 to 6, which is a taper rather than a wall,
+        # so nothing is found and the body is left as it is.
+        self.assertEqual(len(shell.Shape.Solids), 1)
+        self.assertEqual(sum(1 for value in shell.Thickness if value > 0), 0)
+
+        bottom = self._face_name(imp.Shape, FreeCAD.Vector(20, 15, 0))
+        top = self._face_name(imp.Shape, FreeCAD.Vector(20, 15, 5))
+        shell.PairSources = [(imp, (bottom,))]
+        shell.PairPartners = [(imp, (top,))]
+        self.document.recompute()
+
+        # Picking the two faces says the taper is meant, and the thickness is
+        # then the separation where the faces were sampled.
+        self.assertEqual(len(shell.Shape.Solids), 0, "the taper is reduced now")
+        carried = [value for value in shell.Thickness if value > 0]
+        self.assertEqual(len(carried), 1)
+        self.assertGreater(carried[0], 4.0)
+        self.assertLess(carried[0], 6.0)
+
+    def test_a_pick_that_bounds_no_material_is_ignored(self):
+        plate = Part.makeBox(40, 30, 4)
+        _, imp, shell = self._chain(plate)
+
+        # Two faces at right angles, which bound no wall between them.
+        side_a = self._face_name(imp.Shape, FreeCAD.Vector(0, 15, 2))
+        side_b = self._face_name(imp.Shape, FreeCAD.Vector(20, 0, 2))
+        shell.PairSources = [(imp, (side_a,))]
+        shell.PairPartners = [(imp, (side_b,))]
+        self.document.recompute()
+
+        # The plate still reduces on its own wall, and the nonsense pair adds
+        # nothing rather than making the step fail.
+        self.assertNotIn("Invalid", shell.State)
+        self.assertEqual(sum(1 for value in shell.Thickness if value > 0), 1)
+
+    @staticmethod
+    def _tube_with_offset_corners():
+        """
+        A square hollow section whose corner fillets are not concentric.
+
+        The outer fillet is R12 about the corner of the outer box and the inner
+        one R8 about the corner of the inner box, which puts their centres four
+        millimetres apart on the diagonal. The flats are a constant 8 mm and the
+        corners run from 8.5 where they meet the flats to 9.7 on the diagonal -
+        an ordinary profile, and not a constant-thickness wall.
+        """
+
+        def bar(size, radius, offset):
+            box = Part.makeBox(690, size, size, FreeCAD.Vector(0, offset, offset))
+            long_edges = [
+                edge
+                for edge in box.Edges
+                if abs(edge.Vertexes[0].Point.x - edge.Vertexes[1].Point.x) > 1e-7
+            ]
+            return box.makeFillet(radius, long_edges)
+
+        return bar(160, 12.0, 0).cut(bar(144, 8.0, 8))
+
+    def test_corners_that_vary_are_refused_and_reported(self):
+        tube = self._tube_with_offset_corners()
+        _, _, shell = self._chain(tube)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = 12.0
+        self.document.recompute()
+
+        # Only the four flats pair, so the walls do not account for the body and
+        # it is left exactly as it was rather than partly reduced.
+        self.assertEqual(len(shell.Shape.Solids), 1)
+        self.assertAlmostEqual(shell.Shape.Volume, tube.Volume, delta=tube.Volume * 1e-9)
+
+        # The corners have to be findable, or the only thing that would take
+        # them - a larger tolerance - is the one thing that cannot be guessed.
+        from femobjects import geometry_shellbuilder
+
+        rejected = []
+        walls = geometry_shellbuilder.walls_of_solid(
+            shell.Base.Shape.Solids[0], 12.0, 0.02, rejected=rejected
+        )
+        self.assertEqual(len(walls), 4, "the flats")
+        self.assertEqual(len(rejected), 4, "the corners, as near misses")
+        for miss in rejected:
+            self.assertEqual(miss.reason, geometry_shellbuilder.NEAR_MISS_VARIES)
+            self.assertGreater(miss.spread, 0.05, "the variation must be reported honestly")
+
+    def test_a_pair_over_the_bound_is_reported_not_swallowed(self):
+        from femobjects import geometry_shellbuilder
+
+        solid = self._tube_with_offset_corners().Solids[0]
+
+        # The corners are 9.1 mm between the fillets, so a bound set to the 8 mm
+        # of the flats cannot take them. Raising the tolerance does not help,
+        # which is exactly why the report has to name the bound.
+        rejected = []
+        walls = geometry_shellbuilder.walls_of_solid(solid, 8.0, 0.5, rejected=rejected)
+        self.assertEqual(len(walls), 4, "only the flats fit under the bound")
+        self.assertEqual(len(rejected), 4, "the corners, as near misses")
+        for miss in rejected:
+            self.assertEqual(miss.reason, geometry_shellbuilder.NEAR_MISS_THICK)
+
+        lines = geometry_shellbuilder.near_miss_report(rejected, 8.0, 0.5)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("over the 8.00 mm bound", lines[0])
+
+        # The two ends of the tube face each other across its whole length and
+        # bound material all the way, and they are not a wall anybody missed.
+        self.assertTrue(
+            all(miss.thickness < 30.0 for miss in rejected),
+            "a pair far past the bound is not a near miss",
+        )
+
+    def test_a_bound_that_fits_the_corners_takes_them_all(self):
+        from femobjects import geometry_shellbuilder
+
+        solid = self._tube_with_offset_corners().Solids[0]
+        rejected = []
+        walls = geometry_shellbuilder.walls_of_solid(solid, 12.0, 0.15, rejected=rejected)
+        self.assertEqual(len(walls), 8)
+        self.assertEqual(rejected, [], "nothing is left to report")
+
+    def test_the_same_corners_are_taken_when_the_tolerance_allows_it(self):
+        tube = self._tube_with_offset_corners()
+        _, _, shell = self._chain(tube)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = 12.0
+        shell.Tolerance = 0.15
+        self.document.recompute()
+
+        self.assertEqual(len(shell.Shape.Solids), 0, "the whole profile reduces")
+        self.assertEqual(len(shell.Shape.Faces), 8, "four flats and four corners")
+
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        self.assertAlmostEqual(carried, tube.Volume, delta=tube.Volume * 0.01)
+
+        # A wall that varies is worth its average, not the value wherever the
+        # faces happened to be sampled.
+        corners = sorted({round(value, 2) for value in shell.Thickness if value > 8.5})
+        self.assertEqual(len(corners), 1)
+        self.assertLess(corners[0], 9.66, "the diagonal is the widest point, not the wall")
+
+    def test_cutting_a_hollow_body_keeps_every_piece(self):
+        from femobjects import geometry_shellbuilder
+
+        tube = self._tube_with_offset_corners()
+        solid = tube.Solids[0]
+        centre = solid.BoundBox.Center
+
+        # A plane through a tube leaves two separate solids on the same side of
+        # it. Keeping only the first would lose a quarter of the body.
+        pieces = geometry_shellbuilder._pieces_by_plane(
+            solid, centre, FreeCAD.Vector(0, 1, 0)
+        )
+        self.assertGreaterEqual(len(pieces), 2)
+        self.assertAlmostEqual(
+            sum(piece.Volume for piece in pieces),
+            solid.Volume,
+            delta=solid.Volume * 1e-9,
+        )
+
+    def test_faces_that_meet_are_connected_to_each_other(self):
+        tube = self._tube_with_offset_corners()
+        _, _, shell = self._chain(tube)
+        shell.Method = "Skin offset"
+        shell.MaxThickness = 10.0
+        shell.Tolerance = 0.15
+        self.document.recompute()
+
+        result = shell.Shape
+        self.assertEqual(len(result.Faces), 8)
+        # One shell, and the joints share an edge rather than merely touching -
+        # without that a mesher treats the wall as eight surfaces that happen to
+        # line up and nothing carries around the corner.
+        self.assertEqual(len(result.Shells), 1)
+        self.assertLess(
+            len(result.Shells[0].Edges),
+            sum(len(face.Edges) for face in result.Faces),
+            "sewing must merge the shared edges",
+        )
+
+    def test_either_skin_can_be_kept_and_both_come_out_connected(self):
+        tube = self._tube_with_offset_corners()
+        _, _, shell = self._chain(tube)
+        shell.Method = "Skin offset"
+        shell.MaxThickness = 10.0
+        shell.Tolerance = 0.15
+
+        for side in ("Outer", "Inner"):
+            shell.Side = side
+            self.document.recompute()
+            result = shell.Shape
+
+            # Which skin is kept says nothing about whether the walls explain
+            # the body, so it must not decide whether the body is reduced. The
+            # inner skin is the smaller of the two and used to fall under the
+            # coverage this step asks for, which left the profile untouched.
+            self.assertEqual(len(result.Faces), 8, f"{side}: the whole profile")
+            self.assertEqual(len(result.Solids), 0, f"{side}: nothing left solid")
+            self.assertEqual(len(result.Shells), 1, f"{side}: one connected shell")
+
+        # Kept outside a corner a skin runs round the long way and kept inside
+        # it runs short, which is inherent and is why the decision is not made
+        # on what is emitted.
+        shell.Side = "Outer"
+        self.document.recompute()
+        outer = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        shell.Side = "Inner"
+        self.document.recompute()
+        inner = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        self.assertGreater(outer, tube.Volume)
+        self.assertLess(inner, tube.Volume)
+
+    def test_corner_sheets_are_fitted_to_the_walls_beside_them(self):
+        tube = self._tube_with_offset_corners()
+        _, _, shell = self._chain(tube)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = 10.0
+        shell.Tolerance = 0.15
+        self.document.recompute()
+
+        result = shell.Shape
+        self.assertEqual(len(result.Faces), 8)
+
+        # Each corner is built halfway across its own wall, which leaves it
+        # short of the flats because the two walls are not the same thickness.
+        # Fitted to its neighbours the arc is tangent to them instead, so the
+        # sheets join end to end and the whole profile is one shell.
+        self.assertEqual(len(result.Shells), 1)
+        for face in result.Faces:
+            for other in result.Faces:
+                if face.isSame(other):
+                    continue
+                distance = face.distToShape(other)[0]
+                self.assertFalse(
+                    1e-6 < distance < 1.0,
+                    f"a gap of {distance:.4f} mm was left between two sheets",
+                )
+
+        # The corner radius is the distance from its axis to the mid-plane of
+        # the wall beside it, which is what makes the ends coincide.
+        radii = {
+            round(face.Surface.Radius, 6)
+            for face in result.Faces
+            if type(face.Surface).__name__ == "Cylinder"
+        }
+        self.assertEqual(radii, {8.0})
+
+        # Moving the corner moves a little material, and not much of it.
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(result.Faces, shell.Thickness)
+        )
+        self.assertAlmostEqual(carried, tube.Volume, delta=tube.Volume * 0.01)
+
+    def test_shell_faces_are_never_sewn_to_a_solid(self):
+        # The blade becomes a face between two stubs it touches exactly. A
+        # shell has six degrees of freedom against a solid's three, so the two
+        # are joined by a constraint and must not share an edge.
+        flexure = self._flexure()
+        _, _, shell = self._chain(flexure)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = 2.0
+        self.document.recompute()
+
+        sheets = [
+            face
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+            if thickness > 0
+        ]
+        self.assertEqual(len(sheets), 1)
+        for solid in shell.Shape.Solids:
+            for edge in solid.Edges:
+                for sheet_edge in sheets[0].Edges:
+                    self.assertFalse(
+                        edge.isSame(sheet_edge),
+                        "a sheet must not share an edge with a solid",
+                    )
+
+    def test_a_wall_switched_off_is_not_used(self):
+        _, imp, shell = self._chain(Part.makeBox(40, 30, 4), Part.makeBox(30, 20, 3))
+        self.document.recompute()
+        self.assertEqual(sum(1 for value in shell.Thickness if value > 0), 2)
+
+        # The wall of the first plate, named by the face the step calls its
+        # outer one. Switching it off leaves that body solid - its remaining
+        # walls no longer account for it - and leaves the other one alone.
+        outer = self._face_name(imp.Shape, FreeCAD.Vector(20, 15, 0))
+        shell.ExcludedWalls = [(imp, (outer,))]
+        self.document.recompute()
+
+        self.assertEqual(sum(1 for value in shell.Thickness if value > 0), 1)
+        self.assertEqual(len(shell.Shape.Solids), 1, "the plate that was switched off")
+        self.assertAlmostEqual(shell.Shape.Solids[0].Volume, 4800.0, delta=1e-6)
+
+        shell.ExcludedWalls = []
+        self.document.recompute()
+        self.assertEqual(sum(1 for value in shell.Thickness if value > 0), 2)
+
+    def test_switching_off_one_wall_of_a_profile_shells_the_other_seven(self):
+        tube = self._tube_with_offset_corners()
+        body = tube.Solids[0]
+        _, imp, shell = self._chain(tube)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = 10.0
+        shell.Tolerance = 0.15
+        self.document.recompute()
+        self.assertEqual(len(shell.Shape.Faces), 8)
+
+        # Taking one wall out of a ring of eight is an instruction, not a gap:
+        # shell the other seven and leave that one alone. The body is cut where
+        # they end, so what the switched-off wall would have been stays solid
+        # and nothing goes missing. Refusing the whole body instead - which is
+        # what happened while a body was only ever cut when its walls covered
+        # less than half of it - left no way to shell part of anything.
+        flat = next(
+            f"Face{index}"
+            for index, face in enumerate(imp.Shape.Faces, 1)
+            if abs(face.Area - 93840.0) < 1.0
+        )
+        shell.ExcludedWalls = [(imp, (flat,))]
+        self.document.recompute()
+
+        sheets = [
+            face
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+            if thickness > 0
+        ]
+        self.assertEqual(len(sheets), 7, "the seven walls left switched on")
+        self.assertEqual(len(shell.Shape.Solids), 1, "the wall that was switched off")
+        self.assertAlmostEqual(shell.Shape.Solids[0].Volume, 752636.0, delta=1.0)
+
+        # Everything the result stands for adds up to the body. Shape.Volume is
+        # no use for asking that here: the sheets close into most of a ring and
+        # a shell reports the volume it encloses, which on this profile reads
+        # nearly three times the material.
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        carried += sum(solid.Volume for solid in shell.Shape.Solids)
+        self.assertAlmostEqual(carried / body.Volume, 1.0, delta=0.01)
+
+    def test_switching_walls_off_shells_the_rest_and_keeps_them_solid(self):
+        tube = self._tube_with_offset_corners()
+        _, imp, shell = self._chain(tube)
+        shell.Method = "Skin offset"
+        shell.MaxThickness = 10.0
+        shell.Tolerance = 0.15
+        self.document.recompute()
+        self.assertEqual(len(shell.Shape.Faces), 8, "the whole profile reduces first")
+        self.assertEqual(len(shell.Shape.Solids), 0)
+
+        flats = [
+            f"Face{index}"
+            for index, face in enumerate(imp.Shape.Faces, 1)
+            if abs(face.Area - 93840.0) < 1.0
+        ]
+        self.assertEqual(len(flats), 4)
+        shell.ExcludedWalls = [(imp, tuple(flats[1:]))]
+        self.document.recompute()
+
+        # The body is cut so that the walls left switched on can go, and what
+        # they were cut away from stays solid. The walls that were switched off
+        # must not come back on the pieces, which is what carrying them across
+        # by surface prevents.
+        sheets = [
+            face
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+            if thickness > 0
+        ]
+        self.assertEqual(len(sheets), 5, "one flat and the four corners")
+        self.assertEqual(len(shell.Shape.Solids), 3, "the three flats switched off")
+
+        for name in flats[1:]:
+            switched_off = imp.Shape.getElement(name)
+            for sheet in sheets:
+                self.assertGreater(
+                    (sheet.CenterOfMass - switched_off.CenterOfMass).Length,
+                    1e-6,
+                    f"{name} was switched off and must not be a sheet",
+                )
+
+        # Nothing is lost. A skin kept outside a corner runs round the long way,
+        # which is the whole of the difference here.
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        ) + sum(solid.Volume for solid in shell.Shape.Solids)
+        self.assertGreater(carried, tube.Volume)
+        self.assertLess(carried, tube.Volume * 1.08)
+
+    def test_freed_walls_meet_even_when_the_cut_separated_them(self):
+        tube = self._tube_with_offset_corners()
+        _, imp, shell = self._chain(tube)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = 10.0
+        shell.Tolerance = 0.15
+        self.document.recompute()
+
+        flats = [
+            f"Face{index}"
+            for index, face in enumerate(imp.Shape.Faces, 1)
+            if abs(face.Area - 93840.0) < 1.0
+        ]
+        shell.ExcludedWalls = [(imp, tuple(flats[1:]))]
+        self.document.recompute()
+
+        sheets = [
+            face
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+            if thickness > 0
+        ]
+        self.assertGreater(len(sheets), 1)
+
+        # The cut that frees a flat and the corner beside it puts them in
+        # different pieces, and a piece holding one wall has no neighbour to be
+        # fitted or trimmed against. Built together they meet, exactly as they
+        # would have had the body never been cut.
+        for first in range(len(sheets)):
+            for second in range(first + 1, len(sheets)):
+                distance = sheets[first].distToShape(sheets[second])[0]
+                self.assertFalse(
+                    1e-6 < distance < 1.0,
+                    f"a gap of {distance:.4f} mm was left between two freed sheets",
+                )
+
+        touching = [
+            (first, second)
+            for first in range(len(sheets))
+            for second in range(first + 1, len(sheets))
+            if sheets[first].distToShape(sheets[second])[0] <= 1e-6
+        ]
+        self.assertTrue(touching, "the freed walls have to meet somewhere")
+        for first, second in touching:
+            self.assertTrue(
+                any(
+                    left.isSame(right)
+                    for left in sheets[first].Edges
+                    for right in sheets[second].Edges
+                ),
+                "sheets that meet must share the edge, not merely touch along it",
+            )
+
+    def _corner_pair_names(self, shape):
+        """The two arcs of one corner of the profile, inner first."""
+        outer = [
+            (index, face)
+            for index, face in enumerate(shape.Faces, 1)
+            if type(face.Surface).__name__ == "Cylinder"
+            and abs(face.Surface.Radius - 12.0) < 1e-6
+        ]
+        inner = [
+            (index, face)
+            for index, face in enumerate(shape.Faces, 1)
+            if type(face.Surface).__name__ == "Cylinder"
+            and abs(face.Surface.Radius - 8.0) < 1e-6
+        ]
+        best = None
+        for outer_index, outer_face in outer:
+            for inner_index, inner_face in inner:
+                gap = (outer_face.Surface.Center - inner_face.Surface.Center).Length
+                if best is None or gap < best[0]:
+                    best = (gap, f"Face{inner_index}", f"Face{outer_index}")
+        return best[1], best[2]
+
+    def test_a_kept_skin_is_a_face_of_the_body_not_a_piece_of_one(self):
+        tube = self._tube_with_offset_corners()
+        _, imp, shell = self._chain(tube)
+        shell.Method = "Skin offset"
+        shell.MaxThickness = 8.0
+        shell.Tolerance = 0.02
+        self.document.recompute()
+
+        # One flat left switched on and one corner added by hand, so the walls
+        # cover a quarter of the body and it has to be cut to free them.
+        flats = [
+            f"Face{index}"
+            for index, face in enumerate(imp.Shape.Faces, 1)
+            if abs(face.Area - 93840.0) < 1.0
+        ]
+        inner_corner, outer_corner = self._corner_pair_names(imp.Shape)
+        shell.ExcludedWalls = [(imp, tuple(flats[1:]))]
+        shell.PairSources = [(imp, (inner_corner,))]
+        shell.PairPartners = [(imp, (outer_corner,))]
+
+        # A cut is made where a wall's outer face ends, and the inner face of
+        # that same wall reaches past there: on a corner the outer arc ends at
+        # its tangent lines while the inner arc runs on. So a freed piece holds
+        # all of one face and part of the other, and a skin taken from the piece
+        # is a fragment - a third of a fillet - rather than the face asked for.
+        for side, flat_area, corner_area in (
+            ("Outer", 93840.0, 13006.19),
+            ("Inner", 88320.0, 8670.80),
+        ):
+            shell.Side = side
+            self.document.recompute()
+
+            sheets = [
+                face
+                for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+                if thickness > 0
+            ]
+            self.assertEqual(len(sheets), 2, f"{side}: one flat and one corner")
+
+            areas = sorted(round(face.Area, 2) for face in sheets)
+            self.assertAlmostEqual(areas[0], corner_area, delta=0.05, msg=side)
+            self.assertAlmostEqual(areas[1], flat_area, delta=0.05, msg=side)
+
+            # Keeping a skin means keeping a face of the body, so every sheet
+            # has to be one of them, whole and where it was.
+            for sheet in sheets:
+                self.assertTrue(
+                    any(
+                        abs(face.Area - sheet.Area) < 1e-6
+                        and (face.CenterOfMass - sheet.CenterOfMass).Length < 1e-6
+                        for face in imp.Shape.Faces
+                    ),
+                    f"{side}: a sheet is not a face of the input",
+                )
+
+    def _sits_on_a_solid(self, sheet, solids):
+        """How many interior points of a sheet lie on one of the solids."""
+        u0, u1, v0, v1 = sheet.ParameterRange
+        interior = 0
+        touching = 0
+        for i in range(1, 10):
+            for j in range(1, 10):
+                point = sheet.valueAt(
+                    u0 + (u1 - u0) * i / 10.0, v0 + (v1 - v0) * j / 10.0
+                )
+                if not sheet.isInside(point, 1e-6, True):
+                    continue
+                interior += 1
+                if any(
+                    solid.distToShape(Part.Vertex(point))[0] < 1e-6 for solid in solids
+                ):
+                    touching += 1
+        return touching, interior
+
+    def test_a_sheet_covers_what_was_taken_and_meets_what_is_left(self):
+        tube = self._tube_with_offset_corners()
+        _, imp, shell = self._chain(tube)
+        shell.Method = "Skin offset"
+        shell.MaxThickness = 8.0
+        shell.Tolerance = 0.02
+        self.document.recompute()
+
+        flats = [
+            f"Face{index}"
+            for index, face in enumerate(imp.Shape.Faces, 1)
+            if abs(face.Area - 93840.0) < 1.0
+        ]
+        inner_corner, outer_corner = self._corner_pair_names(imp.Shape)
+        shell.ExcludedWalls = [(imp, tuple(flats[1:]))]
+        shell.PairSources = [(imp, (inner_corner,))]
+        shell.PairPartners = [(imp, (outer_corner,))]
+
+        # Where a wall ends, its two faces end in different places: the outer
+        # arc of a corner stops at the tangent line of the outer fillet and the
+        # inner arc at the tangent line of the inner one. Cut at either of them
+        # and one of the two faces is wrong - the inner arc hangs over the solid
+        # or the flat stops short of it. The body is divided on the plane
+        # through both, so whichever skin is kept, it covers what was taken and
+        # nothing else.
+        for method, side in (
+            ("Skin offset", "Inner"),
+            ("Skin offset", "Outer"),
+            ("Midsurface", "Outer"),
+        ):
+            shell.Method = method
+            shell.Side = side
+            self.document.recompute()
+
+            sheets = [
+                face
+                for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+                if thickness > 0
+            ]
+            self.assertEqual(len(sheets), 2, f"{method}/{side}: one flat and one corner")
+            self.assertTrue(shell.Shape.Solids, f"{method}/{side}: the rest stays solid")
+
+            for sheet in sheets:
+                touching, interior = self._sits_on_a_solid(sheet, shell.Shape.Solids)
+                self.assertGreater(
+                    interior, 20, f"{method}/{side}: sample the sheet properly"
+                )
+                self.assertEqual(
+                    touching,
+                    0,
+                    f"{method}/{side}: {touching} of {interior} points of a "
+                    f"{type(sheet.Surface).__name__} sheet lie on the kept solid",
+                )
+                self.assertAlmostEqual(
+                    min(
+                        sheet.distToShape(solid)[0] for solid in shell.Shape.Solids
+                    ),
+                    0.0,
+                    delta=1e-6,
+                    msg=f"{method}/{side}: a sheet must meet the solid it was freed from",
+                )
+
+    def test_the_thickness_does_not_depend_on_which_face_was_picked_first(self):
+        tube = self._tube_with_offset_corners()
+        _, imp, shell = self._chain(tube)
+        shell.Method = "Skin offset"
+        shell.MaxThickness = 8.0
+        shell.Tolerance = 0.02
+        inner_corner, outer_corner = self._corner_pair_names(imp.Shape)
+
+        measured = []
+        for first, second in ((inner_corner, outer_corner), (outer_corner, inner_corner)):
+            shell.PairSources = [(imp, (first,))]
+            shell.PairPartners = [(imp, (second,))]
+            self.document.recompute()
+            measured.append(
+                sorted({round(value, 6) for value in shell.Thickness if value > 0})
+            )
+
+        # A corner's two arcs are of different lengths, so sampling from
+        # whichever was picked first measured a different wall each way round.
+        self.assertEqual(measured[0], measured[1])
+
+    def test_a_carried_wall_keeps_the_side_the_body_gave_it(self):
+        from femobjects import geometry_shellbuilder
+
+        tube = self._tube_with_offset_corners()
+        solid = tube.Solids[0]
+        walls = geometry_shellbuilder.walls_of_solid(solid, 10.0, 0.15)
+        corner = next(
+            wall for wall in walls if type(wall.outer.Surface).__name__ == "Cylinder"
+        )
+        self.assertGreater(corner.outer.Surface.Radius, corner.inner.Surface.Radius)
+
+        pieces = geometry_shellbuilder._split_at_transitions(solid, walls)
+        self.assertTrue(pieces)
+
+        # A piece of a corner sits between the two arcs, so its own centre of
+        # mass cannot say which way is out. Asked again it would answer the
+        # wrong way round and keeping the outer skin would keep the inner one.
+        for piece in pieces:
+            for _, carried in geometry_shellbuilder.walls_carried_to_piece(piece, walls):
+                if type(carried.outer.Surface).__name__ != "Cylinder":
+                    continue
+                self.assertGreater(
+                    carried.outer.Surface.Radius,
+                    carried.inner.Surface.Radius,
+                    "the outer face of a corner stays the outer one",
+                )
+
+    def test_thickness_reaches_the_shell_element_object(self):
+        group, _, shell = self._chain(Part.makeBox(40, 30, 4))
+        shell.Method = "Midsurface"
+        self.document.recompute()
+
+        thickness = ObjectsFem.makeElementGeometry2D(self.document, 1.0, "ShellThickness")
+        thickness.References = [(group, ("Face1",))]
+        thickness.ThicknessMode = "From geometry"
+        self.document.recompute()
+
+        self.assertAlmostEqual(thickness.Thickness.getValueAs("mm").Value, 4.0, delta=1e-9)
+        self.assertAlmostEqual(thickness.Offset, 0.0, delta=1e-9)
+        self.assertIn("ReadOnly", thickness.getPropertyStatus("Thickness"))
+
+        # The value follows the geometry rather than being copied once.
+        shell.Ratio = 0.0
+        self.document.recompute()
+        self.assertAlmostEqual(thickness.Offset, -0.5, delta=1e-9)
+
+        thickness.ThicknessMode = "Manual"
+        self.assertNotIn("ReadOnly", thickness.getPropertyStatus("Thickness"))
+
+    def test_thickness_is_recorded_for_every_face_of_the_result(self):
+        _, _, shell = self._chain(Part.makeBox(40, 30, 4), Part.makeBox(20, 20, 20))
+        self.assertEqual(len(shell.Thickness), len(shell.Shape.Faces))
+        self.assertEqual(len(shell.Offset), len(shell.Shape.Faces))
+        # The plate contributes one shell face, the block six solid ones.
+        self.assertEqual(sum(1 for value in shell.Thickness if value > 0), 1)
+
+    def test_only_the_picked_solid_is_reduced(self):
+        _, imp, shell = self._chain(Part.makeBox(40, 30, 4), Part.makeBox(30, 20, 3))
+        solids = imp.Shape.Solids
+        self.assertEqual(len(solids), 2)
+
+        shell.Elements = [(imp, "Solid1")]
+        self.document.recompute()
+        self.assertEqual(len(shell.Shape.Solids), 1, "the solid not picked stays")
+        self.assertEqual(sum(1 for value in shell.Thickness if value > 0), 1)
+
+    # ------------------------------------------------------------------
+    # Walls that meet: the sheets have to be grown into the joint before
+    # they can be trimmed to it, because each is built halfway across its
+    # own wall and two of them never cross on their own.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _plate_with_a_rib():
+        """A plate with a rib standing across it, off the middle."""
+        return (
+            Part.makeBox(100, 60, 5)
+            .fuse(Part.makeBox(5, 60, 30, FreeCAD.Vector(30, 0, 5)))
+            .removeSplitter()
+        )
+
+    @staticmethod
+    def _web_with_a_stiffener():
+        """A web with a stiffener on one side of it, well short of the end."""
+        return (
+            Part.makeBox(200, 5, 60)
+            .fuse(Part.makeBox(5, 30, 60, FreeCAD.Vector(140, 5, 0)))
+            .removeSplitter()
+        )
+
+    @staticmethod
+    def _short_web_on_a_flange():
+        """A flange far longer and wider than the web standing on it."""
+        return (
+            Part.makeBox(200, 60, 5)
+            .fuse(Part.makeBox(120, 5, 40, FreeCAD.Vector(40, 27.5, 5)))
+            .removeSplitter()
+        )
+
+    @staticmethod
+    def _i_beam_with_root_fillets():
+        """
+        An I beam whose web meets its flanges through a 3 mm fillet.
+
+        The fillet is the point of it: it is not a wall, so nothing about the
+        walls says the web and the flange meet at all, and a sheet that only
+        looked for a neighbouring wall would find none. It also puts the joint
+        further away than half a thickness, which is what the reach has to
+        clear.
+        """
+        top = Part.makeBox(150, 60, 5, FreeCAD.Vector(0, -30, 35))
+        bottom = Part.makeBox(150, 60, 5, FreeCAD.Vector(0, -30, -40))
+        web = Part.makeBox(150, 5, 70, FreeCAD.Vector(0, -2.5, -35))
+        beam = top.fuse([bottom, web]).removeSplitter()
+        roots = [
+            edge
+            for edge in beam.Edges
+            if abs(abs(edge.Vertexes[0].Point.y) - 2.5) < 1e-6
+            and abs(abs(edge.Vertexes[0].Point.z) - 35) < 1e-6
+            and abs(edge.Vertexes[0].Point.x - edge.Vertexes[1].Point.x) > 1.0
+        ]
+        return beam.makeFillet(3.0, roots)
+
+    def _midsurface_of(self, shape, max_thickness=6.0, tolerance=0.02, coverage=None):
+        """The step set to build mid-surfaces of one shape, recomputed."""
+        _, _, shell = self._chain(shape)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = f"{max_thickness} mm"
+        shell.Tolerance = tolerance
+        if coverage is not None:
+            shell.MinCoverage = coverage
+        self.document.recompute()
+        return shell
+
+    def _assert_sheets_meet(self, shell):
+        """No two sheets of a result stand apart, and none is merely near."""
+        sheets = [
+            face for face, thickness in zip(shell.Shape.Faces, shell.Thickness) if thickness > 0
+        ]
+        for index, face in enumerate(sheets):
+            for other in sheets[index + 1 :]:
+                box = FreeCAD.BoundBox(face.BoundBox)
+                box.enlarge(1.0)
+                if not box.intersect(other.BoundBox):
+                    continue
+                distance = face.distToShape(other)[0]
+                self.assertLess(
+                    distance,
+                    1e-6,
+                    f"two sheets that ought to meet stand {distance:.4f} mm apart",
+                )
+        return sheets
+
+    @staticmethod
+    def _edge_sharing(shape):
+        """How many faces each edge of a shape belongs to, as a tally."""
+        count = {}
+        for face in shape.Faces:
+            for edge in face.Edges:
+                count[edge.hashCode()] = count.get(edge.hashCode(), 0) + 1
+        tally = {}
+        for faces in count.values():
+            tally[faces] = tally.get(faces, 0) + 1
+        return tally
+
+    def test_a_rib_and_the_plate_it_stands_on_meet(self):
+        plate = self._plate_with_a_rib()
+        shell = self._midsurface_of(plate)
+
+        # Two halves of the plate and the rib. The plate is two walls because
+        # the rib divides its top face, and neither half may take the other's
+        # ground when it grows under the rib.
+        self.assertEqual(len(shell.Shape.Faces), 3)
+        self.assertEqual(len(shell.Shape.Solids), 0, "the body is wholly replaced")
+        self._assert_sheets_meet(shell)
+
+        # One shell, and the line where the three sheets meet is one edge that
+        # all three of them name. Without that a mesher meshes three surfaces
+        # that merely line up.
+        self.assertEqual(len(shell.Shape.Shells), 1)
+        self.assertTrue(shell.Shape.Shells[0].isValid())
+        self.assertEqual(self._edge_sharing(shell.Shape).get(3), 1)
+
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        # A little over the body: the material in the joint is under the rib's
+        # sheet and under the plate's at the same time, which is inherent to
+        # mid-surfaces and not a fault.
+        self.assertAlmostEqual(carried / plate.Solids[0].Volume, 1.019, delta=0.005)
+
+    def test_a_wall_a_stiffener_crosses_keeps_both_halves(self):
+        web = self._web_with_a_stiffener()
+        shell = self._midsurface_of(web)
+
+        self.assertEqual(len(shell.Shape.Faces), 3)
+        self._assert_sheets_meet(shell)
+        self.assertEqual(self._edge_sharing(shell.Shape).get(3), 1)
+
+        # The stiffener lands in the middle of the web rather than at its end,
+        # so the web is parted along the junction line - that is what gives the
+        # three of them an edge in common. What must not happen is either part
+        # being thrown away: the stiffener's surface reaches the whole length of
+        # the web, and a trim that asked only which side of it a piece falls on
+        # would drop half the web on the strength of that alone.
+        sheets = [
+            face for face, thickness in zip(shell.Shape.Faces, shell.Thickness) if thickness > 0
+        ]
+        web_sheets = [
+            face
+            for face in sheets
+            if abs(abs(face.Surface.Axis.y) - 1.0) < 1e-6
+        ]
+        self.assertEqual(len(web_sheets), 2, "the web is parted, not shortened")
+        self.assertAlmostEqual(sum(face.Area for face in web_sheets), 200.0 * 60.0, delta=1e-6)
+        self.assertAlmostEqual(min(face.BoundBox.XMin for face in web_sheets), 0.0, delta=1e-6)
+        self.assertAlmostEqual(max(face.BoundBox.XMax for face in web_sheets), 200.0, delta=1e-6)
+
+    def test_a_sheet_does_not_grow_where_the_body_ends(self):
+        flange = self._short_web_on_a_flange()
+        shell = self._midsurface_of(flange)
+
+        self.assertEqual(len(shell.Shape.Faces), 2)
+        self._assert_sheets_meet(shell)
+
+        # The flange is 200 by 60 and the web on it is 120 long. Growth is
+        # decided edge by edge and only where the body carries on, so the
+        # flange must come out the size it was: an edge with nothing beyond it
+        # would otherwise carry a tab of material into thin air.
+        sheets = [
+            face for face, thickness in zip(shell.Shape.Faces, shell.Thickness) if thickness > 0
+        ]
+        plate = max(sheets, key=lambda face: face.Area)
+        self.assertAlmostEqual(plate.Area, 200.0 * 60.0, delta=1e-6)
+        self.assertAlmostEqual(plate.BoundBox.XLength, 200.0, delta=1e-6)
+        self.assertAlmostEqual(plate.BoundBox.YLength, 60.0, delta=1e-6)
+
+    def test_a_beam_with_filleted_roots_comes_out_as_one_shell(self):
+        beam = self._i_beam_with_root_fillets()
+        shell = self._midsurface_of(beam)
+
+        # Four half flanges and the web. Each flange is two walls because the
+        # web divides it, and each half is built from the face that is its own
+        # rather than from the outer face the two of them share.
+        self.assertEqual(len(shell.Shape.Faces), 5)
+        self.assertEqual(len(shell.Shape.Solids), 0)
+        self._assert_sheets_meet(shell)
+
+        self.assertEqual(len(shell.Shape.Shells), 1)
+        self.assertTrue(shell.Shape.Shells[0].isValid())
+        # One junction line per flange, each named by the web and by the two
+        # halves of that flange.
+        self.assertEqual(self._edge_sharing(shell.Shape).get(3), 2)
+
+        # The fillet in the root is 3 mm, which puts the flange's mid-plane
+        # further from the end of the web than half a thickness. The reach has
+        # to clear it; if it did not, the joints would stand open.
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        self.assertAlmostEqual(carried / beam.Solids[0].Volume, 1.018, delta=0.005)
+
+    def test_a_pipe_standing_on_a_plate_is_paired_and_meets_it(self):
+        # The two faces of a pipe are sampled at their own places on the round,
+        # which sit at different angles, so their normals are not anti-parallel
+        # and nothing about them says they bound a wall. Looking straight across
+        # from one sample to the other is what pairs them.
+        plate = Part.makeBox(80, 80, 4)
+        pipe = Part.makeCylinder(15, 50, FreeCAD.Vector(40, 40, 4)).cut(
+            Part.makeCylinder(12, 50, FreeCAD.Vector(40, 40, 4))
+        )
+        shell = self._midsurface_of(plate.fuse(pipe).removeSplitter())
+
+        # The plate either side of the pipe, and the pipe itself.
+        self.assertEqual(len(shell.Shape.Faces), 3)
+        self.assertEqual(len(shell.Shape.Solids), 0)
+        self._assert_sheets_meet(shell)
+
+        round_sheets = [
+            face
+            for face in shell.Shape.Faces
+            if type(face.Surface).__name__ == "Cylinder"
+        ]
+        self.assertEqual(len(round_sheets), 1, "the pipe wall must be found")
+        self.assertAlmostEqual(round_sheets[0].Surface.Radius, 13.5, delta=1e-6)
+
+        # The pipe reaches the plate's mid-plane and the plate runs on under it,
+        # so the circle where they meet is one edge that all three faces name.
+        self.assertEqual(len(shell.Shape.Shells), 1)
+        self.assertTrue(shell.Shape.Shells[0].isValid())
+        self.assertEqual(self._edge_sharing(shell.Shape).get(3), 1)
+
+    def test_what_stands_on_a_wall_does_not_leave_a_hole_in_it(self):
+        # A boss is not a wall - it is far too thick to be one - so the plate
+        # under it has a hole in its top face and none in its bottom one. The
+        # plate's mid-surface runs on underneath the boss, so that hole is not
+        # a hole of the wall and the sheet is whole.
+        plate = (
+            Part.makeBox(80, 80, 4)
+            .fuse(Part.makeCylinder(12, 20, FreeCAD.Vector(40, 40, 4)))
+            .removeSplitter()
+        )
+        shell = self._midsurface_of(plate, coverage=0.5)
+
+        self.assertEqual(len(shell.Shape.Faces), 1)
+        sheet = shell.Shape.Faces[0]
+        self.assertEqual(len(sheet.Wires), 1, "the boss must not leave a hole")
+        self.assertAlmostEqual(sheet.Area, 80.0 * 80.0, delta=1e-6)
+
+    @staticmethod
+    def _mitred_brace():
+        """
+        A pipe landing on a plate at forty-five degrees, cut off flush with it.
+
+        The pipe's faces end on the plate in ellipses, so the round wall does
+        not fill the parameter rectangle its surface is described by. Growing
+        it by letting that rectangle out would carry material along the whole
+        length of the brace to reach a joint at one end of it.
+        """
+        plate = Part.makeBox(120, 120, 4)
+        axis = FreeCAD.Vector(1, 0, 1)
+        axis.normalize()
+        start = FreeCAD.Vector(60, 60, 4) - axis * 20
+        pipe = Part.makeCylinder(15, 90, start, axis).cut(
+            Part.makeCylinder(12, 90, start, axis)
+        )
+        below = Part.makeBox(300, 300, 100, FreeCAD.Vector(-100, -100, -100))
+        return plate.fuse(pipe).cut(below).removeSplitter()
+
+    @staticmethod
+    def _gusset_in_a_rounded_corner():
+        """
+        An angle with a rounded corner and a gusset standing inside the corner.
+
+        The gusset's footprint is a notch in the middle of the corner's inner
+        face - the smaller of the corner's two faces, so the one its sheet is
+        built from - which means the corner's sheet is not its parameter
+        rectangle either. The gusset has to reach the corner's mid-arc through
+        the corner's own material, and the corner has to close the notch.
+        """
+
+        def bar(size, radius, offset):
+            box = Part.makeBox(size, size, 100, FreeCAD.Vector(offset, offset, 0))
+            long_edges = [
+                edge
+                for edge in box.Edges
+                if abs(edge.Vertexes[0].Point.z - edge.Vertexes[1].Point.z) > 1e-7
+            ]
+            return box.makeFillet(radius, long_edges)
+
+        outer = bar(40, 8.0, 0)
+        inner = Part.makeBox(60, 60, 120, FreeCAD.Vector(4, 4, -10))
+        corner = [
+            edge
+            for edge in inner.Edges
+            if abs(edge.Vertexes[0].Point.x - 4) < 1e-7
+            and abs(edge.Vertexes[0].Point.y - 4) < 1e-7
+            and abs(edge.Vertexes[0].Point.z - edge.Vertexes[1].Point.z) > 1e-7
+        ]
+        angle = outer.cut(inner.makeFillet(4.0, corner))
+
+        gusset = Part.makeBox(27, 3, 30, FreeCAD.Vector(-7, -1.5, 30))
+        gusset.Placement = FreeCAD.Placement(
+            FreeCAD.Vector(8, 8, 0), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 45)
+        )
+        return angle.fuse(gusset).removeSplitter()
+
+    @staticmethod
+    def _swept_wall_on_a_plate():
+        """
+        A thin free-form wall standing on a plate.
+
+        Both faces of the wall are B-splines, so its mid-surface is an offset
+        surface: there is no way to ask it about anywhere it does not already
+        go, and it has to reach the plate some other way.
+        """
+        import math
+
+        points = [
+            FreeCAD.Vector(x, 10 * math.sin(x / 15.0), 0) for x in range(10, 91, 10)
+        ]
+        spline = Part.BSplineCurve()
+        spline.interpolate(points)
+        path = Part.Wire([spline.toShape()])
+
+        across = FreeCAD.Vector(0, 0, 1).cross(spline.tangent(spline.FirstParameter)[0])
+        across.normalize()
+        start = spline.value(spline.FirstParameter)
+        up = FreeCAD.Vector(0, 0, 40)
+        profile = Part.makePolygon(
+            [
+                start - across * 1.5,
+                start + across * 1.5,
+                start + across * 1.5 + up,
+                start - across * 1.5 + up,
+                start - across * 1.5,
+            ]
+        )
+        wall = path.makePipeShell([profile], True, False)
+        wall.translate(FreeCAD.Vector(0, 30, 4))
+        return Part.makeBox(100, 80, 4).fuse(wall).removeSplitter()
+
+    def test_a_mitred_brace_grows_only_along_the_edge_that_has_a_joint(self):
+        brace = self._mitred_brace()
+        shell = self._midsurface_of(brace)
+
+        # The plate either side of the brace, and the brace itself.
+        self.assertEqual(len(shell.Shape.Faces), 3)
+        self.assertEqual(len(shell.Shape.Solids), 0)
+        self._assert_sheets_meet(shell)
+
+        self.assertEqual(len(shell.Shape.Shells), 1)
+        self.assertTrue(shell.Shape.Shells[0].isValid())
+        self.assertEqual(self._edge_sharing(shell.Shape).get(3), 1)
+
+        round_sheets = [
+            face
+            for face in shell.Shape.Faces
+            if type(face.Surface).__name__ == "Cylinder"
+        ]
+        self.assertEqual(len(round_sheets), 1)
+        self.assertAlmostEqual(round_sheets[0].Surface.Radius, 13.5, delta=1e-6)
+
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        self.assertAlmostEqual(carried / brace.Solids[0].Volume, 1.010, delta=0.008)
+
+    def test_a_notched_round_wall_closes_its_notch_and_meets_the_gusset(self):
+        angle = self._gusset_in_a_rounded_corner()
+        shell = self._midsurface_of(angle)
+
+        self.assertEqual(len(shell.Shape.Solids), 0)
+        self._assert_sheets_meet(shell)
+        self.assertEqual(len(shell.Shape.Shells), 1)
+        self.assertTrue(shell.Shape.Shells[0].isValid())
+
+        # The gusset stands in the corner, so the line it meets the corner's
+        # arc along is named by the gusset and by the corner either side of it.
+        self.assertEqual(self._edge_sharing(shell.Shape).get(3), 1)
+
+        round_sheets = [
+            face
+            for face in shell.Shape.Faces
+            if type(face.Surface).__name__ == "Cylinder"
+        ]
+        self.assertTrue(round_sheets, "the rounded corner must become a sheet")
+
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        self.assertAlmostEqual(carried / angle.Solids[0].Volume, 1.023, delta=0.010)
+
+    def test_a_free_form_wall_reaches_the_plate_through_a_band(self):
+        part = self._swept_wall_on_a_plate()
+        shell = self._midsurface_of(part)
+
+        # The plate, the wall's own offset surface, and the band that carries
+        # it down to the plate. The wall's surface cannot be extended, so
+        # without the band it would stop half its thickness above the plate
+        # and the two would never meet.
+        self.assertEqual(len(shell.Shape.Faces), 3)
+        self.assertEqual(len(shell.Shape.Solids), 0)
+        self.assertEqual(len(shell.Shape.Shells), 1)
+        self.assertTrue(shell.Shape.Shells[0].isValid())
+
+        # Every face carries a thickness: the band stands for wall material
+        # just as the surface it grew from does.
+        self.assertEqual(sum(1 for value in shell.Thickness if value > 0), 3)
+
+        # The wall is shorter than the plate, so where it lands does not part
+        # the plate: the plate stays one whole face, its footprint under the
+        # wall filled in, and the junction line is written into it as an edge
+        # the band shares. The band shares its other edge with the wall.
+        plate = max(shell.Shape.Faces, key=lambda face: face.Area)
+        self.assertAlmostEqual(plate.Area, 100.0 * 80.0, delta=1e-6)
+        self.assertAlmostEqual(
+            Part.Face(plate.OuterWire).Area,
+            plate.Area,
+            delta=1e-6,
+            msg="the footprint must not be a hole",
+        )
+        self.assertEqual(self._edge_sharing(shell.Shape).get(2), 2)
+
+        free_form = [
+            face
+            for face in shell.Shape.Faces
+            if type(face.Surface).__name__ not in ("Plane", "Cylinder")
+        ]
+        self.assertTrue(free_form, "the swept wall must become a sheet of its own")
+
+    @staticmethod
+    def _bent_beam():
+        """
+        An I beam swept along a gentle curve, with an end plate.
+
+        A flat beam is planes and nothing else. Swept, its flanges become
+        B-spline surfaces bounded exactly where the flanges end, and its web a
+        plane bounded by B-spline edges - and each of those, on its own, was
+        enough to defeat the step: the flanges were not walls, and the web
+        could not be grown into them.
+        """
+        points = [FreeCAD.Vector(x, 0, 0.0003 * x * x) for x in range(0, 601, 100)]
+        spline = Part.BSplineCurve()
+        spline.interpolate(points)
+        path = Part.Wire([spline.toShape()])
+
+        # The I section in the plane x = 0: 60 wide, 80 high, 5 thick throughout.
+        half_width, half_height, thick = 30.0, 40.0, 5.0
+        outline = [
+            FreeCAD.Vector(0, -half_width, half_height),
+            FreeCAD.Vector(0, half_width, half_height),
+            FreeCAD.Vector(0, half_width, half_height - thick),
+            FreeCAD.Vector(0, thick / 2, half_height - thick),
+            FreeCAD.Vector(0, thick / 2, -half_height + thick),
+            FreeCAD.Vector(0, half_width, -half_height + thick),
+            FreeCAD.Vector(0, half_width, -half_height),
+            FreeCAD.Vector(0, -half_width, -half_height),
+            FreeCAD.Vector(0, -half_width, -half_height + thick),
+            FreeCAD.Vector(0, -thick / 2, -half_height + thick),
+            FreeCAD.Vector(0, -thick / 2, half_height - thick),
+            FreeCAD.Vector(0, -half_width, half_height - thick),
+            FreeCAD.Vector(0, -half_width, half_height),
+        ]
+        beam = path.makePipeShell([Part.makePolygon(outline)], True, True)
+        plate = Part.makeBox(5, 100, 110, FreeCAD.Vector(-5, -50, -55))
+        return beam.fuse(plate).removeSplitter()
+
+    def test_the_swept_flanges_of_a_bent_beam_are_walls(self):
+        # The two faces of a swept flange are bounded B-splines. Surveying the
+        # thickness from the flange's top face, which the web divides into two
+        # walls, drops samples over the far half onto the near half's surface,
+        # and a bounded surface clamps them to its edge: they read the distance
+        # to that edge, thirty millimetres and more, and the flange was refused
+        # as varying by more than its own thickness. A sample counts only when
+        # it found a foot on the partner.
+        from femobjects import geometry_shellbuilder
+
+        solid = self._bent_beam().Solids[0]
+        rejected = []
+        walls = geometry_shellbuilder.walls_of_solid(solid, 6.0, 0.02, rejected=rejected)
+        self.assertEqual(len(walls), 6, "four half flanges, the web and the end plate")
+        self.assertEqual(rejected, [])
+        swept = [
+            wall for wall in walls if type(wall.outer.Surface).__name__ == "BSplineSurface"
+        ]
+        self.assertEqual(len(swept), 4)
+        for wall in swept:
+            self.assertAlmostEqual(wall.thickness, 5.0, delta=0.01)
+            self.assertLess(wall.spread, 0.001, "a swept flange is a constant wall")
+
+    def test_a_bent_beam_comes_out_as_one_shell(self):
+        beam = self._bent_beam()
+        shell = self._midsurface_of(beam)
+
+        # Wholly replaced: nothing stays solid and nothing is thrown away. The
+        # step once handed back two sheets and a third of the material for this
+        # part, having found only the web and the plate and then cut the body
+        # apart around them.
+        self.assertEqual(len(shell.Shape.Solids), 0)
+        self.assertEqual(len(shell.Shape.Shells), 1)
+        self.assertTrue(shell.Shape.Shells[0].isValid())
+        self.assertEqual(
+            sum(1 for value in shell.Thickness if value > 0),
+            len(shell.Shape.Faces),
+            "every face of the result stands for material",
+        )
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        self.assertGreater(carried / beam.Solids[0].Volume, 1.0)
+        self.assertLess(carried / beam.Solids[0].Volume, 1.06)
+
+        # Each half flange is its own offset surface, carried to the web and
+        # to the end plate by bands: the web, being a plane bounded by curved
+        # edges, is grown by cutting the body in its plane rather than by
+        # fusing strips to it, which fails along such edges.
+        kinds = {}
+        for face in shell.Shape.Faces:
+            kind = type(face.Surface).__name__
+            kinds[kind] = kinds.get(kind, 0) + 1
+        self.assertEqual(kinds.get("OffsetSurface"), 4, "the four half flanges")
+        self.assertGreaterEqual(kinds.get("Plane", 0), 2, "the web and the end plate")
+
+        # Nothing stands alone, and the line where the web meets a flange along
+        # the bend is named by the sheets that meet there. The boxes of the
+        # bent flanges overlap although the flanges are far apart, so this is
+        # not asked of neighbouring boxes but of every sheet.
+        sheets = [
+            face for face, thickness in zip(shell.Shape.Faces, shell.Thickness) if thickness > 0
+        ]
+        for index, face in enumerate(sheets):
+            self.assertTrue(
+                any(
+                    face.distToShape(other)[0] < 1e-6
+                    for position, other in enumerate(sheets)
+                    if position != index
+                ),
+                "a sheet of the beam stands alone",
+            )
+        sharing = self._edge_sharing(shell.Shape)
+        self.assertGreaterEqual(sum(count for faces, count in sharing.items() if faces >= 3), 1)
+
+    def test_a_bent_web_is_freed_along_the_bend_and_the_rest_stays_solid(self):
+        beam = self._bent_beam()
+        _, imp, shell = self._chain(beam)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = "6 mm"
+        shell.Tolerance = 0.02
+
+        # The flanges switched off: their top faces are the two largest
+        # free-form faces of the body, and each is the outer face of the two
+        # half-flange walls under it.
+        tops = sorted(
+            (
+                (face.Area, index)
+                for index, face in enumerate(imp.Shape.Faces, 1)
+                if type(face.Surface).__name__ == "BSplineSurface"
+            ),
+            reverse=True,
+        )[:2]
+        shell.ExcludedWalls = [(imp, tuple(f"Face{index}" for _, index in tops))]
+        self.document.recompute()
+
+        # The web ends against the flanges along a curve. A plane cannot free
+        # it there - a plane through the middle of that curve cuts the beam
+        # at a slant in the bend - so the cut is the edge swept square to the
+        # web. Freed, the web is a sheet; the flanges and the plate, which
+        # nothing was asked to free, stay one solid; and nothing is lost. The
+        # step once handed back two sheets and a third of the material for
+        # this, having given the whole beam to the web.
+        self.assertEqual(len(shell.Shape.Solids), 1)
+        self.assertEqual(sum(1 for value in shell.Thickness if value > 0), 1)
+        web = next(
+            face for face, thickness in zip(shell.Shape.Faces, shell.Thickness) if thickness > 0
+        )
+        self.assertEqual(type(web.Surface).__name__, "Plane")
+
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        ) + sum(solid.Volume for solid in shell.Shape.Solids)
+        self.assertAlmostEqual(carried / beam.Solids[0].Volume, 1.0, delta=0.01)
+        self.assertLess(web.distToShape(shell.Shape.Solids[0])[0], 1e-6, "the web meets the rest")
+
+    def test_closing_the_junctions_can_be_switched_off_and_reached_further(self):
+        beam = self._i_beam_with_root_fillets()
+        _, _, shell = self._chain(beam)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = "6 mm"
+        self.document.recompute()
+
+        # Closing the joints is what the tool does by default, and how far it
+        # reaches for them is taken from the walls unless it is asked for.
+        self.assertTrue(shell.CloseJunctions)
+        self.assertAlmostEqual(float(shell.JunctionReach), 0.0, delta=1e-9)
+
+        def widest_gap():
+            sheets = [
+                face
+                for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+                if thickness > 0
+            ]
+            worst = 0.0
+            for index, face in enumerate(sheets):
+                for other in sheets[index + 1 :]:
+                    box = FreeCAD.BoundBox(face.BoundBox)
+                    box.enlarge(1.0)
+                    if box.intersect(other.BoundBox):
+                        worst = max(worst, face.distToShape(other)[0])
+            return worst
+
+        self.assertEqual(len(shell.Shape.Shells), 1)
+        self.assertLess(widest_gap(), 1e-6)
+
+        # Switched off, every sheet ends at its own wall. Nothing meets, so
+        # there is no shell at all - which is the mid-surface of each wall on
+        # its own, and a perfectly reasonable thing to ask for.
+        shell.CloseJunctions = False
+        self.document.recompute()
+        self.assertEqual(len(shell.Shape.Shells), 0)
+        self.assertEqual(self._edge_sharing(shell.Shape).get(2), None)
+
+        # The reach has to clear the neighbour's half thickness and the fillet
+        # in the root. Five millimetres does not on this beam, and the joints
+        # stay a millimetre open; the default takes twice the thickest wall,
+        # which does.
+        shell.CloseJunctions = True
+        shell.JunctionReach = "5 mm"
+        self.document.recompute()
+        self.assertGreater(widest_gap(), 0.5)
+
+        shell.JunctionReach = "10 mm"
+        self.document.recompute()
+        self.assertEqual(len(shell.Shape.Shells), 1)
+        self.assertLess(widest_gap(), 1e-6)
+
+    def test_a_step_saved_before_a_setting_existed_still_recomputes(self):
+        # A property is written to a file only if it was there when the file
+        # was saved. A step restored without one throws the moment its execute
+        # reaches for it, and what the user sees is not an error but the tool
+        # ignoring every setting: the step stays invalid and keeps the shape
+        # from the last save. Removing a property here is what a document made
+        # before that property existed brings in.
+        _, _, shell = self._chain(Part.makeBox(40, 30, 4))
+        self.document.recompute()
+        before = len(shell.Shape.Faces)
+
+        for name in ("CloseJunctions", "JunctionReach"):
+            shell.setPropertyStatus(name, "-LockDynamic")
+            shell.removeProperty(name)
+        self.assertFalse(hasattr(shell, "CloseJunctions"))
+
+        shell.Proxy.onDocumentRestored(shell)
+        self.assertTrue(shell.CloseJunctions, "the default comes back with the property")
+        self.assertAlmostEqual(float(shell.JunctionReach), 0.0, delta=1e-9)
+
+        shell.touch()
+        self.document.recompute()
+        self.assertNotIn("Invalid", shell.State)
+        self.assertEqual(len(shell.Shape.Faces), before)
+
+    def _pick_two_adjacent_flats(self, imp, walls):
+        """
+        Two adjacent flat walls of a profile, and the names of the others.
+
+        Adjacent because the point of it is the corner they share: two flats
+        whose normals are at right angles meet through one.
+        """
+        from femobjects import geometry_shellbuilder
+
+        names = {}
+        for index, face in enumerate(imp.Shape.Faces, 1):
+            centre = face.CenterOfMass
+            names[(round(centre.x, 6), round(centre.y, 6), round(centre.z, 6))] = f"Face{index}"
+
+        def name_of(face):
+            centre = face.CenterOfMass
+            return names[(round(centre.x, 6), round(centre.y, 6), round(centre.z, 6))]
+
+        flats = [wall for wall in walls if type(wall.outer.Surface).__name__ == "Plane"]
+        self.assertEqual(len(flats), 4, "the four flats of the profile")
+        first = flats[0]
+        along = geometry_shellbuilder.sample_point(first.outer)[1]
+        partner = next(
+            wall
+            for wall in flats[1:]
+            if abs(geometry_shellbuilder.sample_point(wall.outer)[1].dot(along)) < 0.1
+        )
+        keeping = [first, partner]
+        switched_off = sorted(
+            name_of(wall.outer) for wall in flats if wall not in keeping
+        )
+        return keeping, switched_off
+
+    def _accounted_for(self, shell, body):
+        """Everything the result stands for - shells and solids - over the body."""
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        carried += sum(solid.Volume for solid in shell.Shape.Solids)
+        return carried / body.Volume
+
+    def test_a_corner_between_two_closed_sheets_is_not_left_solid(self):
+        # Two adjacent flats of a profile in use, the other two switched off.
+        # The corners of this profile are too thick to be walls, so the body
+        # has to be cut, and the corner between the two chosen flats is a piece
+        # of it that no wall claims.
+        from femobjects import geometry_shellbuilder
+
+        tube = self._tube_with_offset_corners()
+        body = tube.Solids[0]
+        _, imp, shell = self._chain(tube)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = "8 mm"
+        shell.Tolerance = 0.02
+        self.document.recompute()
+
+        walls = geometry_shellbuilder.walls_of_solid(body, 8.0, 0.02)
+        _, switched_off = self._pick_two_adjacent_flats(imp, walls)
+        shell.ExcludedWalls = [(imp, tuple(switched_off))]
+
+        # Closed, the two sheets reach each other through the corner, and the
+        # shell then stands for the corner's material. Leaving it solid as well
+        # would put a solid inside what the shell already carries, so it goes
+        # with them.
+        shell.CloseJunctions = True
+        self.document.recompute()
+        sheets = self._assert_sheets_meet(shell)
+        self.assertEqual(len(sheets), 2)
+        self.assertEqual(len(shell.Shape.Solids), 1, "the corner goes with the sheets")
+        self.assertAlmostEqual(self._accounted_for(shell, body), 1.0, delta=0.01)
+
+        # Open, each sheet ends at its own wall, half a profile apart. Nothing
+        # stands for the corner, so it stays exactly where it was.
+        shell.CloseJunctions = False
+        self.document.recompute()
+        self.assertEqual(len(shell.Shape.Solids), 2, "the corner has nothing to go with")
+        apart = [
+            face for face, thickness in zip(shell.Shape.Faces, shell.Thickness) if thickness > 0
+        ]
+        self.assertEqual(len(apart), 2)
+        self.assertGreater(apart[0].distToShape(apart[1])[0], 1.0)
+        self.assertAlmostEqual(self._accounted_for(shell, body), 1.0, delta=0.01)
+
+    def test_the_preview_is_built_by_the_same_code_as_the_result(self):
+        # The panel draws what shell_of_solid gives for the settings being
+        # edited, and the step builds its result from the same call. They once
+        # went different ways round for a body that has to be cut - the preview
+        # grew the sheets into their joints and the step did not - so a closed
+        # shell was promised and an open one built.
+        from femobjects import geometry_shellbuilder
+
+        tube = self._tube_with_offset_corners()
+        body = tube.Solids[0]
+        _, imp, shell = self._chain(tube)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = "8 mm"
+        shell.Tolerance = 0.02
+        self.document.recompute()
+
+        walls = geometry_shellbuilder.walls_of_solid(body, 8.0, 0.02)
+        in_use, switched_off = self._pick_two_adjacent_flats(imp, walls)
+        shell.ExcludedWalls = [(imp, tuple(switched_off))]
+        self.document.recompute()
+
+        drawn, remainder, outcome, _ = geometry_shellbuilder.shell_of_solid(
+            body, in_use, geometry_shellbuilder.settings_of(shell)
+        )
+        # This body is cut, which is where the two used to disagree.
+        self.assertEqual(outcome, geometry_shellbuilder.OUTCOME_CUT)
+
+        built = [
+            face for face, thickness in zip(shell.Shape.Faces, shell.Thickness) if thickness > 0
+        ]
+        self.assertEqual(len(drawn), len(built), "the preview draws every face that is built")
+        self.assertEqual(len(remainder), len(shell.Shape.Solids))
+        self.assertAlmostEqual(
+            sum(sheet.face.Area for sheet in drawn),
+            sum(face.Area for face in built),
+            delta=1e-6,
+            msg="the preview draws them at the size they are built",
+        )
+
+    def test_a_sheet_keeps_the_outline_its_wall_has(self):
+        # Two adjacent flats of a profile and the corner between them, the
+        # other two flats switched off - so the body is cut, and the sheets
+        # are grown into the corner to close on it.
+        #
+        # A sheet is cut out of the body with a mask: its own footprint, and a
+        # rod along each edge that has a joint beyond it. That union keeps the
+        # faces it was assembled from, and every one of them scores the sheet
+        # where it lands, so a flat that has four sides came out with twelve
+        # edges - its ends split at the reach of a rod, 18.2 mm short of the
+        # corner. Nothing about the shape is wrong, but no mesher will lay a
+        # mapped grid on a face like that.
+        from femobjects import geometry_shellbuilder
+
+        tube = self._tube_with_offset_corners()
+        body = tube.Solids[0]
+        _, imp, shell = self._chain(tube)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = "8 mm"
+        shell.Tolerance = 0.02
+        self.document.recompute()
+
+        # The corner is thicker than the bound, so it is asked for by hand.
+        inner_corner, outer_corner = self._corner_pair_names(imp.Shape)
+        shell.PairSources = [(imp, (inner_corner,))]
+        shell.PairPartners = [(imp, (outer_corner,))]
+
+        # The two flats that corner joins stay; the other two go.
+        corner_face = next(
+            face
+            for index, face in enumerate(imp.Shape.Faces, 1)
+            if f"Face{index}" == outer_corner
+        )
+        walls = geometry_shellbuilder.walls_of_solid(body, 8.0, 0.02)
+        names = {}
+        for index, face in enumerate(imp.Shape.Faces, 1):
+            centre = face.CenterOfMass
+            names[(round(centre.x, 6), round(centre.y, 6), round(centre.z, 6))] = f"Face{index}"
+
+        def name_of(face):
+            centre = face.CenterOfMass
+            return names[(round(centre.x, 6), round(centre.y, 6), round(centre.z, 6))]
+
+        beside = [
+            wall
+            for wall in walls
+            if wall.outer.distToShape(corner_face)[0] < 1e-6
+        ]
+        self.assertEqual(len(beside), 2, "a corner joins two flats")
+        shell.ExcludedWalls = [
+            (
+                imp,
+                tuple(
+                    sorted(
+                        name_of(wall.outer)
+                        for wall in walls
+                        if wall not in beside
+                    )
+                ),
+            )
+        ]
+        self.document.recompute()
+
+        sheets = self._assert_sheets_meet(shell)
+        self.assertEqual(len(sheets), 3, "two flats and the corner between them")
+        for face in sheets:
+            self.assertEqual(len(face.Wires), 1)
+            self.assertEqual(
+                len(face.Edges),
+                4,
+                f"a sheet came out with {len(face.Edges)} edges instead of four",
+            )
+
+    def test_a_corner_is_found_whichever_of_its_faces_is_named_first(self):
+        # A second shell builder on what a first one left, so that the rest of
+        # a profile can carry a different thickness. The first takes two flats
+        # and the corner between them; the remainder it hands on has three
+        # corners left, and the cut that freed the first shell has left some of
+        # their faces short of a full quarter turn.
+        #
+        # A face cut short has its centre off where the two surfaces of a wall
+        # are parallel, so looking across from there strikes the partner at a
+        # slant - thirty degrees out, reading 7.86 mm thick where the wall is
+        # 9.66, and no wall at all. Looking from the whole face is square. Both
+        # ways round are now tried and the squarer of the two measures the
+        # wall, so which face is named first cannot decide whether there is
+        # one. It used to: two of these three corners were a wall read one way
+        # round and nothing read the other, and the search finding them at all
+        # came down to the order it happened to reach their faces in.
+        from femobjects import geometry_shellbuilder
+
+        tube = self._tube_with_offset_corners()
+        body = tube.Solids[0]
+        group, imp, first = self._chain(tube)
+        first.Method = "Midsurface"
+        first.Side = "Inner"
+        first.MaxThickness = "8 mm"
+        first.Tolerance = 0.02
+        self.document.recompute()
+
+        inner_corner, outer_corner = self._corner_pair_names(imp.Shape)
+        first.PairSources = [(imp, (inner_corner,))]
+        first.PairPartners = [(imp, (outer_corner,))]
+        corner_face = next(
+            face
+            for index, face in enumerate(imp.Shape.Faces, 1)
+            if f"Face{index}" == outer_corner
+        )
+        walls = geometry_shellbuilder.walls_of_solid(body, 8.0, 0.02)
+        names = {}
+        for index, face in enumerate(imp.Shape.Faces, 1):
+            centre = face.CenterOfMass
+            names[(round(centre.x, 6), round(centre.y, 6), round(centre.z, 6))] = f"Face{index}"
+
+        def name_of(face):
+            centre = face.CenterOfMass
+            return names[(round(centre.x, 6), round(centre.y, 6), round(centre.z, 6))]
+
+        beside = [wall for wall in walls if wall.outer.distToShape(corner_face)[0] < 1e-6]
+        first.ExcludedWalls = [
+            (imp, tuple(sorted(name_of(w.outer) for w in walls if w not in beside)))
+        ]
+        self.document.recompute()
+        self.assertEqual(len(first.Shape.Solids), 1, "the rest of the profile")
+        rest = first.Shape.Solids[0]
+
+        # Every corner of what is left, asked for both ways round.
+        rounds = [
+            face for face in rest.Faces if type(face.Surface).__name__ == "Cylinder"
+        ]
+        corners = [
+            (one, other)
+            for index, one in enumerate(rounds)
+            for other in rounds[index + 1 :]
+            if abs(one.Surface.Radius - other.Surface.Radius) > 1e-9
+            and (one.Surface.Center - other.Surface.Center).Length < 8.0
+        ]
+        self.assertEqual(len(corners), 3, "three corners are left in the body")
+        for one, other in corners:
+            forward = geometry_shellbuilder.wall_from_faces(rest, one, other)
+            backward = geometry_shellbuilder.wall_from_faces(rest, other, one)
+            self.assertIsNotNone(forward, "a corner read one way round")
+            self.assertIsNotNone(backward, "the same corner read the other way round")
+            self.assertAlmostEqual(forward.thickness, backward.thickness, delta=1e-6)
+            self.assertAlmostEqual(forward.thickness, 9.109, delta=0.01)
+
+        # Found whichever way, the walls stand for the whole of what is left,
+        # so the second step replaces it and nothing of the profile stays solid.
+        second = ObjectsFem.makeGeometryShellBuilder(self.document)
+        group.Group = [imp, first, second]
+        self.document.recompute()
+        self.assertEqual(second.Base, first)
+        second.Method = "Midsurface"
+        second.MaxThickness = "10 mm"
+        second.Tolerance = 0.15
+        self.document.recompute()
+
+        self.assertEqual(len(geometry_shellbuilder.walls_of_solid(rest, 10.0, 0.15)), 5)
+        self.assertEqual(len(second.Shape.Solids), 0)
+        emitted = [
+            face
+            for face, thickness in zip(second.Shape.Faces, second.Thickness)
+            if thickness > 0
+        ]
+        self.assertEqual(len(emitted), 5, "two flats and three corners")
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(second.Shape.Faces, second.Thickness)
+        )
+        self.assertAlmostEqual(carried / rest.Volume, 1.0, delta=0.02)
+
+    @staticmethod
+    def _beam_with_an_end_plate():
+        """An I beam 5 mm throughout, capped by a plate across its end."""
+        top = Part.makeBox(200, 60, 5, FreeCAD.Vector(0, -30, 35))
+        bottom = Part.makeBox(200, 60, 5, FreeCAD.Vector(0, -30, -40))
+        web = Part.makeBox(200, 5, 70, FreeCAD.Vector(0, -2.5, -35))
+        plate = Part.makeBox(5, 100, 110, FreeCAD.Vector(200, -50, -55))
+        return top.fuse([bottom, web, plate]).removeSplitter()
+
+    def test_a_sheet_reaches_the_corner_where_two_of_its_joints_meet(self):
+        # A flange of this beam runs into the web along one edge and into the
+        # end plate along another, and those two edges meet. The sheet is grown
+        # across each of them by a rod laid along it, and a rod stops at the end
+        # of its own edge - so the square between the two of them was reached by
+        # neither, and the flange came back notched by half a thickness each
+        # way. Every junction that meets another junction was open there.
+        beam = self._beam_with_an_end_plate()
+        body = beam.Solids[0]
+        _, _, shell = self._chain(beam)
+        shell.Method = "Midsurface"
+        shell.MaxThickness = "6 mm"
+        shell.Tolerance = 0.02
+        self.document.recompute()
+
+        sheets = self._assert_sheets_meet(shell)
+        self.assertEqual(len(sheets), 6, "four half flanges, the web and the plate")
+        self.assertEqual(len(shell.Shape.Solids), 0)
+        self.assertEqual(len(shell.Shape.Shells), 1)
+        self.assertTrue(shell.Shape.Shells[0].isValid())
+
+        # Each half flange runs the length of the beam to the plate's mid-plane
+        # and across to the web's, and is that whole rectangle: 30 by 202.5.
+        # Notched it came to 6068.75, a quarter of a square millimetre short in
+        # each of the two directions it grew.
+        halves = [
+            face
+            for face in sheets
+            if abs(abs(face.BoundBox.ZMin) - 37.5) < 1e-6
+            and abs(face.BoundBox.ZLength) < 1e-6
+        ]
+        self.assertEqual(len(halves), 4)
+        for face in halves:
+            self.assertAlmostEqual(face.Area, 30.0 * 202.5, delta=1e-6)
+            self.assertEqual(len(face.Edges), 4, "a notch shows as two more edges")
+
+
+        # The corner itself: where the plate's mid-plane meets the web's, on
+        # the flange's own mid-plane. Two of the four halves hold it.
+        corner = FreeCAD.Vector(202.5, 0.0, 37.5)
+        self.assertEqual(
+            sum(1 for face in halves if face.isInside(corner, 1e-6, True)),
+            2,
+            "the corner where two junctions meet belongs to the sheets there",
+        )
+
+    def test_a_free_side_of_a_sheet_is_one_edge(self):
+        # A sheet is assembled and cut several times over - a footprint fused
+        # with the rods that grow it, then split against every other sheet at
+        # once - and each of those leaves a mark where its boundary crossed the
+        # sheet's own. The pieces meet exactly, on one line or one circle, so
+        # they are extra rather than wrong; but a side of four described by six
+        # edges is one no mesher will lay a mapped grid on, and on a beam the
+        # tapered end of a flange came back as three arcs of one circle.
+        #
+        # Only free sides are asked about. Where a sheet runs along two
+        # neighbours in turn the boundary between them is a junction and has to
+        # stay two edges however straight it looks, or the shell would no
+        # longer say who meets whom.
+        flange = self._short_web_on_a_flange()
+        shell = self._midsurface_of(flange)
+        sheets = self._assert_sheets_meet(shell)
+
+        owners = {}
+        for face in shell.Shape.Faces:
+            for edge in face.Edges:
+                owners[edge.hashCode()] = owners.get(edge.hashCode(), 0) + 1
+
+        for face in sheets:
+            free = [edge for edge in face.Edges if owners.get(edge.hashCode(), 0) == 1]
+            for index, one in enumerate(free):
+                for other in free[index + 1 :]:
+                    if not any(
+                        (a.Point - b.Point).Length < 1e-7
+                        for a in one.Vertexes
+                        for b in other.Vertexes
+                    ):
+                        continue
+                    self.assertFalse(
+                        _same_curve(one, other),
+                        "a free side of a sheet is split into two edges",
+                    )
+
+    def test_faces_that_share_a_centre_are_still_told_apart(self):
+        # A tube's outer round and its bore have the same centre of mass, both
+        # being on the axis at half height, and a flange has several such
+        # pairs. Naming a face by where its middle is gave every one of them
+        # the name of whichever came first: three different walls of one solid
+        # were listed under the same two faces, and a wall is remembered by
+        # that name when it is switched off, so switching one off switched off
+        # another.
+        from femobjects import geometry_shellbuilder
+
+        tube = Part.makeCylinder(20, 10).cut(Part.makeCylinder(10, 10))
+        rounds = [
+            face for face in tube.Faces if type(face.Surface).__name__ == "Cylinder"
+        ]
+        self.assertEqual(len(rounds), 2)
+        self.assertLess(
+            (rounds[0].CenterOfMass - rounds[1].CenterOfMass).Length,
+            1e-9,
+            "the two rounds do share a centre of mass",
+        )
+
+        names = geometry_shellbuilder.face_names(tube)
+        first = geometry_shellbuilder.face_name(names, rounds[0])
+        second = geometry_shellbuilder.face_name(names, rounds[1])
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertNotEqual(first, second, "two faces, two names")
+
+        # Every face of the shape gets its own name, and the name it gets is
+        # the one that names it back.
+        given = [geometry_shellbuilder.face_name(names, face) for face in tube.Faces]
+        self.assertEqual(len(set(given)), len(tube.Faces))
+        for index, face in enumerate(tube.Faces, 1):
+            self.assertEqual(
+                geometry_shellbuilder.face_name(names, face), f"Face{index}"
+            )
+
+    @staticmethod
+    def _l_corner_in_two_solids():
+        """
+        An L cut in two at the corner, so the halves share the cut face.
+
+        The same face is in both solids - the modeller imprinted the interface -
+        which is what says they are one body interrupted by a boundary that
+        exists only in the file.
+        """
+        import BOPTools.SplitAPI
+
+        corner = Part.makeBox(50, 5, 100).fuse(Part.makeBox(5, 40, 100)).removeSplitter()
+        knife = Part.makePlane(
+            400, 400, FreeCAD.Vector(-100, 5, -100), FreeCAD.Vector(0, 1, 0)
+        )
+        return BOPTools.SplitAPI.slice(corner, [knife], mode="Split")
+
+    @staticmethod
+    def _l_corner_as_two_parts():
+        """The same L as two solids laid against one another, sharing nothing."""
+        return Part.makeCompound(
+            [
+                Part.makeBox(50, 5, 100),
+                Part.makeBox(5, 35, 100, FreeCAD.Vector(0, 5, 0)),
+            ]
+        )
+
+    def test_two_solids_that_share_a_face_close_the_junction_between_them(self):
+        from femobjects import geometry_shellbuilder
+
+        split = self._l_corner_in_two_solids()
+        self.assertEqual(len(split.Solids), 2)
+        self.assertTrue(
+            geometry_shellbuilder.solids_share_a_face(split.Solids[0], split.Solids[1])
+        )
+
+        shell = self._midsurface_of(split)
+        sheets = self._assert_sheets_meet(shell)
+        self.assertEqual(len(sheets), 2)
+        self.assertEqual(len(shell.Shape.Solids), 0)
+
+        # Joined, the two halves come out as the whole L does: the mid-surfaces
+        # meet at the corner and share the edge they meet on, and between them
+        # they account for the material exactly.
+        self.assertEqual(len(shell.Shape.Shells), 1)
+        self.assertTrue(shell.Shape.Shells[0].isValid())
+        self.assertEqual(
+            sum(1 for a in sheets[0].Edges for b in sheets[1].Edges if a.isSame(b)), 1
+        )
+        carried = sum(
+            face.Area * thickness
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+        )
+        body = sum(solid.Volume for solid in split.Solids)
+        self.assertAlmostEqual(carried / body, 1.0, delta=1e-6)
+
+        # The panel draws this by asking the same question, and it has to ask
+        # it with the same neighbours or it draws every body reduced on its
+        # own: the junction is then missing from the drawing although the
+        # result has one, which is what happened when this was first built.
+        bodies = [
+            (solid, geometry_shellbuilder.walls_of_solid(solid, 6.0, 0.02))
+            for solid in split.Solids
+        ]
+        joined = geometry_shellbuilder.joined_neighbours(bodies)
+        self.assertEqual([len(one) for one in joined], [1, 1], "each is the other's")
+        drawn = []
+        for index, (body_solid, walls) in enumerate(bodies):
+            produced, _, _, _ = geometry_shellbuilder.shell_of_solid(
+                body_solid,
+                walls,
+                geometry_shellbuilder.settings_of(shell),
+                neighbours=joined[index],
+            )
+            drawn.extend(produced)
+        self.assertEqual(len(drawn), len(sheets))
+        self.assertAlmostEqual(
+            sum(sheet.face.Area for sheet in drawn),
+            sum(face.Area for face in sheets),
+            delta=1e-6,
+            msg="the drawing covers the ground the result does",
+        )
+
+    def test_two_solids_that_only_touch_are_left_apart(self):
+        # The same L again, but as two parts laid against one another. Each has
+        # its own face at the interface, which is what a bolted or clamped
+        # joint looks like: what happens on one side of it is not what happens
+        # on the other, and running the mid-surfaces together would weld two
+        # parts into one.
+        from femobjects import geometry_shellbuilder
+
+        parts = self._l_corner_as_two_parts()
+        self.assertEqual(len(parts.Solids), 2)
+        self.assertFalse(
+            geometry_shellbuilder.solids_share_a_face(parts.Solids[0], parts.Solids[1])
+        )
+        self.assertLess(parts.Solids[0].distToShape(parts.Solids[1])[0], 1e-9)
+
+        shell = self._midsurface_of(parts)
+        sheets = [
+            face
+            for face, thickness in zip(shell.Shape.Faces, shell.Thickness)
+            if thickness > 0
+        ]
+        self.assertEqual(len(sheets), 2)
+        self.assertEqual(len(shell.Shape.Shells), 0, "two plates, not one shell")
+        self.assertAlmostEqual(sheets[0].distToShape(sheets[1])[0], 2.5, delta=1e-6)
+        self.assertEqual(
+            sum(1 for a in sheets[0].Edges for b in sheets[1].Edges if a.isSame(b)), 0
+        )

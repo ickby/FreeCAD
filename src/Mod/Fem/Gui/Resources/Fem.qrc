@@ -124,6 +124,7 @@
 
         <!-- geometry preprocessing -->
         <file>icons/FEM_GeometryPartition.svg</file>
+        <file>icons/FEM_GeometryShellBuilder.svg</file>
 
         <!-- object icons without gui command but with task panel action -->
         <file>icons/fem-post-geo-box.svg</file>

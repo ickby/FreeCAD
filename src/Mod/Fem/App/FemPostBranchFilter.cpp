@@ -212,10 +212,23 @@ void FemPostBranchFilter::filterChanged(FemPostFilter* filter)
 
 void FemPostBranchFilter::filterPipelineChanged([[maybe_unused]] FemPostFilter* postfilter)
 {
-    // one of our filters has changed its active pipeline. We need to reconnect it properly.
-    // As we are cheap we just reconnect everything
+    // One of our filters has changed its active pipeline, so the chain has to be
+    // wired up again. As we are cheap we just reconnect everything.
     // TODO: Do more efficiently
-    onChanged(&Group);
+    //
+    // The rewiring and the word upwards, which is all onChanged(&Group) did
+    // here that was wanted. What it also did was announce a change of Group,
+    // and the view answers that by rewriting the colours of every visible
+    // child, over every point of them - for a change of VTK ports that nothing
+    // outside can see. The membership has not changed; only what one filter
+    // does with what it is given.
+    setupPipeline();
+
+    App::DocumentObject* group = FemPostGroupExtension::getGroupOfObject(this);
+    if (group && group->hasExtension(FemPostGroupExtension::getExtensionClassTypeId())) {
+        auto postgroup = group->getExtensionByType<FemPostGroupExtension>();
+        postgroup->filterChanged(this);
+    }
 }
 
 

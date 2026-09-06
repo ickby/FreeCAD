@@ -108,6 +108,8 @@ public:
     // Group pipeline handling
     void filterChanged(FemPostFilter* filter) override;
     void filterPipelineChanged(FemPostFilter* filter) override;
+    /// Wire every filter of the group to the one before it, or all to the input
+    void reconnectFilters();
 
     // frame handling
     bool hasFrames();

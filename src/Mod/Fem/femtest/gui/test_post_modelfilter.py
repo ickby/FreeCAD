@@ -230,3 +230,43 @@ class TestPostModelFilterGui(unittest.TestCase):
         self.assertTrue(panel.widget.ElementTree.isVisibleTo(panel.widget))
         self.assertFalse(panel.widget.MessageLabel.isVisibleTo(panel.widget))
         self.assertTrue(panel.widget.AttributeComboBox.isEnabled())
+
+    def test_narrowing_writes_the_colours_once(self):
+        """A filter re-running must not make the pipeline recolour everything.
+
+        Switching the filter between its own VTK pipelines used to be announced
+        as a change of the pipeline's Group, which reads as "the membership
+        moved" and had the view rewrite the colours of every visible child -
+        over every point of them - on top of the rewrite the filter had just
+        done itself.
+
+        Counted rather than timed: the cost is one whole pass per extra call,
+        and the count is what says whether there are extra calls at all.
+        """
+        import FemGui
+
+        self.pipeline.ViewObject.Visibility = False
+        self.filter.ViewObject.Visibility = True
+        self.filter.ViewObject.DisplayMode = "Surface"
+        for name in self.filter.ViewObject.getEnumerationsOfProperty("Field"):
+            if name != "None":
+                self.filter.ViewObject.Field = name
+                break
+        self.document.recompute()
+
+        # Warm up, so first-time work is not counted with the operation.
+        self.filter.Elements = ["Solid1"]
+        self.document.recompute()
+        self.filter.Elements = []
+        self.document.recompute()
+
+        FemGui.perfReset()
+        FemGui.perfEnable(True)
+        try:
+            self.filter.Elements = ["Solid1"]
+            self.document.recompute()
+        finally:
+            FemGui.perfEnable(False)
+
+        written = {name: count for name, count, _total, _self in FemGui.perfReport()}
+        self.assertEqual(written.get("post.toCoin.colors", 0), 1)

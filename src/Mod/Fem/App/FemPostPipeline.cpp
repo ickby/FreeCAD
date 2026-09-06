@@ -380,47 +380,51 @@ void FemPostPipeline::onChanged(const Property* prop)
 
     // connect all filters correctly to the source
     if (prop == &Group || prop == &Mode) {
+        reconnectFilters();
+    }
+}
 
-        // we check if all connections are right and add new ones if needed
-        std::vector<FemPostFilter*> objs = getFilter();
+void FemPostPipeline::reconnectFilters()
+{
+    // we check if all connections are right and add new ones if needed
+    std::vector<FemPostFilter*> objs = getFilter();
 
-        if (objs.empty()) {
-            return;
+    if (objs.empty()) {
+        return;
+    }
+
+    FemPostFilter* filter = nullptr;
+    for (auto& obj : objs) {
+
+        // prepare the filter: make all connections new
+        FemPostFilter* nextFilter = obj;
+        nextFilter->getFilterInput()->RemoveAllInputConnections(0);
+
+        // handle input modes (Parallel is separated, all other settings are serial, just in
+        // case an old document is loaded with "custom" mode, idx 2)
+        if (Mode.getValue() == Fem::PostGroupMode::Parallel) {
+            // parallel: all filters get out input
+            nextFilter->getFilterInput()->SetInputConnection(m_transform_filter->GetOutputPort(0));
         }
-
-        FemPostFilter* filter = nullptr;
-        for (auto& obj : objs) {
-
-            // prepare the filter: make all connections new
-            FemPostFilter* nextFilter = obj;
-            nextFilter->getFilterInput()->RemoveAllInputConnections(0);
-
-            // handle input modes (Parallel is separated, all other settings are serial, just in
-            // case an old document is loaded with "custom" mode, idx 2)
-            if (Mode.getValue() == Fem::PostGroupMode::Parallel) {
-                // parallel: all filters get out input
-                nextFilter->getFilterInput()->SetInputConnection(m_transform_filter->GetOutputPort(0));
+        else {
+            // serial: the next filter gets the previous output, the first one gets our input
+            if (!filter) {
+                nextFilter->getFilterInput()->SetInputConnection(
+                    m_transform_filter->GetOutputPort(0)
+                );
             }
             else {
-                // serial: the next filter gets the previous output, the first one gets our input
-                if (!filter) {
-                    nextFilter->getFilterInput()->SetInputConnection(
-                        m_transform_filter->GetOutputPort(0)
-                    );
-                }
-                else {
-                    nextFilter->getFilterInput()->SetInputConnection(
-                        filter->getFilterOutput()->GetOutputPort()
-                    );
-                }
+                nextFilter->getFilterInput()->SetInputConnection(
+                    filter->getFilterOutput()->GetOutputPort()
+                );
             }
+        }
 
-            filter = nextFilter;
-        };
-
-        // inform the downstream pipeline
-        recomputeChildren();
+        filter = nextFilter;
     }
+
+    // inform the downstream pipeline
+    recomputeChildren();
 }
 
 void FemPostPipeline::filterChanged(FemPostFilter* filter)
@@ -452,10 +456,17 @@ void FemPostPipeline::filterChanged(FemPostFilter* filter)
 
 void FemPostPipeline::filterPipelineChanged(FemPostFilter*)
 {
-    // one of our filters has changed its active pipeline. We need to reconnect it properly.
-    // As we are cheap we just reconnect everything
+    // One of our filters has changed its active pipeline, so the chain has to be
+    // wired up again. As we are cheap we just reconnect everything.
     // TODO: Do more efficiently
-    onChanged(&Group);
+    //
+    // The reconnecting itself, and not onChanged(&Group), which is how this was
+    // said before. Announcing a change of Group tells everything listening that
+    // the pipeline's membership moved, and the view answers that by rewriting
+    // the colours of every visible child - over every point of them - for what
+    // is a rewiring of VTK ports that no one outside can see. The membership
+    // has not changed here; only what one filter does with what it is given.
+    reconnectFilters();
 }
 
 void FemPostPipeline::updateFrameValues()

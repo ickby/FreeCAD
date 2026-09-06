@@ -72,7 +72,9 @@ class _TaskPanel(base_fempostpanel._BasePostTaskPanel):
 
     def __init_widget(self):
 
-        self._attribution = post_modelfilter.Attribution(self.obj.getInputData())
+        # Through the object, so the panel shares the parse the filter already
+        # did rather than reading half a million cells again to draw a tree.
+        self._attribution = self.obj.Proxy.attribution(self.obj)
 
         self.__configure_columns()
         self._enumPropertyToCombobox(self.obj, "Attribute", self.widget.AttributeComboBox)
@@ -187,14 +189,14 @@ class _TaskPanel(base_fempostpanel._BasePostTaskPanel):
         # The cells no entity claims at all. They are a row of their own so a
         # partial attribution can be seen and excluded rather than staying
         # invisible, and the count is what makes it worth looking at.
-        if self._attribution.unattributed_cells:
+        if self._attribution.unattributed:
             item = self.__add_row(
                 tree,
                 translate("FEM", "Unattributed"),
                 post_modelfilter.UNATTRIBUTED,
                 post_modelfilter.UNATTRIBUTED in checked,
             )
-            item.setText(1, str(self._attribution.unattributed_cells))
+            item.setText(1, str(self._attribution.unattributed_count()))
 
         tree.expandAll()
         tree.blockSignals(False)

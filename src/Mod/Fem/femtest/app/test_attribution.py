@@ -193,7 +193,8 @@ class TestResultAttribution(unittest.TestCase):
 
         _, attribution = self._attribution(pipeline)
         self.assertEqual(attribution.entities, ["Solid1", "Solid2"])
-        self.assertEqual(attribution.unattributed_cells, 0)
+        self.assertFalse(attribution.unattributed)
+        self.assertEqual(attribution.unattributed_count(), 0)
 
     def test_component_and_material_are_stored_resolved(self):
         analysis, geometry, _ = self._analysis(mesh=_two_solid_mesh(), solids=2)
@@ -319,7 +320,8 @@ class TestResultAttribution(unittest.TestCase):
 
         _, attribution = self._attribution(pipeline)
         self.assertEqual(attribution.entities, ["Solid1"])
-        self.assertEqual(attribution.unattributed_cells, 1)
+        self.assertTrue(attribution.unattributed)
+        self.assertEqual(attribution.unattributed_count(), 1)
 
     # Imports
     # #######
@@ -396,6 +398,25 @@ class TestResultAttribution(unittest.TestCase):
         for elements in ([], ["Solid1", "Solid2"], ["NoSuchThing"]):
             filter_obj.Elements = elements
             self.assertEqual(self._cells(filter_obj), whole, f"for {elements}")
+
+    def test_the_filter_notices_when_the_result_it_reads_changes(self):
+        """The parse is kept between calls, so it has to be dropped when stale.
+
+        Attributing the pipeline after the filter already read it is the case
+        that catches a cache which never lets go: the filter has an answer, and
+        the answer is now the wrong one.
+        """
+        analysis, _, _ = self._analysis(mesh=_two_solid_mesh(), solids=2)
+        mesh = membertools.get_mesh_to_solve(analysis)
+        pipeline = self._pipeline(analysis, mesh.FemMesh)
+
+        filter_obj = ObjectsFem.makePostFilterModel(self.document, pipeline)
+        self.document.recompute()
+        self.assertEqual(filter_obj.Proxy.attribution(filter_obj).entities, [])
+
+        pipeline.attribute(mesh, analysis)
+        self.document.recompute()
+        self.assertEqual(filter_obj.Proxy.attribution(filter_obj).entities, ["Solid1", "Solid2"])
 
     def test_the_filter_offers_only_the_attributes_the_result_carries(self):
         analysis, geometry, _ = self._analysis(mesh=_two_solid_mesh(), solids=2)

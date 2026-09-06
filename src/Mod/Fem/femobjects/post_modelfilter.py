@@ -82,6 +82,20 @@ ATTRIBUTE_ARRAYS = {
 }
 
 
+def _as_array(vtk_array):
+    """*vtk_array* as a numpy view, or None when numpy is not to be had.
+
+    Only the cell count wants this, and only when the panel is open, so the
+    import is made here rather than at module load: a filter that never shows
+    its panel should not pay for numpy being on the system.
+    """
+    try:
+        from vtkmodules.util.numpy_support import vtk_to_numpy
+    except ImportError:
+        return None
+    return vtk_to_numpy(vtk_array)
+
+
 def _first_dataset(data):
     """The data set of a result, reaching into a multi-frame set for its first block.
 
@@ -120,10 +134,12 @@ class Attribution:
         self.entities = []
         #: attribute name -> {entity name: (category key, category label)}
         self.categories = {}
-        #: Number of cells carrying no entity at all
-        self.unattributed_cells = 0
+        #: Whether any cell carries no entity at all
+        self.unattributed = False
         #: The per-cell id array, kept so a selection can be built to match it
         self._ids = None
+        #: How many cells those are, counted only if someone asks
+        self._unattributed_count = None
 
         dataset = _first_dataset(data)
         if dataset is None:
@@ -137,13 +153,18 @@ class Attribution:
         entities = [table.GetValue(i) for i in range(table.GetNumberOfValues())]
 
         # An id the table cannot answer for means the two were written by
-        # different things, and nothing sensible can be done with either.
-        for i in range(ids.GetNumberOfTuples()):
-            value = int(ids.GetValue(i))
-            if value == UNATTRIBUTED_ID:
-                self.unattributed_cells += 1
-            elif value < 0 or value >= len(entities):
+        # different things, and nothing sensible can be done with either. The
+        # question is one of range, so it is asked of the range: VTK finds it in
+        # one pass of compiled code and remembers it until the array changes,
+        # where walking the cells from Python was the single most expensive
+        # thing the filter did - two thirds of hiding a component, on a mesh of
+        # half a million cells.
+        if ids.GetNumberOfTuples() > 0:
+            low, high = ids.GetRange()
+            # -1 is the sentinel and the only negative value that may appear.
+            if low < UNATTRIBUTED_ID or high >= len(entities):
                 return
+            self.unattributed = low == UNATTRIBUTED_ID
 
         self.entities = entities
         self._ids = ids
@@ -157,6 +178,28 @@ class Attribution:
                 entity = side.GetValue(3 * row)
                 rows[entity] = (side.GetValue(3 * row + 1), side.GetValue(3 * row + 2))
             self.categories[attribute] = rows
+
+    def unattributed_count(self):
+        """How many cells no entity claims.
+
+        Counted here rather than while reading, because the number is wanted in
+        one label of the panel and nowhere else, while whether there are any at
+        all - which the range already answered - is what the filtering needs.
+        """
+        if self._unattributed_count is not None:
+            return self._unattributed_count
+
+        count = 0
+        if self.unattributed and self._ids is not None:
+            values = _as_array(self._ids)
+            if values is not None:
+                count = int((values == UNATTRIBUTED_ID).sum())
+            else:
+                for i in range(self._ids.GetNumberOfTuples()):
+                    if self._ids.GetValue(i) == UNATTRIBUTED_ID:
+                        count += 1
+        self._unattributed_count = count
+        return count
 
     def attributes(self):
         """The attributes this result can be grouped by, in a stable order."""
@@ -201,7 +244,7 @@ class Attribution:
     def selectable(self, attribute):
         """Everything that can be checked for *attribute*, unattributed included."""
         names = list(self.entities)
-        if self.unattributed_cells or self.uncategorised(attribute):
+        if self.unattributed or self.uncategorised(attribute):
             names.append(UNATTRIBUTED)
         return names
 
@@ -263,12 +306,39 @@ class PostModelFilter(base_fempythonobject.BaseFemPythonObject):
         obj.setActiveFilterPipeline(PASSTHROUGH)
 
     def onDocumentRestored(self, obj):
+        self._attribution_stamp = None
         self.__setupFilterPipeline(obj)
         self._update(obj)
 
+    def attribution(self, obj):
+        """The tables of the current input, parsed once per version of it.
+
+        One operation asks for these several times over - the property change,
+        the recompute that follows it, and the panel that shows the result of
+        both - and every one of those asked the arrays again. They cannot have
+        changed in between: what the user is changing is which entities to keep,
+        and the input the entities are named in is the pipeline's data, which a
+        filter never writes to. So the parse is kept until that data says it has
+        moved on, which its modification time is exactly the record of.
+        """
+        data = obj.getInputData()
+        stamp = None
+        if data is not None:
+            # The count guards the case the time cannot: a data object rebuilt
+            # in place, which VTK may hand back under a time already seen.
+            stamp = (data.GetMTime(), data.GetNumberOfCells())
+
+        if stamp is not None and getattr(self, "_attribution_stamp", None) == stamp:
+            return self._attribution
+
+        parsed = Attribution(data)
+        self._attribution_stamp = stamp
+        self._attribution = parsed
+        return parsed
+
     def execute(self, obj):
 
-        attribution = Attribution(obj.getInputData())
+        attribution = self.attribution(obj)
 
         # The attributes on offer are the ones this result actually carries. A
         # choice that is no longer available falls back to the first one rather
@@ -300,7 +370,7 @@ class PostModelFilter(base_fempythonobject.BaseFemPythonObject):
         """Point the object at the pipeline the current choice calls for."""
 
         if attribution is None:
-            attribution = Attribution(obj.getInputData())
+            attribution = self.attribution(obj)
 
         ids = self._selected_ids(obj, attribution)
         if ids is None:

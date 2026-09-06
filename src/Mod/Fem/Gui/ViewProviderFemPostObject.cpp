@@ -601,24 +601,76 @@ void ViewProviderFemPostObject::updateProperties()
     m_blockPropertyChanges = false;
 }
 
+namespace
+{
+
+/**
+ * Write every cell of @a cells as its point indices followed by the -1 that
+ * closes a Coin index list.
+ *
+ * Coin grows a multi-field to exactly the size asked for, so set1Value past the
+ * end reallocates and copies the whole field on every single index. Sizing the
+ * field once and writing through the edit pointer is the same loop without the
+ * quadratic behaviour - the same fix the mesh renderer already carries, and on
+ * a result of any size the difference between milliseconds and seconds.
+ */
+void writeCellIndices(SoMFInt32& field, vtkCellArray* cells)
+{
+    const vtkIdType numCells = cells->GetNumberOfCells();
+    const vtkIdType numIndices = cells->GetNumberOfConnectivityIds() + numCells;
+
+    field.setNum(static_cast<int>(numIndices));
+    if (numIndices == 0) {
+        return;
+    }
+
+    int32_t* indices = field.startEditing();
+    int at = 0;
+    vtkIdType npts = 0;
+    vtkIdTypePtr indx = nullptr;
+    for (cells->InitTraversal(); cells->GetNextCell(npts, indx);) {
+        for (vtkIdType i = 0; i < npts; ++i) {
+            indices[at++] = static_cast<int32_t>(indx[i]);
+        }
+        indices[at++] = -1;
+    }
+    field.finishEditing();
+}
+
+/// The first point of every cell, which is the whole of what a marker needs.
+void writeFirstPointIndices(SoMFInt32& field, vtkCellArray* cells)
+{
+    const vtkIdType numCells = cells->GetNumberOfCells();
+    field.setNum(static_cast<int>(numCells));
+    if (numCells == 0) {
+        return;
+    }
+
+    int32_t* indices = field.startEditing();
+    int at = 0;
+    vtkIdType npts = 0;
+    vtkIdTypePtr indx = nullptr;
+    for (cells->InitTraversal(); cells->GetNextCell(npts, indx);) {
+        if (npts > 0) {
+            indices[at++] = static_cast<int32_t>(indx[0]);
+        }
+    }
+    field.setNum(at);
+    field.finishEditing();
+}
+
+}  // namespace
+
 void ViewProviderFemPostObject::update3D()
 {
     FEM_PERF_SCOPE("post.toCoin");
 
     vtkPolyData* pd = m_currentAlgorithm->GetOutput();
 
-    vtkPointData* pntData;
-    vtkPoints* points;
-    vtkDataArray* normals = nullptr;
-    vtkDataArray* tcoords = nullptr;
-    vtkCellArray* cells;
-    vtkIdType npts = 0;
-    vtkIdTypePtr indx = nullptr;
-
-    points = pd->GetPoints();
-    pntData = pd->GetPointData();
-    normals = pntData->GetNormals();
-    tcoords = pntData->GetTCoords();
+    vtkPoints* points = pd->GetPoints();
+    vtkPointData* pntData = pd->GetPointData();
+    vtkDataArray* normals = pntData->GetNormals();
+    vtkDataArray* tcoords = pntData->GetTCoords();
 
     // write out point data if any
     WritePointData(points, normals, tcoords);
@@ -628,21 +680,7 @@ void ViewProviderFemPostObject::update3D()
     // write out polys if any
     if (pd->GetNumberOfPolys() > 0) {
         FEM_PERF_SCOPE("post.toCoin.faces");
-
-        m_faces->coordIndex.startEditing();
-        int soidx = 0;
-        cells = pd->GetPolys();
-        for (cells->InitTraversal(); cells->GetNextCell(npts, indx);) {
-
-            for (int i = 0; i < npts; i++) {
-                m_faces->coordIndex.set1Value(soidx, static_cast<int>(indx[i]));
-                ++soidx;
-            }
-            m_faces->coordIndex.set1Value(soidx, -1);
-            ++soidx;
-        }
-        m_faces->coordIndex.setNum(soidx);
-        m_faces->coordIndex.finishEditing();
+        writeCellIndices(m_faces->coordIndex, pd->GetPolys());
     }
     else {
         m_faces->coordIndex.setNum(0);
@@ -651,21 +689,7 @@ void ViewProviderFemPostObject::update3D()
     // write out tstrips if any
     if (pd->GetNumberOfStrips() > 0) {
         FEM_PERF_SCOPE("post.toCoin.strips");
-
-        int soidx = 0;
-        cells = pd->GetStrips();
-        m_triangleStrips->coordIndex.startEditing();
-        for (cells->InitTraversal(); cells->GetNextCell(npts, indx);) {
-
-            for (int i = 0; i < npts; i++) {
-                m_triangleStrips->coordIndex.set1Value(soidx, static_cast<int>(indx[i]));
-                ++soidx;
-            }
-            m_triangleStrips->coordIndex.set1Value(soidx, -1);
-            ++soidx;
-        }
-        m_triangleStrips->coordIndex.setNum(soidx);
-        m_triangleStrips->coordIndex.finishEditing();
+        writeCellIndices(m_triangleStrips->coordIndex, pd->GetStrips());
     }
     else {
         m_triangleStrips->coordIndex.setNum(0);
@@ -674,20 +698,7 @@ void ViewProviderFemPostObject::update3D()
     // write out lines if any
     if (pd->GetNumberOfLines() > 0) {
         FEM_PERF_SCOPE("post.toCoin.lines");
-
-        int soidx = 0;
-        cells = pd->GetLines();
-        m_lines->coordIndex.startEditing();
-        for (cells->InitTraversal(); cells->GetNextCell(npts, indx);) {
-            for (int i = 0; i < npts; i++) {
-                m_lines->coordIndex.set1Value(soidx, static_cast<int>(indx[i]));
-                ++soidx;
-            }
-            m_lines->coordIndex.set1Value(soidx, -1);
-            ++soidx;
-        }
-        m_lines->coordIndex.setNum(soidx);
-        m_lines->coordIndex.finishEditing();
+        writeCellIndices(m_lines->coordIndex, pd->GetLines());
     }
     else {
         m_lines->coordIndex.setNum(0);
@@ -696,16 +707,7 @@ void ViewProviderFemPostObject::update3D()
     // write out verts if any
     if (pd->GetNumberOfVerts() > 0) {
         FEM_PERF_SCOPE("post.toCoin.markers");
-
-        int soidx = 0;
-        cells = pd->GetVerts();
-        m_markers->coordIndex.startEditing();
-        m_markers->coordIndex.setNum(pd->GetNumberOfVerts());
-        for (cells->InitTraversal(); cells->GetNextCell(npts, indx);) {
-            m_markers->coordIndex.set1Value(soidx, static_cast<int>(indx[0]));
-            ++soidx;
-        }
-        m_markers->coordIndex.finishEditing();
+        writeFirstPointIndices(m_markers->coordIndex, pd->GetVerts());
     }
     else {
         m_markers->coordIndex.setNum(0);

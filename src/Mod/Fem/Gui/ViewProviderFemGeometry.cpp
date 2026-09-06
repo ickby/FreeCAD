@@ -29,6 +29,7 @@
 #endif
 
 #include <Base/Console.h>
+#include <Base/Tools.h>
 #include <App/Document.h>
 #include <App/GroupExtension.h>
 #include <Gui/Application.h>
@@ -317,7 +318,26 @@ void ViewProviderFemGeometry::applyChainVisuals()
     }
 
     const ChainRole role = chainRole();
+    const bool step = (role == ChainRole::Step);
     const bool draws = (role == ChainRole::Owner || role == ChainRole::Subject);
+
+    // A build step is not a thing you can look at on its own: the group holds
+    // the result and renders it. Take the visibility control away instead of
+    // leaving a switch that does nothing, the same way objects without a
+    // representation do it. Here rather than somewhere a member has to be told
+    // to visit, because it follows from the role like everything else does.
+    setToggleVisibility(
+        step ? ToggleVisibilityMode::NoToggleVisibility : ToggleVisibilityMode::CanToggleVisibility
+    );
+    if (step && !Visibility.getValue()) {
+        // Visibility is not the user's to set for a step, so it must not be
+        // left off: the object would be unable to draw even as the subject of
+        // an open panel, with no switch left to turn it back on. Locked while
+        // it is written, or showing it would read as the user choosing the
+        // geometry stage and move the stage on every document that is loaded.
+        Base::StateLocker lock(m_pinningVisibility, true);
+        Visibility.setValue(true);
+    }
 
     // A step that has just stopped being one has been ignoring its shape, so it
     // has to be caught up before anything asks it to draw.
@@ -340,27 +360,6 @@ void ViewProviderFemGeometry::applyChainVisuals()
         m_badgedAsResult = result;
         signalChangeIcon();
     }
-}
-
-void ViewProviderFemGeometry::applyChainRole()
-{
-    const bool step = isChainStep();
-
-    // A build step is not a thing you can look at on its own: the group holds
-    // the result and renders it. Take the visibility control away instead of
-    // leaving a switch that does nothing, the same way objects without a
-    // representation do it.
-    setToggleVisibility(
-        step ? ToggleVisibilityMode::NoToggleVisibility : ToggleVisibilityMode::CanToggleVisibility
-    );
-    if (step && !Visibility.getValue()) {
-        // Visibility is not the user's to set for a step, so it must not be
-        // left off: the object would be unable to draw even as the subject of
-        // an open panel, with no switch left to turn it back on.
-        Visibility.setValue(true);
-    }
-
-    applyChainVisuals();
 }
 
 QIcon ViewProviderFemGeometry::mergeColorfulOverlayIcons(const QIcon& orig) const
@@ -419,7 +418,7 @@ void ViewProviderFemGeometry::attach(App::DocumentObject* pcObj)
     // is previewed, see suppressedMaskMode.
     setDisplayMaskMode(ViewMode::Default);
 
-    applyChainRole();
+    applyChainVisuals();
     ensureViewStateConnection();
     m_geometry.connectViewState();
 }
@@ -664,7 +663,7 @@ void ViewProviderFemGeometry::updateData(const App::Property* prop)
         if (auto* state = viewState()) {
             state->chainChanged();
         }
-        applyChainRole();
+        applyChainVisuals();
     }
 
     ViewProviderDocumentObject::updateData(prop);
@@ -673,7 +672,7 @@ void ViewProviderFemGeometry::updateData(const App::Property* prop)
 void ViewProviderFemGeometry::finishRestoring()
 {
     ViewProviderDocumentObject::finishRestoring();
-    applyChainRole();
+    applyChainVisuals();
 }
 
 void ViewProviderFemGeometry::onChanged(const App::Property* prop)
@@ -684,7 +683,7 @@ void ViewProviderFemGeometry::onChanged(const App::Property* prop)
 
     ViewProviderDocumentObject::onChanged(prop);
 
-    if (prop == &Visibility && isAttachedToDocument()) {
+    if (prop == &Visibility && isAttachedToDocument() && !m_pinningVisibility) {
         // Showing the geometry is what the geometry stage is, so the stage has
         // to be read again whenever this changes, including when the user hits
         // space bar on the group in the tree.

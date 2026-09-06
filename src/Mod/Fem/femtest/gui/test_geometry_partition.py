@@ -251,6 +251,33 @@ class TestGeometryPartitionGui(unittest.TestCase):
             "and its render has to be switched back on without anyone pushing it",
         )
 
+    def test_joining_the_chain_takes_the_visibility_switch_away(self):
+        """
+        A step has no visibility of its own to offer: the group draws its
+        result. The view provider of a member attaches before the member is one,
+        so the switch has to be taken away when the chain changes and given back
+        when it changes again - neither of which the member hears about itself.
+        """
+        step = ObjectsFem.makeGeometryImport(self.document)
+        self.document.recompute()
+        self.assertEqual(step.ViewObject.ToggleVisibility, "CanToggleVisibility")
+
+        self.group.Group = [self.imp, self.part, step]
+        self.document.recompute()
+        self.assertEqual(
+            step.ViewObject.ToggleVisibility,
+            "NoToggleVisibility",
+            "a member that just joined the chain has nothing of its own to show",
+        )
+
+        self.group.Group = [self.imp, self.part]
+        self.document.recompute()
+        self.assertEqual(
+            step.ViewObject.ToggleVisibility,
+            "CanToggleVisibility",
+            "and gets the switch back when it leaves again",
+        )
+
     # -- edit preview -------------------------------------------------------
 
     def test_preview_shows_the_input_and_restores_the_group(self):

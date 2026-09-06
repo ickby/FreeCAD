@@ -217,8 +217,6 @@ protected:
     void onViewStateChanged();
     AnalysisViewState* viewState() const;
 
-    /** Apply the chain role of this object: build step or result owner. */
-    void applyChainRole();
 
     /// Everything this object draws.
     FemGeometryViewHelper m_geometry;
@@ -244,6 +242,9 @@ protected:
     // the answer itself, which is read off the chain: only whether the tree
     // knows it yet.
     bool m_badgedAsResult {false};
+    // True while the visibility of a step is being pinned on, so that the write
+    // is not mistaken for the user showing the geometry.
+    bool m_pinningVisibility {false};
 };
 
 using ViewProviderFemGeometryPython = Gui::ViewProviderFeaturePythonT<ViewProviderFemGeometry>;

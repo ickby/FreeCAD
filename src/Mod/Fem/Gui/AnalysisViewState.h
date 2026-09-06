@@ -498,14 +498,23 @@ public:
      */
     AnalysisViewState* release();
 
+    /**
+     * The state being followed, or null once it is gone.
+     *
+     * Gated on the connection rather than handing the pointer back plainly: a
+     * state is destroyed with the analysis it belongs to, and destroying it
+     * takes its signal with it, so a dropped connection is exactly how a
+     * follower finds out. Handing the raw pointer out instead let a geometry
+     * object that outlived its analysis read from freed memory.
+     */
     AnalysisViewState* state() const
     {
-        return m_state;
+        return m_conn.connected() ? m_state : nullptr;
     }
 
     explicit operator bool() const
     {
-        return m_state != nullptr;
+        return state() != nullptr;
     }
 
 private:

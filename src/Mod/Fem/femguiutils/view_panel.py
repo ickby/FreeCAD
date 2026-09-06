@@ -1149,7 +1149,9 @@ class GeometryExplorer(QtGui.QTreeView):
         riddle. Greyed out it is an answer instead. Which modes those are is the
         view state's to say, so it is asked rather than told.
         """
-        applicable = set(FemGui.colorModes(stage)) if stage else set()
+        # Without a stage nothing is ruled out yet: the combo is disabled anyway,
+        # and greying every entry would put the mesh-only note on all of them.
+        applicable = set(FemGui.colorModes(stage) if stage else FemGui.colorModes())
         why = QtCore.QCoreApplication.translate(
             "FEM_ViewPanel", "Colours mesh elements, so only the mesh stage has it"
         )

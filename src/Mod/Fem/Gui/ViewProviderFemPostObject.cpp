@@ -72,6 +72,7 @@
 # include "TaskPostExtraction.h"
 #endif
 #include "ViewProviderAnalysis.h"
+#include "FemPerfLog.h"
 #include "ViewProviderFemPostObject.h"
 
 #include <Base/Tools.h>
@@ -487,12 +488,18 @@ std::vector<std::string> ViewProviderFemPostObject::getDisplayModes() const
 
 void ViewProviderFemPostObject::updateVtk()
 {
+    FEM_PERF_SCOPE("post.updateVtk");
 
     if (!setupPipeline()) {
         return;
     }
 
-    m_currentAlgorithm->Update();
+    {
+        // The surface / wireframe / outline extraction that turns the filter
+        // output into the polygons Coin is handed.
+        FEM_PERF_SCOPE("post.render.vtk");
+        m_currentAlgorithm->Update();
+    }
     if (!isRestoring()) {
         updateProperties();
     }
@@ -501,6 +508,7 @@ void ViewProviderFemPostObject::updateVtk()
 
 void ViewProviderFemPostObject::updateProperties()
 {
+    FEM_PERF_SCOPE("post.updateProperties");
 
     m_blockPropertyChanges = true;
     vtkPolyData* poly = m_currentAlgorithm->GetOutput();
@@ -595,6 +603,8 @@ void ViewProviderFemPostObject::updateProperties()
 
 void ViewProviderFemPostObject::update3D()
 {
+    FEM_PERF_SCOPE("post.toCoin");
+
     vtkPolyData* pd = m_currentAlgorithm->GetOutput();
 
     vtkPointData* pntData;
@@ -617,6 +627,7 @@ void ViewProviderFemPostObject::update3D()
 
     // write out polys if any
     if (pd->GetNumberOfPolys() > 0) {
+        FEM_PERF_SCOPE("post.toCoin.faces");
 
         m_faces->coordIndex.startEditing();
         int soidx = 0;
@@ -639,6 +650,7 @@ void ViewProviderFemPostObject::update3D()
 
     // write out tstrips if any
     if (pd->GetNumberOfStrips() > 0) {
+        FEM_PERF_SCOPE("post.toCoin.strips");
 
         int soidx = 0;
         cells = pd->GetStrips();
@@ -661,6 +673,7 @@ void ViewProviderFemPostObject::update3D()
 
     // write out lines if any
     if (pd->GetNumberOfLines() > 0) {
+        FEM_PERF_SCOPE("post.toCoin.lines");
 
         int soidx = 0;
         cells = pd->GetLines();
@@ -682,6 +695,7 @@ void ViewProviderFemPostObject::update3D()
 
     // write out verts if any
     if (pd->GetNumberOfVerts() > 0) {
+        FEM_PERF_SCOPE("post.toCoin.markers");
 
         int soidx = 0;
         cells = pd->GetVerts();
@@ -710,6 +724,8 @@ void ViewProviderFemPostObject::WritePointData(
         return;
     }
 
+    FEM_PERF_SCOPE("post.toCoin.points");
+
     m_coordinates->point.setNum(points->GetNumberOfPoints());
     SbVec3f* pnts = m_coordinates->point.startEditing();
     for (int i = 0; i < points->GetNumberOfPoints(); i++) {
@@ -720,6 +736,8 @@ void ViewProviderFemPostObject::WritePointData(
 
     // write out the point normal data
     if (normals) {
+        FEM_PERF_SCOPE("post.toCoin.normals");
+
         m_normals->vector.setNum(normals->GetNumberOfTuples());
         SbVec3f* dirs = m_normals->vector.startEditing();
         for (int i = 0; i < normals->GetNumberOfTuples(); i++) {
@@ -769,6 +787,8 @@ void ViewProviderFemPostObject::updateMaterial()
 
 void ViewProviderFemPostObject::WriteColorData(bool ResetColorBarRange)
 {
+    FEM_PERF_SCOPE("post.toCoin.colors");
+
     if (!setupPipeline()) {
         return;
     }
@@ -854,6 +874,8 @@ void ViewProviderFemPostObject::WriteColorData(bool ResetColorBarRange)
 
 void ViewProviderFemPostObject::WriteTransparency()
 {
+    FEM_PERF_SCOPE("post.toCoin.transparency");
+
     float trans = Base::fromPercent(Transparency.getValue());
     float* value = m_material->transparency.startEditing();
     float* edgeValue = m_matPlainEdges->transparency.startEditing();
@@ -897,6 +919,8 @@ void ViewProviderFemPostObject::finishRestoring()
 
 bool ViewProviderFemPostObject::setupPipeline()
 {
+    FEM_PERF_SCOPE("post.setupPipeline");
+
     if (m_blockPropertyChanges) {
         return false;
     }
@@ -1049,6 +1073,8 @@ void ViewProviderFemPostObject::unsetEdit(int ModNum)
 
 void ViewProviderFemPostObject::hide()
 {
+    FEM_PERF_SCOPE("post.hide");
+
     Gui::ViewProviderDocumentObject::hide();
     m_colorStyle->style = SoDrawStyle::INVISIBLE;
     // The object is now hidden but the color bar is wrong
@@ -1087,6 +1113,8 @@ void ViewProviderFemPostObject::hide()
 
 void ViewProviderFemPostObject::show()
 {
+    FEM_PERF_SCOPE("post.show");
+
     Gui::ViewProviderDocumentObject::show();
     m_colorStyle->style = SoDrawStyle::FILLED;
     // we must update the color bar except for data point filters

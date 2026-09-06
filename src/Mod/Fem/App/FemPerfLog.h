@@ -107,6 +107,22 @@ private:
     double m_nested {0.0};
 };
 
+/**
+ * Begin a stage from a language that has no scopes of its own.
+ *
+ * The Python half of the view is as much a stage as the C++ half - a filter
+ * decides in Python what the pipeline then runs - and a measurement that could
+ * not name it would book the whole of it as time nothing accounts for. The
+ * stages opened here go on the same stack the C++ ones use, so one nests inside
+ * the other in either direction and the self time stays honest.
+ *
+ * Balance every call with perfEndScope(); an unbalanced one leaves the stack
+ * holding a stage that never ends.
+ */
+FemExport void perfBeginScope(const std::string& name);
+/** End the stage begun last, and book it. */
+FemExport void perfEndScope();
+
 }  // namespace Fem
 
 #define FEM_PERF_CONCAT_(a, b) a##b

@@ -34,6 +34,7 @@
 #include <App/Document.h>
 #include <Base/Console.h>
 
+#include "FemPerfLog.h"
 #include "FemPostFilter.h"
 #include "FemPostFilterPy.h"
 
@@ -189,6 +190,8 @@ void FemPostFilter::onChanged(const App::Property* prop)
 
 DocumentObjectExecReturn* FemPostFilter::execute()
 {
+    FEM_PERF_SCOPE("post.filter.execute");
+
     // the pipelines are setup correctly, all we need to do is to update and take out the data.
     if (!m_pipelines.empty() && !m_activePipeline.empty()) {
 
@@ -203,14 +206,23 @@ DocumentObjectExecReturn* FemPostFilter::execute()
             return StdReturn;
         }
 
-        if (Frame.getValue() > 0) {
-            output->UpdateTimeStep(Frame.getValue());
-        }
-        else {
-            output->Update();
+        {
+            FEM_PERF_SCOPE("post.filter.execute.vtk");
+            if (Frame.getValue() > 0) {
+                output->UpdateTimeStep(Frame.getValue());
+            }
+            else {
+                output->Update();
+            }
         }
 
-        Data.setValue(output->GetOutputDataObject(0));
+        {
+            // Booked on its own because the property does not take the object
+            // it is handed: it makes one of its own and deep copies into it,
+            // so this is a whole second dataset every time a filter runs.
+            FEM_PERF_SCOPE("post.filter.execute.store");
+            Data.setValue(output->GetOutputDataObject(0));
+        }
     }
     return StdReturn;
 }

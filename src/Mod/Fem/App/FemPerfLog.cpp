@@ -22,6 +22,10 @@
 
 #include "PreCompiled.h"
 
+#include <memory>
+#include <optional>
+#include <vector>
+
 #include "FemPerfLog.h"
 
 using namespace Fem;
@@ -30,6 +34,21 @@ namespace
 {
 /** The stage currently being timed, so a nested one can be booked to it. */
 thread_local PerfScope* activeScope = nullptr;
+
+/**
+ * A stage opened by name rather than by a block going out of scope.
+ *
+ * The name has to outlive the PerfScope that points at it, and the scope has to
+ * keep the address it was constructed with, which is why these are held one per
+ * allocation rather than in a vector of values that would move underneath them.
+ */
+struct ScriptScope
+{
+    std::string name;
+    std::optional<PerfScope> scope;
+};
+
+thread_local std::vector<std::unique_ptr<ScriptScope>> scriptScopes;
 }  // namespace
 
 PerfLog& PerfLog::instance()
@@ -83,4 +102,25 @@ PerfScope::~PerfScope()
         m_parent->m_nested += elapsed.count();
     }
     PerfLog::instance().add(m_name, elapsed.count(), m_nested);
+}
+
+void Fem::perfBeginScope(const std::string& name)
+{
+    // Pushed even while the log is off, so that the matching end has something
+    // to take off the stack and a measurement can be switched on mid-run
+    // without the stack going out of step.
+    auto opened = std::make_unique<ScriptScope>();
+    opened->name = name;
+    opened->scope.emplace(opened->name.c_str());
+    scriptScopes.push_back(std::move(opened));
+}
+
+void Fem::perfEndScope()
+{
+    if (scriptScopes.empty()) {
+        return;
+    }
+    // The PerfScope books the stage as it is destroyed, and the name it points
+    // at has to still be there while that happens.
+    scriptScopes.pop_back();
 }

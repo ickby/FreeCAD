@@ -137,6 +137,19 @@ public:
             "perfReset() -- Forget what has been timed so far."
         );
         add_varargs_method(
+            "perfBegin",
+            &Module::perfBegin,
+            "perfBegin(name) -- Begin a timed stage that Python is doing itself. "
+            "It nests with the stages C++ marks, in either direction, so a filter "
+            "written in Python is named in the report rather than falling into the "
+            "time nothing accounts for. Balance it with perfEnd()."
+        );
+        add_varargs_method(
+            "perfEnd",
+            &Module::perfEnd,
+            "perfEnd() -- End the stage begun last by perfBegin()."
+        );
+        add_varargs_method(
             "perfReport",
             &Module::perfReport,
             "perfReport() -- What the view pipeline spent, as a list of "
@@ -393,6 +406,23 @@ private:
             throw Py::Exception();
         }
         PerfLog::instance().clear();
+        return Py::None();
+    }
+    Py::Object perfBegin(const Py::Tuple& args)
+    {
+        const char* name = nullptr;
+        if (!PyArg_ParseTuple(args.ptr(), "s", &name)) {
+            throw Py::Exception();
+        }
+        Fem::perfBeginScope(name);
+        return Py::None();
+    }
+    Py::Object perfEnd(const Py::Tuple& args)
+    {
+        if (!PyArg_ParseTuple(args.ptr(), "")) {
+            throw Py::Exception();
+        }
+        Fem::perfEndScope();
         return Py::None();
     }
     Py::Object perfReport(const Py::Tuple& args)

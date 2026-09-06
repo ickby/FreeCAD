@@ -51,6 +51,7 @@
 #include "FemMesh.h"
 #include "FemMeshObject.h"
 #include "FemPostFilter.h"
+#include "FemPerfLog.h"
 #include "FemPostPipeline.h"
 #include "FemPostPipelinePy.h"
 #include "FemVTKTools.h"
@@ -289,6 +290,8 @@ void FemPostPipeline::scale(double s)
 
 App::DocumentObjectExecReturn* FemPostPipeline::execute()
 {
+    FEM_PERF_SCOPE("post.pipeline.execute");
+
     // we fake a recalculated data object, so that the viewprovider updates
     // the visualization. We do not want to do this in onChange, as it
     // could theoretically be long running

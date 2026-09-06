@@ -38,14 +38,14 @@ from PySide import QtCore, QtGui
 
 import ObjectsFem
 
-from femtaskpanels import task_post_attributefilter
+from femtaskpanels import task_post_modelfilter
 from femtools import membertools
 
 from femtest.app.support_utils import fcc_print
 from femtest.app.test_attribution import _two_solid_mesh
 
 
-class TestPostAttributePanelGui(unittest.TestCase):
+class TestPostModelFilterGui(unittest.TestCase):
     """
     The panel is a view onto what the result stored, and nothing else.
 
@@ -54,7 +54,7 @@ class TestPostAttributePanelGui(unittest.TestCase):
     filter reads.
     """
 
-    fcc_print("import TestPostAttributePanelGui")
+    fcc_print("import TestPostModelFilterGui")
 
     def setUp(self):
         self.document = FreeCAD.newDocument(self.__class__.__name__)
@@ -108,7 +108,7 @@ class TestPostAttributePanelGui(unittest.TestCase):
         self.analysis.addObject(self.bare_pipeline)
         self.document.recompute()
 
-        self.filter = ObjectsFem.makePostFilterAttribute(self.document, self.pipeline)
+        self.filter = ObjectsFem.makePostFilterModel(self.document, self.pipeline)
         self.document.recompute()
 
     def tearDown(self):
@@ -116,7 +116,7 @@ class TestPostAttributePanelGui(unittest.TestCase):
         FreeCAD.closeDocument(self.document.Name)
 
     def _panel(self):
-        return task_post_attributefilter._TaskPanel(self.filter.ViewObject)
+        return task_post_modelfilter._TaskPanel(self.filter.ViewObject)
 
     @staticmethod
     def _rows(panel):
@@ -126,7 +126,7 @@ class TestPostAttributePanelGui(unittest.TestCase):
 
     def test_00print(self):
         fcc_print(
-            "\n{0}\n{1} run FEM TestPostAttributePanelGui tests {2}\n{0}".format(
+            "\n{0}\n{1} run FEM TestPostModelFilterGui tests {2}\n{0}".format(
                 100 * "*", 10 * "*", 38 * "*"
             )
         )
@@ -215,9 +215,9 @@ class TestPostAttributePanelGui(unittest.TestCase):
 
     def test_a_result_without_attribution_says_so(self):
         """An empty tree reads as breakage, so the reason replaces it."""
-        bare = ObjectsFem.makePostFilterAttribute(self.document, self.bare_pipeline)
+        bare = ObjectsFem.makePostFilterModel(self.document, self.bare_pipeline)
         self.document.recompute()
-        panel = task_post_attributefilter._TaskPanel(bare.ViewObject)
+        panel = task_post_modelfilter._TaskPanel(bare.ViewObject)
 
         self.assertFalse(panel.widget.ElementTree.isVisibleTo(panel.widget))
         self.assertTrue(panel.widget.MessageLabel.isVisibleTo(panel.widget))

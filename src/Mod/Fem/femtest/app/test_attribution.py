@@ -37,7 +37,7 @@ import Part
 import Fem
 import ObjectsFem
 
-from femobjects import post_attributefilter
+from femobjects import post_modelfilter
 from femtools import importtools, membertools
 
 from .support_utils import fcc_print
@@ -173,9 +173,9 @@ class TestResultAttribution(unittest.TestCase):
 
     def _attribution(self, pipeline):
         """What a filter placed on *pipeline* can read off it."""
-        filter_obj = ObjectsFem.makePostFilterAttribute(self.document, pipeline)
+        filter_obj = ObjectsFem.makePostFilterModel(self.document, pipeline)
         self.document.recompute()
-        return filter_obj, post_attributefilter.Attribution(filter_obj.getInputData())
+        return filter_obj, post_modelfilter.Attribution(filter_obj.getInputData())
 
     @staticmethod
     def _cells(obj):

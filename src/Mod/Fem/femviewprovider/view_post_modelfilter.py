@@ -21,32 +21,32 @@
 # *                                                                         *
 # ***************************************************************************
 
-__title__ = "FreeCAD FEM postprocessing attribution filter ViewProvider for the document object"
+__title__ = "FreeCAD FEM postprocessing model filter ViewProvider for the document object"
 __author__ = "Stefan Tröger"
 __url__ = "https://www.freecad.org"
 
-## @package view_post_attributefilter
+## @package view_post_modelfilter
 #  \ingroup FEM
-#  \brief view provider for post attribution filter object
+#  \brief view provider for post model filter object
 
 import FreeCAD
 import FreeCADGui
 
 import FemGui
 from PySide import QtGui
-from femtaskpanels import task_post_attributefilter
+from femtaskpanels import task_post_modelfilter
 
 
-class VPPostAttributeFilter:
+class VPPostModelFilter:
     """
-    A View Provider for the PostAttributeFilter object
+    A View Provider for the PostModelFilter object
     """
 
     def __init__(self, vobj):
         vobj.Proxy = self
 
     def getIcon(self):
-        return ":/icons/FEM_PostFilterAttribute.svg"
+        return ":/icons/FEM_PostFilterModel.svg"
 
     def getDisplayModes(self, obj):
         # Mandatory, as the ViewProviderPostFilterPython does not add any
@@ -75,7 +75,7 @@ class VPPostAttributeFilter:
         vobj.show()
 
         # build up the task panel
-        taskd = task_post_attributefilter._TaskPanel(vobj)
+        taskd = task_post_modelfilter._TaskPanel(vobj)
 
         # show it
         FreeCADGui.Control.showDialog(taskd)

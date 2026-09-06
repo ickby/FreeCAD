@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ui version="4.0">
- <class>TaskPostAttribute</class>
- <widget class="QWidget" name="TaskPostAttribute">
+ <class>TaskPostModel</class>
+ <widget class="QWidget" name="TaskPostModel">
   <property name="geometry">
    <rect>
     <x>0</x>
@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string notr="true">Attribution</string>
+   <string notr="true">Model Filter</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>

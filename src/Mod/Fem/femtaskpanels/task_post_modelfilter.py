@@ -21,20 +21,20 @@
 # *                                                                         *
 # ***************************************************************************
 
-__title__ = "FreeCAD FEM attribution filter task panel for the document object"
+__title__ = "FreeCAD FEM model filter task panel for the document object"
 __author__ = "Stefan Tröger"
 __url__ = "https://www.freecad.org"
 
-## @package task_post_attributefilter
+## @package task_post_modelfilter
 #  \ingroup FEM
-#  \brief task panel for post attribution filter object
+#  \brief task panel for post model filter object
 
 from PySide import QtCore, QtGui
 
 import FreeCAD
 import FreeCADGui
 
-from femobjects import post_attributefilter
+from femobjects import post_modelfilter
 
 from . import base_fempostpanel
 
@@ -46,7 +46,7 @@ _KEY_ROLE = QtCore.Qt.UserRole
 
 class _TaskPanel(base_fempostpanel._BasePostTaskPanel):
     """
-    The TaskPanel for editing properties of the attribution filter
+    The TaskPanel for editing properties of the model filter
 
     The tree is the same shape as the one in the analysis view panel -
     categories as parents, the entities they hold as children, and a tri-state
@@ -60,9 +60,9 @@ class _TaskPanel(base_fempostpanel._BasePostTaskPanel):
         super().__init__(vobj.Object)
 
         self.widget = FreeCADGui.PySideUic.loadUi(
-            FreeCAD.getHomePath() + "Mod/Fem/Resources/ui/TaskPostAttribute.ui"
+            FreeCAD.getHomePath() + "Mod/Fem/Resources/ui/TaskPostModel.ui"
         )
-        self.widget.setWindowIcon(FreeCADGui.getIcon(":/icons/FEM_PostFilterAttribute.svg"))
+        self.widget.setWindowIcon(FreeCADGui.getIcon(":/icons/FEM_PostFilterModel.svg"))
         self.__init_widget()
 
         self.form = [self.widget, vobj.createDisplayTaskWidget()]
@@ -72,7 +72,7 @@ class _TaskPanel(base_fempostpanel._BasePostTaskPanel):
 
     def __init_widget(self):
 
-        self._attribution = post_attributefilter.Attribution(self.obj.getInputData())
+        self._attribution = post_modelfilter.Attribution(self.obj.getInputData())
 
         self.__configure_columns()
         self._enumPropertyToCombobox(self.obj, "Attribute", self.widget.AttributeComboBox)
@@ -191,8 +191,8 @@ class _TaskPanel(base_fempostpanel._BasePostTaskPanel):
             item = self.__add_row(
                 tree,
                 translate("FEM", "Unattributed"),
-                post_attributefilter.UNATTRIBUTED,
-                post_attributefilter.UNATTRIBUTED in checked,
+                post_modelfilter.UNATTRIBUTED,
+                post_modelfilter.UNATTRIBUTED in checked,
             )
             item.setText(1, str(self._attribution.unattributed_cells))
 

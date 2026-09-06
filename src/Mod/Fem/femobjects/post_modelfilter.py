@@ -21,13 +21,13 @@
 # *                                                                         *
 # ***************************************************************************
 
-__title__ = "FreeCAD post attribution filter"
+__title__ = "FreeCAD post model filter"
 __author__ = "Stefan Tröger"
 __url__ = "https://www.freecad.org"
 
-## @package post_attributefilter
+## @package post_modelfilter
 #  \ingroup FEM
-#  \brief Post processing filter extracting the cells of chosen model entities
+#  \brief Post processing filter keeping the cells of chosen parts of the model
 
 import FreeCAD
 
@@ -68,7 +68,7 @@ UNATTRIBUTED = "<unattributed>"
 PASSTHROUGH = "__passthrough__"
 
 #: Our own pipeline, the one that actually extracts.
-EXTRACTION = "attribution"
+EXTRACTION = "model"
 
 # What a result can be grouped by, in the order the combo box offers them.
 #
@@ -206,7 +206,7 @@ class Attribution:
         return names
 
 
-class PostAttributeFilter(base_fempythonobject.BaseFemPythonObject):
+class PostModelFilter(base_fempythonobject.BaseFemPythonObject):
     """
     A post processing filter that keeps only the cells of chosen model entities.
 
@@ -238,14 +238,14 @@ class PostAttributeFilter(base_fempythonobject.BaseFemPythonObject):
             _PropHelper(
                 type="App::PropertyEnumeration",
                 name="Attribute",
-                group="Attribution",
+                group="Model",
                 doc="Which identity the model entities are grouped by",
                 value=["Component"],
             ),
             _PropHelper(
                 type="App::PropertyStringList",
                 name="Elements",
-                group="Attribution",
+                group="Model",
                 doc="The model entities to keep, named the way the result names them",
                 value=[],
             ),

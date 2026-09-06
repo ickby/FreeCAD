@@ -37,7 +37,7 @@ from femtest.gui.test_analysis_visibility import TestAnalysisVisibilityGui as Fe
 from femtest.gui.test_import_selection import TestImportSelectionGui as FemGuiTest11
 from femtest.gui.test_geometry_dimension import TestGeometryDimensionGui as FemGuiTest12
 from femtest.gui.test_edit_scope import TestEditScopeGui as FemGuiTest13
-from femtest.gui.test_post_attribute_panel import TestPostAttributePanelGui as FemGuiTest14
+from femtest.gui.test_post_modelfilter import TestPostModelFilterGui as FemGuiTest14
 
 # dummy usage to get flake8 and lgtm quiet
 False if FemGuiTest01.__name__ else True

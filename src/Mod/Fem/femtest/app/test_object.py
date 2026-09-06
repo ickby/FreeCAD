@@ -1349,7 +1349,7 @@ def create_all_fem_objects_doc(doc):
         ObjectsFem.makePostVtkFilterContours(doc, vres)
         if "BUILD_FEM_VTK_PYTHON" in FreeCAD.__cmake__:
             ObjectsFem.makePostFilterGlyph(doc, vres)
-            ObjectsFem.makePostFilterAttribute(doc, vres)
+            ObjectsFem.makePostFilterModel(doc, vres)
 
             # data extraction objects
             lp = analysis.addObject(ObjectsFem.makePostLineplot(doc))[0]

@@ -32,8 +32,12 @@
 #include <vtkDataObject.h>
 #include <vtkExtractEdges.h>
 #include <vtkGeometryFilter.h>
+#include <vtkPointSet.h>
+#include <vtkPolyData.h>
 #include <vtkOutlineCornerFilter.h>
 #include <vtkUnstructuredGridGeometryFilter.h>
+
+#include "FemBoundaryEdges.h"
 #include <vtkSmartPointer.h>
 #include <vtkVertexGlyphFilter.h>
 
@@ -171,7 +175,15 @@ protected:
     vtkSmartPointer<vtkUnstructuredGridGeometryFilter> m_faces3D;
     vtkSmartPointer<vtkAppendPolyData> m_surfaceEdges;
     vtkSmartPointer<vtkOutlineCornerFilter> m_outline;
-    vtkSmartPointer<vtkExtractEdges> m_wireframe, m_wireframeSurface;
+    vtkSmartPointer<vtkExtractEdges> m_wireframe;
+    /// The element edges of the drawn surface, built rather than extracted
+    vtkSmartPointer<vtkPolyData> m_realedges;
+    /// Feeds m_realedges into the pipeline as the "surface only" wireframe
+    vtkSmartPointer<vtkAppendPolyData> m_edgesOnly;
+    BoundaryEdgeBuilder m_edgebuilder;
+    /// What m_realedges was last built from, so a redraw need not build again
+    vtkPointSet* m_edgesFrom {nullptr};
+    vtkMTimeType m_edgesMTime {0};
     vtkSmartPointer<vtkVertexGlyphFilter> m_points, m_pointsSurface;
     /// Whether the data last set up carries elements with curved edges
     bool m_curvedData {false};
@@ -182,6 +194,10 @@ private:
     void updateProperties();
     /// Point the surface and the surface edges at whatever this mode needs
     void routeSurface();
+    /// Build the element edges of the drawn surface, if this mode shows them
+    void buildBoundaryEdges();
+    /// Whether the mode being drawn puts element edges on the screen
+    bool drawsEdges() const;
     void update3D();
     void WritePointData(vtkPoints* points, vtkDataArray* normals, vtkDataArray* tcoords);
     void WriteColorData(bool ResetColorBarRange);

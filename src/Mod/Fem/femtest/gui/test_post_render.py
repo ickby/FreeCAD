@@ -161,9 +161,13 @@ class TestPostRenderGui(unittest.TestCase):
         """
         pipeline = self._pipeline(_quadratic_tetra_mesh())
 
-        # Six edges, each drawn through its midpoint as two segments, and each
-        # Coin index list closed by a -1: 6 * 2 * (2 + 1).
-        self.assertEqual(_line_index_count(pipeline.ViewObject), 36)
+        # Six edges, each one polyline running end - midpoint - end, and each
+        # Coin index list closed by a -1: 6 * (3 + 1).
+        #
+        # One line and not two, which is the point of building the edges rather
+        # than extracting them: two lines meeting at a midpoint leave it to
+        # OpenGL whether the midpoint is drawn, and it tends to decide not.
+        self.assertEqual(_line_index_count(pipeline.ViewObject), 24)
 
     def test_a_result_of_straight_elements_is_unchanged(self):
         """Nothing is routed differently where there is no curvature to keep."""

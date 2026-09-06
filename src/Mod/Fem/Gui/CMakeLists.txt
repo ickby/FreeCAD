@@ -371,8 +371,10 @@ if(BUILD_FEM_VTK)
     SET(FemGui_SRCS_Post
         Classification.h
         Classification.cpp
-        FemVisibilityMask.h
-        FemVisibilityMask.cpp
+        FemBoundaryEdges.h
+    FemVisibilityMask.h
+        FemBoundaryEdges.cpp
+    FemVisibilityMask.cpp
         FemMeshRenderer.h
         FemMeshRenderer.cpp
         ViewProviderFemPostObject.h

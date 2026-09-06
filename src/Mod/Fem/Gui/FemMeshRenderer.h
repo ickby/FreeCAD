@@ -33,6 +33,7 @@
 #include <Base/Vector3D.h>
 #include <Mod/Fem/FemGlobal.h>
 
+#include "FemBoundaryEdges.h"
 #include "FemViewTypes.h"
 
 #include <vtkSmartPointer.h>
@@ -364,8 +365,8 @@ private:
     // Scratch of buildBoundaryEdges(), kept between updates for the capacity
     // alone: the drawn number of each surface point, and the open-addressed
     // table of the edges already drawn.
-    std::vector<vtkIdType> m_pointmap;
-    std::vector<std::uint64_t> m_edgeseen;
+    /// Builds m_realedges, and keeps its own scratch between redraws
+    BoundaryEdgeBuilder m_edgebuilder;
 
     // The mesh cell every drawn primitive came from, one list per Coin shape,
     // in the order the shape draws them. Worked out where the geometry is

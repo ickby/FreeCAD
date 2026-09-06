@@ -267,11 +267,14 @@ ViewProviderFemPostObject::ViewProviderFemPostObject()
     // edges; setupPipeline() puts this in front of it where it is needed.
     m_faces3D = vtkSmartPointer<vtkUnstructuredGridGeometryFilter>::New();
     m_wireframe = vtkSmartPointer<vtkExtractEdges>::New();
-    m_wireframeSurface = vtkSmartPointer<vtkExtractEdges>::New();
+    // The element edges are built rather than extracted; see buildBoundaryEdges.
+    m_realedges = vtkSmartPointer<vtkPolyData>::New();
     m_surfaceEdges = vtkSmartPointer<vtkAppendPolyData>::New();
+    m_edgesOnly = vtkSmartPointer<vtkAppendPolyData>::New();
     m_pointsSurface->AddInputConnection(m_surface->GetOutputPort());
     m_surfaceEdges->AddInputConnection(m_surface->GetOutputPort());
-    m_surfaceEdges->AddInputConnection(m_wireframeSurface->GetOutputPort());
+    m_surfaceEdges->AddInputData(m_realedges);
+    m_edgesOnly->AddInputData(m_realedges);
 
     m_currentAlgorithm = m_outline;
 
@@ -463,7 +466,7 @@ void ViewProviderFemPostObject::setDisplayMode(const char* ModeName)
         m_currentAlgorithm = m_wireframe;
     }
     else if (strcmp("Wireframe (surface only)", ModeName) == 0) {
-        m_currentAlgorithm = m_wireframeSurface;
+        m_currentAlgorithm = m_edgesOnly;
     }
     else if (strcmp("Nodes", ModeName) == 0) {
         m_currentAlgorithm = m_points;
@@ -507,14 +510,16 @@ void ViewProviderFemPostObject::updateVtk()
         // Where the drawn thing is a surface with its edges over it, the two
         // halves are run one at a time first, so the report says which of them
         // the time went on. The update that follows then finds both done.
-        if (m_currentAlgorithm == m_surfaceEdges) {
+        if (drawsEdges()) {
             {
                 FEM_PERF_SCOPE("post.render.vtk.surface");
-                m_surface->Update();
+                (m_curvedData ? static_cast<vtkAlgorithm*>(m_faces3D)
+                              : static_cast<vtkAlgorithm*>(m_surface))
+                    ->Update();
             }
             {
                 FEM_PERF_SCOPE("post.render.vtk.edges");
-                m_wireframeSurface->Update();
+                buildBoundaryEdges();
             }
         }
         FEM_PERF_SCOPE("post.render.vtk");
@@ -965,6 +970,33 @@ bool ViewProviderFemPostObject::setupPipeline()
     return true;
 }
 
+bool ViewProviderFemPostObject::drawsEdges() const
+{
+    return m_currentAlgorithm == m_surfaceEdges || m_currentAlgorithm == m_edgesOnly;
+}
+
+void ViewProviderFemPostObject::buildBoundaryEdges()
+{
+    // The faces the edges are the sides of: kept whole for a curved result,
+    // where the surface filter would have triangulated them, and the polygons
+    // of the surface itself for a straight one, whose sides already are the
+    // element edges.
+    vtkPointSet* surface = m_curvedData ? static_cast<vtkPointSet*>(m_faces3D->GetOutput())
+                                        : static_cast<vtkPointSet*>(m_surface->GetOutput());
+    if (surface && surface == m_edgesFrom && surface->GetMTime() == m_edgesMTime) {
+        return;
+    }
+    m_edgesFrom = surface;
+    m_edgesMTime = surface ? surface->GetMTime() : 0;
+
+    // The values at the points are what colours a post-processing result, so
+    // they travel with the points the edges keep. There is no cell to carry:
+    // nothing here colours an edge by the cell it came from.
+    m_edgebuilder.setOriginArray(nullptr);
+    m_edgebuilder.setCopyPointData(true);
+    m_edgebuilder.build(surface, m_curvedData, m_realedges);
+}
+
 void ViewProviderFemPostObject::routeSurface()
 {
     if (!m_surfaceSource) {
@@ -986,18 +1018,14 @@ void ViewProviderFemPostObject::routeSurface()
     // an element edge. It reads the data directly and pays nothing. Where the
     // faces are gathered anyway the surface is taken from them too, so the
     // boundary is walked once rather than twice.
-    const bool drawsEdges =
-        m_currentAlgorithm == m_surfaceEdges || m_currentAlgorithm == m_wireframeSurface;
-    const bool viaFaces = m_curvedData && drawsEdges;
-
-    if (viaFaces) {
+    if (m_curvedData && drawsEdges()) {
         m_surface->SetInputConnection(m_faces3D->GetOutputPort());
-        m_wireframeSurface->SetInputConnection(m_faces3D->GetOutputPort());
     }
     else {
         m_surface->SetInputData(m_surfaceSource);
-        m_wireframeSurface->SetInputConnection(m_surface->GetOutputPort());
     }
+    // What the edges were last built from no longer holds.
+    m_edgesFrom = nullptr;
 }
 
 void ViewProviderFemPostObject::onChanged(const App::Property* prop)

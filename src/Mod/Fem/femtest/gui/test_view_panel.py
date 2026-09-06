@@ -456,6 +456,54 @@ class TestViewPanelGui(unittest.TestCase):
             "and the block belongs to nothing but itself",
         )
 
+    def test_the_panel_follows_the_document_the_user_is_looking_at(self):
+        """
+        The active analysis used to be application-wide, so switching document
+        left the panel describing one model while the viewport showed another -
+        and its rows went on hiding elements of the document out of sight.
+
+        A document with one analysis needs no choosing, so it is taken up; one
+        with several is left alone until the user picks, and the pick is
+        remembered so that coming back restores it.
+        """
+        one = FreeCAD.newDocument("PanelFollowOne")
+        several = FreeCAD.newDocument("PanelFollowSeveral")
+        empty = FreeCAD.newDocument("PanelFollowEmpty")
+        try:
+            only = ObjectsFem.makeAnalysis(one, "TheOnlyOne")
+            ObjectsFem.makeAnalysis(several, "First")
+            second = ObjectsFem.makeAnalysis(several, "Second")
+            for doc in (one, several, empty):
+                doc.recompute()
+
+            FreeCADGui.setActiveDocument(one.Name)
+            self.assertIs(FemGui.getActiveAnalysis(), only)
+            self.assertIs(self.explorer.active_analysis, only, "the panel follows")
+
+            FreeCADGui.setActiveDocument(several.Name)
+            self.assertIsNone(
+                FemGui.getActiveAnalysis(),
+                "with several and none chosen, picking one would decide for the user",
+            )
+            self.assertIsNone(self.explorer.active_analysis)
+
+            FemGui.setActiveAnalysis(second)
+            FreeCADGui.setActiveDocument(empty.Name)
+            self.assertIsNone(
+                FemGui.getActiveAnalysis(),
+                "a document with no analysis leaves the panel with nothing to describe",
+            )
+
+            FreeCADGui.setActiveDocument(several.Name)
+            self.assertIs(
+                FemGui.getActiveAnalysis(), second, "the chosen one is remembered"
+            )
+        finally:
+            for doc in (one, several, empty):
+                FreeCAD.closeDocument(doc.Name)
+            FreeCADGui.setActiveDocument(self.document.Name)
+            FemGui.setActiveAnalysis(self.analysis)
+
     def test_an_editor_for_something_that_is_no_geometry_leaves_the_tree_alone(self):
         """Only an editor picked on geometry takes the tree with it."""
         self.explorer.slotInEdit(self.analysis.ViewObject)

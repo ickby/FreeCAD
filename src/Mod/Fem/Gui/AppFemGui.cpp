@@ -30,6 +30,7 @@
 #include <Gui/WidgetFactory.h>
 #include <Gui/Language/Translator.h>
 
+#include "ActiveAnalysisObserver.h"
 #include "DlgSettingsFemCcxImp.h"
 #include "DlgSettingsFemElmerImp.h"
 #include "DlgSettingsFemExportAbaqusImp.h"
@@ -120,6 +121,9 @@ PyMOD_INIT_FUNC(FemGui)
     // Follow what the user edits, so the analysis view state can put the view
     // where the open panel needs it and back afterwards.
     FemGui::observeEditScopes();
+    // Alive from here on, so that switching document is heard, and asked once
+    // about the document that was already open when the workbench was loaded.
+    FemGui::ActiveAnalysisObserver::instance()->syncToActiveDocument();
 
     // clang-format off
     // addition objects

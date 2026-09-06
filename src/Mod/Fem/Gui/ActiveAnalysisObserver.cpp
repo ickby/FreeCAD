@@ -25,6 +25,9 @@
 
 #include <algorithm>
 
+#include <App/Application.h>
+#include <App/Document.h>
+#include <App/DocumentObject.h>
 #include <Base/Console.h>
 #include <Base/Interpreter.h>
 #include <Gui/Application.h>
@@ -58,12 +61,18 @@ void ActiveAnalysisObserver::setActiveObject(Fem::FemAnalysis* fem)
         activeObject = fem;
         App::Document* doc = fem->getDocument();
         activeDocument = Gui::Application::Instance->getDocument(doc);
-        activeView = static_cast<Gui::ViewProviderDocumentObject*>(
-            activeDocument->getViewProvider(activeObject)
-        );
+        activeView = activeDocument ? static_cast<Gui::ViewProviderDocumentObject*>(
+                         activeDocument->getViewProvider(activeObject)
+                     )
+                                    : nullptr;
         attachDocument(doc);
         // Ensure view state exists for the newly active analysis
         AnalysisViewState::forAnalysis(fem);
+        // Remember the choice, so coming back to this document restores it
+        // rather than falling back to whatever rule picked one the first time.
+        if (doc && fem->getNameInDocument()) {
+            lastPerDocument[doc->getName()] = fem->getNameInDocument();
+        }
     }
     else {
         activeObject = nullptr;
@@ -89,8 +98,17 @@ void ActiveAnalysisObserver::highlightActiveObject(const Gui::HighlightMode& mod
     }
 }
 
+void ActiveAnalysisObserver::syncToActiveDocument()
+{
+    if (auto* doc = App::GetApplication().getActiveDocument()) {
+        slotActivateDocument(*doc);
+    }
+}
+
 void ActiveAnalysisObserver::slotDeletedDocument(const App::Document& Doc)
 {
+    lastPerDocument.erase(Doc.getName());
+
     App::Document* d = getDocument();
     if (d == &Doc) {
         if (activeObject) {
@@ -102,6 +120,37 @@ void ActiveAnalysisObserver::slotDeletedDocument(const App::Document& Doc)
         detachDocument();
         emitCallbacks();
     }
+}
+
+Fem::FemAnalysis* ActiveAnalysisObserver::analysisForDocument(const App::Document& Doc) const
+{
+    if (auto remembered = lastPerDocument.find(Doc.getName());
+        remembered != lastPerDocument.end()) {
+        auto* obj = Doc.getObject(remembered->second.c_str());
+        if (obj && obj->isDerivedFrom<Fem::FemAnalysis>()) {
+            return static_cast<Fem::FemAnalysis*>(obj);
+        }
+    }
+
+    Fem::FemAnalysis* only = nullptr;
+    for (auto* obj : Doc.getObjectsOfType(Fem::FemAnalysis::getClassTypeId())) {
+        if (only) {
+            return nullptr;
+        }
+        only = static_cast<Fem::FemAnalysis*>(obj);
+    }
+    return only;
+}
+
+void ActiveAnalysisObserver::slotActivateDocument(const App::Document& Doc)
+{
+    if (activeObject && activeObject->getDocument() == &Doc) {
+        return;
+    }
+    // Null where the document has no analysis to work on, which is what empties
+    // the view panel: leaving the previous one active would let its rows go on
+    // hiding elements of a document that is no longer on screen.
+    setActiveObject(analysisForDocument(Doc));
 }
 
 void ActiveAnalysisObserver::slotDeletedObject(const App::DocumentObject& Obj)

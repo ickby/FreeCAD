@@ -91,6 +91,30 @@ def _row_names(model, parent=None):
     return names
 
 
+def _display_names(model, parent=None):
+    """Rows as the user reads them, badges and all."""
+    if parent is None:
+        parent = view_panel.QModelIndex()
+    names = []
+    for row in range(model.rowCount(parent)):
+        index = model.index(row, 0, parent)
+        names.append(model.get_item(index).display_name())
+        names.extend(_display_names(model, index))
+    return names
+
+
+def _nodes(model, parent=None):
+    """Every node the tree offers, whatever the depth it sits at."""
+    if parent is None:
+        parent = view_panel.QModelIndex()
+    found = []
+    for row in range(model.rowCount(parent)):
+        index = model.index(row, 0, parent)
+        found.append(model.get_item(index))
+        found.extend(_nodes(model, index))
+    return found
+
+
 def _category_rows(model, parent=None):
     """Labels of the rows that stand for a category rather than an element."""
     if parent is None:
@@ -330,6 +354,66 @@ class TestViewPanelGui(unittest.TestCase):
         finally:
             self._leave_edit()
             state.setColorMode("Subelement")
+
+    def test_an_embedded_shell_names_the_solid_it_is_a_face_of(self):
+        """
+        A shell fused into a solid is a face of that solid and a toplevel of its
+        own at once, so its row sits next to the solid as though it were a peer
+        of it. Naming the owner on the row is what tells the two apart, and it
+        is there only where it is a surprise: the part of the plate that hangs
+        off the block belongs to nothing else and says nothing, and a face two
+        solids share is no toplevel and never reaches a row at all.
+        """
+        block = self.document.addObject("Part::Feature", "Block")
+        block.Shape = Part.makeBox(10, 10, 10)
+        plate = self.document.addObject("Part::Feature", "Plate")
+        # Half on top of the block and half hanging off it, so the fuse leaves
+        # one embedded face and one free one.
+        plate.Shape = Part.makePlane(10, 10, FreeCAD.Vector(5, 0, 10), FreeCAD.Vector(0, 0, 1))
+        self.imp.Import = [block, plate]
+        self.imp.Embed = "Embed import"
+        self.document.recompute()
+
+        names = _display_names(self.explorer._model)
+        self.assertEqual(
+            sorted(name for name in names if name.startswith("Solid")),
+            ["Solid1 [3D]"],
+            "the solid belongs to nothing but itself",
+        )
+        faces = sorted(name for name in names if name.startswith("Face"))
+        self.assertEqual(len(faces), 2, "the plate is split by the edge of the block")
+        self.assertEqual(
+            [name for name in faces if name.endswith("[2D, in Solid1]")],
+            [name for name in faces if "Solid1" in name],
+            f"one face lies on the block and says so: {faces}",
+        )
+        self.assertEqual(
+            len([name for name in faces if "Solid1" in name]),
+            1,
+            f"one face lies on the block: {faces}",
+        )
+        self.assertEqual(
+            len([name for name in faces if name.endswith("[2D]")]),
+            1,
+            f"the overhang belongs to nothing else and stays bare: {faces}",
+        )
+
+        # The badge is short; the tooltip is where it is spelled out.
+        shared = next(
+            node
+            for node in _nodes(self.explorer._model)
+            if node.display_name().endswith("[2D, in Solid1]")
+        )
+        tip = shared.tooltip()
+        self.assertIn(shared.display_name(), tip)
+        self.assertIn("Solid1", tip.split("\n", 1)[1])
+        self.assertGreater(len(tip), len(shared.display_name()), "the tooltip says more")
+        bare = next(
+            node
+            for node in _nodes(self.explorer._model)
+            if node.display_name().endswith("[2D]")
+        )
+        self.assertEqual(bare.tooltip(), bare.display_name(), "nothing to spell out")
 
     def test_an_unrelated_editor_leaves_the_tree_alone(self):
         """Only a step that previews its input takes the tree with it."""
@@ -1114,6 +1198,11 @@ class _CellTypeState:
 
     def getColorMode(self):
         return "CellType"
+
+    def getActiveStage(self):
+        # Cell types are the mesh's to list, so the mesh stage is the only one
+        # that puts this tree on screen.
+        return "Mesh"
 
     def getCategories(self):
         return self._categories

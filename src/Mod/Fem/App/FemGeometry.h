@@ -130,6 +130,11 @@ public:
     /**
      * Owners of an entity (e.g. Face7 owned by Solid3 and Solid4).
      * Empty if the entity is itself a toplevel free element.
+     *
+     * A toplevel that is not free is among its own owners: an embedded shell is
+     * a face of the solid it was fused into and a model element in its own
+     * right, and both have to be said or the shell is only ever heard of as the
+     * solid's skin.
      */
     std::vector<std::string> getEntityOwners(const std::string& entity) const;
 

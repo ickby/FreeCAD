@@ -70,6 +70,22 @@ SHELL_PER_AXIS = 3
 BEAM_COUNT = 4
 
 
+# Dimension of the cell types this file's meshes produce. Kept small on purpose:
+# the test asserts every type it meets is in here, so a mesh that grows a new one
+# fails loudly rather than being counted as nothing.
+CELL_TYPE_DIMENSION = {
+    "vertex": 0,
+    "line": 1,
+    "edge3": 1,
+    "tria3": 2,
+    "tria6": 2,
+    "quad4": 2,
+    "tetra4": 3,
+    "tetra10": 3,
+    "hexa8": 3,
+}
+
+
 def _edges_of_surface_faces():
     """
     How many element edges the block ought to draw, counted from its lattice.
@@ -372,6 +388,143 @@ class TestMeshEdgesGui(unittest.TestCase):
             Part.makeBox(BOX_SIZE, BOX_SIZE, BOX_SIZE),
             _block_mesh(quadratic),
         )
+
+    def _placed_embedded_shell(self):
+        """
+        A plate fused onto the top of a block, meshed as one.
+
+        Where the two meet there is a single face, a face of the block and a
+        model element of its own at the same time. The plate lies wholly inside
+        the top face, so it has no free part and its colour can only come from
+        the patch the two share.
+        """
+        name = "Embedded"
+        analysis = ObjectsFem.makeAnalysis(self.document, name)
+        geometry = ObjectsFem.makeGeometryGroup(self.document, name + "Geometry")
+        analysis.addObject(geometry)
+
+        block = self.document.addObject("Part::Feature", name + "Block")
+        block.Shape = Part.makeBox(BOX_SIZE, BOX_SIZE, BOX_SIZE)
+        plate = self.document.addObject("Part::Feature", name + "Plate")
+        half = BOX_SIZE / 2
+        plate.Shape = Part.makePlane(
+            half, half, FreeCAD.Vector(0, 0, BOX_SIZE), FreeCAD.Vector(0, 0, 1)
+        )
+        step = ObjectsFem.makeGeometryImport(self.document)
+        step.Import = [block, plate]
+        step.Embed = "Embed import"
+        geometry.Group = [step]
+        self.document.recompute()
+
+        shared = [
+            sub
+            for sub in geometry.getToplevelElements(0)
+            if sub.startswith("Face") and set(geometry.getEntityOwners(sub)) - {sub}
+        ]
+        self.assertEqual(len(shared), 1, "the plate meets the block in one face")
+        self.shared_face = shared[0]
+
+        # An edge bounding that face. It belongs to the block and to the plate
+        # at once, which is what used to promote it to a beam of its own.
+        bound = geometry.Shape.getElement(self.shared_face).Edges[0]
+        self.shared_edge = next(
+            f"Edge{i}" for i, edge in enumerate(geometry.Shape.Edges, 1) if edge.isSame(bound)
+        )
+
+        mesh = Fem.FemMesh()
+        for node, (x, y, z) in enumerate(
+            [
+                (0, 0, 0), (BOX_SIZE, 0, 0), (BOX_SIZE, BOX_SIZE, 0), (0, BOX_SIZE, 0),
+                (0, 0, BOX_SIZE), (BOX_SIZE, 0, BOX_SIZE),
+                (BOX_SIZE, BOX_SIZE, BOX_SIZE), (0, BOX_SIZE, BOX_SIZE),
+                (half, 0, BOX_SIZE), (half, half, BOX_SIZE), (0, half, BOX_SIZE),
+            ],
+            start=1,
+        ):  # fmt: skip
+            mesh.addNode(x, y, z, node)
+        volume = mesh.addVolume([1, 2, 3, 4, 5, 6, 7, 8])
+        patch = [mesh.addFace([5, 9, 10]), mesh.addFace([5, 10, 11])]
+        bounding = mesh.addEdge([5, 9])
+        mesh.addGroupElements(mesh.addGroup("Solid1", "Volume"), [volume])
+        mesh.addGroupElements(mesh.addGroup(self.shared_face, "Face"), patch)
+        mesh.addGroupElements(mesh.addGroup(self.shared_edge, "Edge"), [bounding])
+        # What the analysis is to be left with: the block and the patch on it,
+        # and nothing of the edge that bounds the patch.
+        self.solved = {3: 1, 2: len(patch)}
+
+        group = ObjectsFem.makeMeshShapeGroup(self.document, geometry=geometry, analysis=analysis)
+        mesh_obj = self.document.addObject("Fem::FemMeshObject", name + "Mesh")
+        mesh_obj.FemMesh = mesh
+        group.addObject(mesh_obj)
+        self.mesh_group = group
+        self.document.recompute()
+
+        assembly = ObjectsFem.makeAnalysis(self.document, name + "Assembly")
+        placed = ObjectsFem.makeAnalysisImport(self.document, name + "Placed")
+        placed.Analysis = analysis
+        importtools.wire_import(assembly, placed)
+        self.document.recompute()
+
+        FemGui.setActiveAnalysis(assembly)
+        self.state = FemGui.getAnalysisViewState(assembly)
+        self.state.setActiveStage("Mesh")
+        self.state.setColorMode("Subelement")
+        self.document.recompute()
+        return placed
+
+    def test_the_view_and_the_solver_agree_on_the_analysis_elements(self):
+        """
+        What the panel calls an analysis element is what the writer exports.
+
+        The two are worked out by different code that happens to follow the
+        same rule: the visibility mask on the Gui side, CellDimension on the
+        App side, sharing only effectiveAnalysisDimension between them. Nothing
+        but this holds them together, and the embedded shell is where they came
+        apart -- its triangles were dropped from both and the edge bounding it
+        was promoted to a beam in both, so it takes a model with one to notice.
+        """
+        from femmesh import meshtools
+
+        self._placed_embedded_shell()
+
+        by_dim = meshtools.get_model_element_ids_by_dimension(self.mesh_group)
+        exported = {dim: len(ids) for dim, ids in by_dim.items() if ids}
+
+        self.state.setColorMode("CellType")
+        FreeCADGui.updateGui()
+        drawn = {}
+        for category in self.state.getCategories():
+            if category["construction"]:
+                continue
+            dimension = CELL_TYPE_DIMENSION.get(category["label"])
+            self.assertIsNotNone(dimension, f"unmapped cell type {category['label']!r}")
+            drawn[dimension] = drawn.get(dimension, 0) + category["count"]
+
+        self.assertEqual(drawn, exported, "the view and the writer count the same elements")
+        self.assertEqual(exported, self.solved)
+        self.assertNotIn(1, exported, "the edge bounding the patch is no beam")
+
+    def test_an_embedded_shell_is_drawn_in_its_own_colour(self):
+        """
+        The solid owns the face the shell was fused into, and would lend it its
+        colour. But this is the one shared face the user is looking straight at,
+        and what is there to be seen is the shell, so the shell's own colour is
+        the one that belongs on it. Painted as the solid, the shell would be
+        invisible in the only view that shows it.
+        """
+        placed = self._placed_embedded_shell()
+
+        drawn = set()
+        for entry in _drawn_face_sets(placed.ViewObject):
+            drawn |= entry["colours"]
+
+        # A placed analysis names its elements by the path to them.
+        shell = _category_colour(self.state, f"{placed.Name}.{self.shared_face}")
+        solid = _category_colour(self.state, f"{placed.Name}.Solid1")
+        self.assertNotEqual(shell, solid)
+        # The plate has no free part, so this colour can only be the patch.
+        self.assertIn(shell, drawn)
+        self.assertIn(solid, drawn, "the block is still drawn as itself")
 
     def test_only_the_edges_on_the_surface_are_drawn(self):
         """The sides of the outside faces, and nothing that runs inwards."""

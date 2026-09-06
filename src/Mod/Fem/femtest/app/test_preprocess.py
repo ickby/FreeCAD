@@ -2758,6 +2758,114 @@ class TestExportHighest(unittest.TestCase):
         entities = {name: int(value) for name, value in group.EntityDimension.items()}
         self.assertEqual(entities["Solid1"], 2)
 
+    @staticmethod
+    def _embedded_shell(document, wrapped=False):
+        """
+        A plate fused halfway into a box, and the names the fuse leaves behind.
+
+        The piece of the plate inside the box is a face of the solid and a model
+        element in its own right at the same time, which is the whole of the
+        embedded shell case. Returns the geometry, that face, and one of the
+        edges bounding it.
+
+        wrapped hands the same surface in as a Shell rather than as a bare Face,
+        which is the difference between a shell the user extruded and a face
+        they drew. The component analysis takes free shells and free faces in
+        the same sweep and expands a shell into its faces, so the two are meant
+        to arrive as the same toplevel and be classified alike; the callers run
+        both to hold that.
+        """
+        box = Part.makeBox(10, 10, 10)
+        plate = Part.makePlane(10, 10, FreeCAD.Vector(5, 0, 5), FreeCAD.Vector(0, 0, 1))
+        geom = document.addObject("Fem::FemGeometry", "Geometry")
+        geom.Shape = box.generalFuse([Part.Shell([plate]) if wrapped else plate])[0]
+        document.recompute()
+
+        inside = [
+            name
+            for name in geom.getToplevelElements(0)
+            if name.startswith("Face") and geom.getEntityOwners(name)
+        ]
+        assert len(inside) == 1, f"the plate reaches into the box once, not {len(inside)} times"
+        face = inside[0]
+
+        shape = geom.Shape
+        bound = shape.getElement(face).Edges[0]
+        edge = next(
+            f"Edge{i}" for i, other in enumerate(shape.Edges, 1) if other.isSame(bound)
+        )
+        return geom, face, edge
+
+    def test_an_embedded_shell_is_one_of_its_own_owners(self):
+        """
+        The solid it was fused into is not all a shell inside one belongs to.
+
+        Ownership is recorded from the toplevel down, so a solid is heard
+        saying it owns the face; nothing says the face is a toplevel too, and
+        without that the shell has no dimension of its own to be judged by.
+        """
+        for wrapped in (False, True):
+            with self.subTest(wrapped=wrapped):
+                self._an_embedded_shell_is_one_of_its_own_owners(wrapped)
+
+    def _an_embedded_shell_is_one_of_its_own_owners(self, wrapped):
+        geom, face, edge = self._embedded_shell(self.document, wrapped)
+
+        self.assertIn("Solid1", geom.getEntityOwners(face))
+        self.assertIn(face, geom.getEntityOwners(face), "an embedded toplevel owns itself")
+        self.assertEqual(
+            geom.getEntityDimensionMask(face),
+            (1 << 2) | (1 << 3),
+            "the face is 2D of its own and 3D as part of the solid",
+        )
+        self.assertEqual(geom.getEntityDimensionMask(edge), (1 << 2) | (1 << 3))
+
+    def test_an_embedded_shell_is_meshed_but_its_boundary_is_not(self):
+        """
+        The elements on the shell are solved, the ones bounding it are not.
+
+        A shell that cannot speak for itself is only ever reached through the
+        edges around it, so the highest dimension it is seen to hold is one:
+        its own triangles are then dropped as the solid's skin, and the edges
+        that found it are promoted to beams the analysis would solve.
+        """
+        for wrapped in (False, True):
+            with self.subTest(wrapped=wrapped):
+                self._an_embedded_shell_is_meshed_but_its_boundary_is_not(wrapped)
+
+    def _an_embedded_shell_is_meshed_but_its_boundary_is_not(self, wrapped):
+        geom, face, edge = self._embedded_shell(self.document, wrapped)
+
+        mesh = Fem.FemMesh()
+        mesh.addNode(0, 0, 0, 1)
+        mesh.addNode(1, 0, 0, 2)
+        mesh.addNode(0, 1, 0, 3)
+        mesh.addNode(0, 0, 1, 4)
+        volume = mesh.addVolume([1, 2, 3, 4])
+        # The shell is conformal with the solid around it, so its triangles are
+        # faces of the elements it runs through and its edges are their edges.
+        triangle = mesh.addFace([1, 2, 3])
+        segment = mesh.addEdge([1, 2])
+        for name, kind, ids in (
+            ("Solid1", "Volume", [volume]),
+            (face, "Face", [triangle]),
+            (edge, "Edge", [segment]),
+        ):
+            mesh.addGroupElements(mesh.addGroup(name, kind), ids)
+
+        group = self.document.addObject("Fem::FemMeshShapeGroup", "MeshGroup")
+        group.Shape = geom
+        child = self.document.addObject("Fem::FemMeshObject", "MeshA")
+        child.FemMesh = mesh
+        group.Group = [child]
+        self.document.recompute()
+        _ = group.FemMesh
+
+        dims = list(group.CellDimension)
+        self.assertEqual(dims[volume - 1], 3)
+        self.assertEqual(dims[triangle - 1], 2, "the shell inside the solid is solved on")
+        self.assertEqual(dims[segment - 1], -1, "what bounds the shell is not a beam")
+
     def test_model_element_ids_read_the_classification(self):
         """meshtools reads the dimensions off the group instead of guessing."""
         from femmesh import meshtools

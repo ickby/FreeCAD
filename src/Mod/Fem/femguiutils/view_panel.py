@@ -301,6 +301,7 @@ class ElementNode:
         dim_badge=None,
         mesh_achieved=None,
         count_badge=None,
+        shared_with=None,
         is_category=False,
         cell_type=False,
         construction_group=False,
@@ -326,6 +327,12 @@ class ElementNode:
         self.mesh_achieved = mesh_achieved
         # Elements the row stands for, where the tree cannot count them itself.
         self.count_badge = count_badge
+        # Toplevels this element belongs to besides itself. Only an embedded 2D
+        # element has any: a shell fused into a solid is a face of that solid
+        # and a model element of its own at once, and the row is where that has
+        # to be said, or it reads as a peer of the solid rather than a part of
+        # it. A face two solids share is no toplevel and never reaches a row.
+        self.shared_with = shared_with
         self.is_category = is_category
         self.cell_type = cell_type  # hide via cell-type set
         # Head of the construction elements: its tick is the construction
@@ -406,6 +413,12 @@ class ElementNode:
             extras.append(f"{self.dim_badge}D")
         if self.count_badge is not None:
             extras.append(_thousands(self.count_badge))
+        if self.shared_with:
+            extras.append(
+                QtCore.QCoreApplication.translate("FEM_ViewPanel", "in {}").format(
+                    ", ".join(self.shared_with)
+                )
+            )
         if self.mesh_achieved is not None:
             # The mesher did not fail, it came up one dimension short, and the
             # analysis runs on what it did reach. Saying which one that is
@@ -418,6 +431,25 @@ class ElementNode:
         if extras:
             return f"{label} [{', '.join(extras)}]"
         return label
+
+    def tooltip(self):
+        """
+        The row, and for a shared element the sentence the badge shortens.
+
+        "in Solid1" is enough to stop the row reading as a peer of the solid,
+        but not enough to say what it means for the analysis, and that is the
+        part a user is left guessing at: one face, meshed once, solved as two
+        kinds of element at the same nodes.
+        """
+        label = self.display_name()
+        if not self.shared_with:
+            return label
+        return label + "\n" + QtCore.QCoreApplication.translate(
+            "FEM_ViewPanel",
+            "{element} is a model element of its own and a face of {owners} at the same "
+            "time. It is meshed once: the elements on it are solved in its own dimension "
+            "and share their nodes with the elements of {owners}.",
+        ).format(element=self.name, owners=", ".join(self.shared_with))
 
     def __repr__(self):
         return f"<ElementNode {self.name!r} children={len(self.children)}>"
@@ -706,10 +738,28 @@ class GeometryModel(QAbstractItemModel):
                     sub_name=f"{sub_prefix}{sub}" if selectable else None,
                     color=_color_tuple(cat["color"]) if cat else None,
                     dim_badge=dim if dim is not None and dim >= 0 else None,
+                    shared_with=self._shared_with(provider, sub),
                     mesh_achieved=under.get(element_path) if under else None,
                     selectable=selectable,
                 )
                 geometry_node.children.append(node)
+
+    @staticmethod
+    def _shared_with(provider, element):
+        """
+        Toplevels the element belongs to besides itself.
+
+        Empty for everything but an embedded 2D element, so the badge it feeds
+        shows up exactly where the row would otherwise mislead. The provider is
+        either the geometry or the mesh group; the mesh side owns no toplevel
+        and simply answers nothing.
+        """
+        try:
+            owners = provider.getEntityOwners(element)
+        except (AttributeError, ReferenceError, RuntimeError):
+            return None
+        shared = [owner for owner in owners if owner != element]
+        return shared or None
 
     def _build_category_tree(self, color_mode, under):
         root = self._root_node()
@@ -772,6 +822,7 @@ class GeometryModel(QAbstractItemModel):
                     sub_name=sub_name,
                     category_key=key,
                     dim_badge=dim if dim is not None and dim >= 0 else None,
+                    shared_with=self._shared_with(geom, e),
                     mesh_achieved=under.get(element_path),
                 )
                 cat_node.children.append(member)
@@ -854,7 +905,7 @@ class GeometryModel(QAbstractItemModel):
             return node.display_name()
 
         if role == Qt.ItemDataRole.ToolTipRole and column == 0:
-            return node.display_name()
+            return node.tooltip()
 
         # Stable key for selection sync (DisplayRole includes badges like "[3D]")
         if role == Qt.ItemDataRole.UserRole and column == 0:

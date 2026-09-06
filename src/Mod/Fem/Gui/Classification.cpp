@@ -92,8 +92,16 @@ std::string toplevelOfEntity(const Fem::FemGeometry* geometry, const std::string
         return entity;
     }
     auto owners = FemVisibilityMask::ownersOfEntity(geometry, entity);
-    // Prefer the first owner; multi-owner faces share colour of the first owner
-    // for toplevel mode (tree grouping still lists the entity under each owner later).
+    // A toplevel in its own right answers for itself, whoever else owns it. An
+    // embedded shell is a face of the solid it was fused into, so the solid can
+    // be the first owner and paint the shell in its colour -- and that patch is
+    // out where it can be seen, unlike the face two solids share. What is being
+    // looked at there is the shell, so it is the shell's colour it wants.
+    if (std::find(owners.begin(), owners.end(), entity) != owners.end()) {
+        return entity;
+    }
+    // Otherwise the first owner speaks for it. A face between two solids is
+    // inside the model and takes one of the two, whichever comes first.
     if (!owners.empty()) {
         return owners.front();
     }

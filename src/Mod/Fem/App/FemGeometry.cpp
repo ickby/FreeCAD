@@ -388,6 +388,22 @@ void FemGeometry::rebuildDimensionCache()
             }
         }
     }
+
+    // An embedded toplevel is one of its own owners. A shell fused into a solid
+    // is a face of that solid and a model element in its own right at the same
+    // time, and the loop above only ever hears the first of those: it records
+    // what a toplevel owns, never that a toplevel is itself owned. Left at that,
+    // the shell would answer to the solid alone, so the elements meshed on it
+    // would read as the solid's skin, and the edges bounding it would be all
+    // that the shell was ever seen to reach -- naming those edges 1D model
+    // elements. A free toplevel is untouched and keeps the empty owner list
+    // that is what says it is free.
+    for (const auto& entry : m_geometric_dimension) {
+        auto it = m_entity_owners.find(entry.first);
+        if (it != m_entity_owners.end()) {
+            it->second.push_back(entry.first);
+        }
+    }
 }
 
 std::vector<std::vector<Part::TopoShape>> FemGeometry::getComponents() const

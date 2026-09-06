@@ -1451,7 +1451,7 @@ class _PostFilterAttribute(CommandManager):
         self.tooltip = Qt.QT_TRANSLATE_NOOP(
             "FEM_PostFilterAttribute",
             "Adds a post-processing filter that keeps only the cells of chosen model entities, "
-            "grouped by subelement, component or material",
+            "grouped by component or material",
         )
         self.is_active = "with_vtk_selresult"
         self.do_activated = "add_filter_set_edit"

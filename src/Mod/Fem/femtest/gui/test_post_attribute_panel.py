@@ -138,12 +138,9 @@ class TestPostAttributePanelGui(unittest.TestCase):
             for i in range(panel.widget.AttributeComboBox.count())
         ]
         self.assertEqual(offered, self.filter.getEnumerationsOfProperty("Attribute"))
-        self.assertIn("Material", offered)
-
-    def test_subelement_lists_the_entities_flat(self):
-        self.filter.Attribute = "Subelement"
-        panel = self._panel()
-        self.assertEqual(self._rows(panel), ["Solid1", "Solid2"])
+        # Component and material, and nothing that lists the entities flat: the
+        # component rows already carry every entity, grouped.
+        self.assertEqual(offered, ["Component", "Material"])
 
     def test_component_groups_the_entities_under_their_component(self):
         self.filter.Attribute = "Component"
@@ -157,10 +154,12 @@ class TestPostAttributePanelGui(unittest.TestCase):
         self.assertEqual(children, ["Solid1"])
 
     def test_checking_a_row_writes_the_entity_back(self):
-        self.filter.Attribute = "Subelement"
+        self.filter.Attribute = "Component"
         panel = self._panel()
         tree = panel.widget.ElementTree
-        tree.topLevelItem(0).setCheckState(0, QtCore.Qt.Checked)
+        # The entity under the first component, not the component row itself:
+        # what is stored is always the entity a row stands for.
+        tree.topLevelItem(0).child(0).setCheckState(0, QtCore.Qt.Checked)
 
         self.assertEqual(list(self.filter.Elements), ["Solid1"])
         self.document.recompute()
@@ -182,12 +181,13 @@ class TestPostAttributePanelGui(unittest.TestCase):
         )
 
     def test_the_choice_survives_a_change_of_attribute(self):
-        self.filter.Attribute = "Subelement"
+        self.filter.Attribute = "Component"
         self.filter.Elements = ["Solid2"]
         panel = self._panel()
-        panel.widget.AttributeComboBox.setCurrentText("Component")
+        panel.widget.AttributeComboBox.setCurrentText("Material")
 
-        self.assertEqual(self.filter.Attribute, "Component")
+        self.assertEqual(self.filter.Attribute, "Material")
+        # The checked entities are the same entities under either grouping.
         self.assertEqual(list(self.filter.Elements), ["Solid2"])
 
     def test_the_name_column_takes_what_the_counts_do_not_need(self):

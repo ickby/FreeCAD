@@ -70,8 +70,13 @@ PASSTHROUGH = "__passthrough__"
 #: Our own pipeline, the one that actually extracts.
 EXTRACTION = "attribution"
 
+# What a result can be grouped by, in the order the combo box offers them.
+#
+# There is deliberately no mode that lists the entities flat. Every entity is
+# already a row under the component it belongs to, so a flat list shows the same
+# names with the grouping thrown away - which would only be worth something if
+# the rows carried a colour of their own, and here they do not.
 ATTRIBUTE_ARRAYS = {
-    "Subelement": ARRAY_ENTITIES,
     "Component": ARRAY_COMPONENT,
     "Material": ARRAY_MATERIAL,
 }
@@ -142,13 +147,8 @@ class Attribution:
 
         self.entities = entities
         self._ids = ids
-        # Subelement needs no side table: an entity is its own category there,
-        # and saying so here keeps the three attributes one shape.
-        self.categories["Subelement"] = {name: (name, name) for name in entities}
 
         for attribute, array_name in ATTRIBUTE_ARRAYS.items():
-            if attribute == "Subelement":
-                continue
             side = dataset.GetFieldData().GetAbstractArray(array_name)
             if side is None:
                 continue
@@ -210,6 +210,10 @@ class PostAttributeFilter(base_fempythonobject.BaseFemPythonObject):
     """
     A post processing filter that keeps only the cells of chosen model entities.
 
+    An entity is chosen by name, and the attribute only decides what the names
+    are grouped under while choosing them - the component a piece belongs to, or
+    the material it was solved with.
+
     What it can offer is entirely a property of the result it is put on: a
     result carries the entity of every cell and the component and material of
     every entity, or it carries nothing at all and the filter is inert. There is
@@ -236,7 +240,7 @@ class PostAttributeFilter(base_fempythonobject.BaseFemPythonObject):
                 name="Attribute",
                 group="Attribution",
                 doc="Which identity the model entities are grouped by",
-                value=["Subelement"],
+                value=["Component"],
             ),
             _PropHelper(
                 type="App::PropertyStringList",
@@ -269,7 +273,10 @@ class PostAttributeFilter(base_fempythonobject.BaseFemPythonObject):
         # The attributes on offer are the ones this result actually carries. A
         # choice that is no longer available falls back to the first one rather
         # than being kept as a name nothing can answer.
-        available = attribution.attributes() or ["Subelement"]
+        # A property enumeration cannot be empty, so a result that offers
+        # nothing keeps the first name on the list with no table behind it. The
+        # panel says so and the filter stays a no-op; see _selected_ids.
+        available = attribution.attributes() or [next(iter(ATTRIBUTE_ARRAYS))]
         current = obj.Attribute
         obj.Attribute = available
         if current in available:

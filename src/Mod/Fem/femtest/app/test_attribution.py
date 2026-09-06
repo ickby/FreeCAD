@@ -405,7 +405,8 @@ class TestResultAttribution(unittest.TestCase):
 
         filter_obj, _ = self._attribution(pipeline)
         offered = filter_obj.getEnumerationsOfProperty("Attribute")
-        self.assertIn("Subelement", offered)
-        self.assertIn("Component", offered)
+        self.assertEqual(offered, ["Component"])
         # No material was assigned, so there is no material table to group by.
+        # And there is no flat list of entities: the component rows already
+        # carry every one of them, grouped.
         self.assertNotIn("Material", offered)

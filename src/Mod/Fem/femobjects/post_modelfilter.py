@@ -337,7 +337,13 @@ class PostModelFilter(base_fempythonobject.BaseFemPythonObject):
         return parsed
 
     def execute(self, obj):
+        """Rebuild the selection, once, for whatever the properties now say.
 
+        This is the only place the pipeline is rebuilt. A property change does
+        not do it: changing one touches the object, so execute() has to run
+        afterwards regardless, and doing the work in both places is doing it
+        twice for one edit.
+        """
         attribution = self.attribution(obj)
 
         # The attributes on offer are the ones this result actually carries. A
@@ -347,24 +353,19 @@ class PostModelFilter(base_fempythonobject.BaseFemPythonObject):
         # nothing keeps the first name on the list with no table behind it. The
         # panel says so and the filter stays a no-op; see _selected_ids.
         available = attribution.attributes() or [next(iter(ATTRIBUTE_ARRAYS))]
-        current = obj.Attribute
-        obj.Attribute = available
-        if current in available:
-            obj.Attribute = current
+
+        # Written only when it would say something new. Assigning an
+        # enumeration touches the object whether or not the value moved, and a
+        # touch during execute() is another recompute of everything below.
+        if obj.getEnumerationsOfProperty("Attribute") != available:
+            current = obj.Attribute
+            obj.Attribute = available
+            obj.Attribute = current if current in available else available[0]
 
         self._update(obj, attribution)
 
         # make sure parent class execute is called!
         return False
-
-    def onChanged(self, obj, prop):
-
-        # check if we are setup already
-        if not hasattr(self, "_extract"):
-            return
-
-        if prop in ("Attribute", "Elements"):
-            self._update(obj)
 
     def _update(self, obj, attribution=None):
         """Point the object at the pipeline the current choice calls for."""

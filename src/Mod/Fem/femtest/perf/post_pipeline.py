@@ -184,8 +184,10 @@ def instrument():
     from femobjects import post_modelfilter
 
     def wrap(owner, method, stage):
-        original = getattr(owner, method)
-        if getattr(original, "_perf_wrapped", False):
+        # Missing is not an error: the marks name steps the filter may or may
+        # not have, and a step it stopped taking is one less thing to time.
+        original = getattr(owner, method, None)
+        if original is None or getattr(original, "_perf_wrapped", False):
             return
 
         def timed(*args, **kwargs):
@@ -347,12 +349,19 @@ def run(nodes_per_axis=NODES_PER_AXIS, document=None, keep=True):
             )
         )
 
+    def group_by(attribute):
+        # With the recompute, because that is where the work happens: setting
+        # the property only touches the object, and the panel recomputes right
+        # after setting it.
+        filter_obj.Attribute = attribute
+        recompute()
+
     if "Material" in filter_obj.getEnumerationsOfProperty("Attribute"):
         add(
             measure(
                 "Model filter: group by Material instead",
-                lambda: setattr(filter_obj, "Attribute", "Material"),
-                lambda: setattr(filter_obj, "Attribute", "Component"),
+                lambda: group_by("Material"),
+                lambda: group_by("Component"),
             )
         )
 

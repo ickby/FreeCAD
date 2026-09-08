@@ -805,6 +805,7 @@ SET(FemGuiUtils_SRCS
     femguiutils/selection_handoff.py
     femguiutils/selection_rules.py
     femguiutils/selection_slots.py
+    femguiutils/notifications.py
     femguiutils/update_watcher.py
     femguiutils/view_panel.py
 )

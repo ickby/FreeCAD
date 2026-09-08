@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>FEM_StateMeshCleared</title>
+  <rect x="4" y="22" width="38" height="38" style="fill:#fce94f;stroke:#302b00;stroke-width:4"/>
+  <path d="M16.7 22 V60 M29.3 22 V60 M4 34.7 H42 M4 47.3 H42" style="stroke:#302b00;stroke-width:2.5"/>
+  <path d="M60 26 A15 15 0 1 1 47 7" style="fill:none;stroke:#f57900;stroke-width:6;stroke-linecap:round"/>
+  <path d="M35 4 L50 6 L45 20 z" style="fill:#f57900"/>
+</svg>

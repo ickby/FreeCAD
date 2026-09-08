@@ -84,6 +84,27 @@ def meshers_of(analysis):
     ]
 
 
+def has_meshers(analysis):
+    """Whether anything at all is set up to mesh *analysis*."""
+    return bool(meshers_of(analysis))
+
+
+def mesh_is_empty(analysis):
+    """
+    Whether the meshers of *analysis* are set up and hold no mesh between them.
+
+    Asked of the meshers, not of the group's merge. The merge is a step behind
+    them - it is rebuilt when the document recomputes, and a mesher that has
+    just been run holds a mesh the merge has not picked up yet - so a reader
+    that went by the merge would answer "no mesh" for a while after meshing,
+    and go on answering it until something else happened to recompute the
+    document. What the question is really about is whether there is anything to
+    merge, and the meshers are where that is known.
+    """
+    meshers = meshers_of(analysis)
+    return bool(meshers) and all(mesher.FemMesh.NodeCount == 0 for mesher in meshers)
+
+
 def tool_for(mesher):
     """The meshing tool that drives *mesher*, or None if it is not a generator."""
     if is_derived_from(mesher, "Fem::FemMeshGmsh"):
@@ -126,5 +147,16 @@ def mesh_analysis(analysis):
             report.meshed.append(mesher.Label)
         except Exception as error:  # noqa: BLE001 - reported, not swallowed
             report.failed.append((mesher.Label, str(error)))
+
+    if meshers:
+        # A mesher writes its own mesh and stops there; the merge the analysis
+        # publishes - what the solver is handed and what the views draw - is
+        # rebuilt by the group when the document recomputes. Meshing without
+        # that leaves the analysis holding meshes nothing has collected.
+        #
+        # Whether the run succeeded or not: a mesher that failed may still have
+        # emptied what it held, and the merge has to say what the children
+        # actually hold either way.
+        analysis.Document.recompute()
 
     return report

@@ -128,6 +128,11 @@
         <file>icons/FEM_GeometryPartition.svg</file>
         <file>icons/FEM_GeometryShellBuilder.svg</file>
         <file>icons/FEM_GeometryUpdate.svg</file>
+        <file>icons/FEM_StateGeometryOutdated.svg</file>
+        <file>icons/FEM_StateGeometryMissing.svg</file>
+        <file>icons/FEM_StateSourceBehind.svg</file>
+        <file>icons/FEM_StateMeshMissing.svg</file>
+        <file>icons/FEM_StateMeshCleared.svg</file>
         <file>icons/FEM_GeometryUpdateMesh.svg</file>
         <file>icons/FEM_GeometryUpdateLinked.svg</file>
         <file>icons/fem-post-geo-box-outdated.svg</file>

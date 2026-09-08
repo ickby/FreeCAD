@@ -56,6 +56,17 @@ def analysis_imports_of(analysis):
     return [m for m in analysis.Group if m.isDerivedFrom("Fem::FemAnalysisImport")]
 
 
+def has_geometry(analysis):
+    """
+    Whether *analysis* has an analysis geometry with anything in it.
+
+    A group with no step is the same thing to a user as no group at all: it
+    draws nothing, meshes nothing, and the next move is the same either way.
+    """
+    group = geometry_group_of(analysis)
+    return bool(group is not None and group.Group)
+
+
 def outdated_steps(group):
     """
     The steps of an analysis geometry that are waiting to follow their sources.

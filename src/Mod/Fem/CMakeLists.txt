@@ -190,6 +190,7 @@ SET(FemInOut_SRCS
 
 SET(FemMesh_SRCS
     femmesh/__init__.py
+    femmesh/analysismesh.py
     femmesh/entityorder.py
     femmesh/femmesh2mesh.py
     femmesh/gmshtools.py
@@ -228,6 +229,7 @@ SET(FemObjects_SRCS
     femobjects/material_reinforced.py
     femobjects/geometry_base.py
     femobjects/geometry_partition.py
+    femobjects/geometry_shellbuilder.py
     femobjects/mesh_boundarylayer.py
     femobjects/mesh_gmsh.py
     femobjects/mesh_group.py
@@ -613,6 +615,7 @@ SET(FemTools_SRCS
     femtools/constants.py
     femtools/errors.py
     femtools/femutils.py
+    femtools/geometryupdate.py
     femtools/geomtools.py
     femtools/importtools.py
     femtools/importmembers.py
@@ -735,6 +738,7 @@ SET(FemGuiTaskPanels_SRCS
     femtaskpanels/task_element_rotation1D.py
     femtaskpanels/task_geometry.py
     femtaskpanels/task_geometry_partition.py
+    femtaskpanels/task_geometry_shellbuilder.py
     femtaskpanels/task_material_common.py
     femtaskpanels/task_material_reinforced.py
     femtaskpanels/task_mesh_boundarylayer.py
@@ -780,6 +784,7 @@ SET(FemGuiTests_SRCS
     femtest/gui/test_constraint_symbols.py
     femtest/gui/test_geometry_dimension.py
     femtest/gui/test_geometry_marks.py
+    femtest/gui/test_geometry_update.py
     femtest/gui/test_geometry_partition.py
     femtest/gui/test_import_selection.py
     femtest/gui/test_mesh_edges.py
@@ -800,6 +805,7 @@ SET(FemGuiUtils_SRCS
     femguiutils/selection_handoff.py
     femguiutils/selection_rules.py
     femguiutils/selection_slots.py
+    femguiutils/update_watcher.py
     femguiutils/view_panel.py
 )
 

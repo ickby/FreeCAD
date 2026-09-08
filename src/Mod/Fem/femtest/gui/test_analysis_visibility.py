@@ -44,6 +44,8 @@ import Part
 import FemGui
 import ObjectsFem
 
+from femtools import geometryupdate
+
 # The scene graph checks hand out Coin nodes, which needs the pivy bindings
 from pivy import coin
 
@@ -337,6 +339,13 @@ class TestAnalysisVisibilityGui(unittest.TestCase):
             part = self.document.getObject("CheapSourcePart")
             part.Shape = Part.makeBox(20, 10, 10)
             self.document.recompute()
+            self.assertEqual(
+                self._rebuilds(),
+                0,
+                "a model the source analysis has not followed yet draws the same shape",
+            )
+
+            geometryupdate.update_geometry(source)
             self.assertGreater(self._rebuilds(), 0, "the shape it draws did change")
         finally:
             FemGui.perfEnable(False)

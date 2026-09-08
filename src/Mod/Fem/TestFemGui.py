@@ -27,6 +27,7 @@
 from femtest.gui.test_open import TestObjectOpen as FemGuiTest01
 from femtest.gui.test_geometry_partition import TestGeometryPartitionGui as FemGuiTest02
 from femtest.gui.test_geometry_marks import TestGeometryMarksGui as FemGuiTest03
+from femtest.gui.test_geometry_update import TestGeometryUpdateGui as FemGuiTest16
 from femtest.gui.test_view_panel import TestViewPanelGui as FemGuiTest04
 from femtest.gui.test_reference_selection import TestReferenceSelectionGui as FemGuiTest05
 from femtest.gui.test_palette import TestPaletteGui as FemGuiTest06
@@ -56,3 +57,4 @@ False if FemGuiTest12.__name__ else True
 False if FemGuiTest13.__name__ else True
 False if FemGuiTest14.__name__ else True
 False if FemGuiTest15.__name__ else True
+False if FemGuiTest16.__name__ else True

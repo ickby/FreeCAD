@@ -43,6 +43,8 @@ import Part
 
 import ObjectsFem
 
+from femtools import geometryupdate
+
 from femtest.app.support_utils import fcc_print
 from femtest.gui.test_geometry_marks import face_material, node_colors
 
@@ -117,6 +119,10 @@ class TestPaletteGui(unittest.TestCase):
         """
         self.box.Shape = Part.makeShell(Part.makeBox(10, 10, 10).Faces)
         self.document.recompute()
+        # An analysis geometry follows the model it was built from only when it
+        # is told to, so what this test is about - one component of many faces -
+        # exists once the update has been asked for.
+        geometryupdate.update_group(self.group)
         state = FemGui.getAnalysisViewState(self.analysis)
         self.group.ViewObject.Visibility = True
 

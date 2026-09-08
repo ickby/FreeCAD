@@ -1325,6 +1325,12 @@ class GeometryExplorer(QtGui.QTreeView):
     def _app_changed_object(self, obj, prop=None):
         if not self.active_analysis or prop is None:
             return
+        if prop in ("Outdated", "SourceGeometryOutdated", "SourceMeshMissing"):
+            # Whether a geometry is behind the model it was built from says
+            # nothing about the elements listed here. It is answered by a task
+            # watcher, which offers the update where model changes belong; this
+            # tree is left exactly as it is.
+            return
         # An import contributes rows of its own, so what it places and what it
         # leaves out change the tree just like a geometry change does. The mesh
         # container's Group is what the Mesh-stage tree is built from, and a

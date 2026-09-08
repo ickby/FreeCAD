@@ -2919,6 +2919,11 @@ class GeometryShellBuilder(GeometryBase):
 
     Type = "Fem::GeometryShellBuilder"
 
+    # Written by execute(), one entry per face of the result, and not a setting
+    # anyone made. Said here so that publishing them is not read back as the
+    # user having edited this step.
+    OUTPUTS = ("Thickness", "Offset")
+
     def __init__(self, obj):
         super().__init__(obj)
         self.setup_properties(obj)
@@ -3030,6 +3035,23 @@ class GeometryShellBuilder(GeometryBase):
         return super()._get_properties() + prop
 
     def execute(self, obj):
+        """
+        Redo the reduction, or pass on the result that is still the right one.
+
+        A step is executed for anything at all that happens to a dependency,
+        and almost none of it is a new input. Doing the work anyway would cost
+        a full wall search and reduction on every recompute of the CAD model the analysis was
+        built from, which is exactly what the deliberate update is meant to
+        spare the user; should_rebuild() is where that is decided.
+        """
+        if not geometry_base.should_rebuild(self, obj):
+            geometry_base.note_built(self, obj)
+            return
+
+        self._rebuild(obj)
+        geometry_base.note_built(self, obj)
+
+    def _rebuild(self, obj):
         base_obj = obj.Base
         if not base_obj or base_obj.Shape.isNull():
             raise ValueError("No input geometry to reduce")

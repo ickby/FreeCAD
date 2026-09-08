@@ -63,6 +63,24 @@ public:
      */
     App::PropertyMap DimensionOverride;
 
+    /**
+     * The step is behind what it was built from, and waits to be told to follow.
+     *
+     * A change to the CAD model reaches every step of an analysis geometry
+     * through the dependency graph, and acting on it costs the user the whole
+     * chain of booleans and every mesh made against the result. So a step that
+     * is reached from outside keeps the Shape it has and says so here instead;
+     * rebuilding is left to a deliberate update. Written by the step that
+     * decided it - the import step for its own sources, the group as the union
+     * over its members - and read by the view providers and by the commands
+     * that offer the update.
+     *
+     * Output, so that saying it does not ask for another recompute, and saved,
+     * because a geometry that was behind its model when the document was
+     * closed is still behind it when the document is opened again.
+     */
+    App::PropertyBool Outdated;
+
     const char* getViewProviderName() const override
     {
         return "FemGui::ViewProviderFemGeometry";

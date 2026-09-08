@@ -30,6 +30,7 @@ __url__ = "https://www.freecad.org"
 #  \brief Thin Python view providers for FemGeometry FeaturePython objects
 
 import FreeCAD
+import FreeCADGui
 
 from femtaskpanels import task_geometry
 
@@ -153,7 +154,60 @@ def clear_tool_preview(obj):
         subject.ViewObject.clearToolPreview()
 
 
-class VPGeometryGroup(view_base_femobject.VPBaseFemObject):
+def _geometry_icon(obj):
+    """
+    The box, marked when what it shows is behind the model it was built from.
+
+    The mark is drawn into the artwork rather than composed over the icon here:
+    a badge painted at runtime has to be told about the icon size, the theme and
+    the device pixel ratio, and gets all three wrong somewhere. A second file
+    costs a few lines of SVG and is right everywhere the first one is.
+    """
+    if getattr(obj, "Outdated", False):
+        return ":/icons/fem-post-geo-box-outdated.svg"
+    return ":/icons/fem-post-geo-box.svg"
+
+
+UPDATE_COMMANDS = (
+    "FEM_GeometryUpdate",
+    "FEM_GeometryUpdateMesh",
+    "FEM_GeometryUpdateLinked",
+)
+
+
+def add_update_actions(menu):
+    """
+    Offer the update where the mark is seen, not only where the toolbar is.
+
+    A user meets an out of date geometry in the tree, so the repair belongs in
+    the menu the tree opens. Only what can do something is offered: the entries
+    grey themselves out on the toolbar, and an entry that would do nothing is
+    better left out of a context menu than shown dead in it.
+    """
+    added = False
+    for name in UPDATE_COMMANDS:
+        command = FreeCADGui.Command.get(name)
+        if command is None or not command.isActive():
+            continue
+        info = command.getInfo()
+        action = menu.addAction(info["menuText"].replace("&", ""))
+        action.setToolTip(info["toolTip"])
+        action.triggered.connect(lambda checked=False, cmd=name: FreeCADGui.runCommand(cmd))
+        added = True
+    return added
+
+
+class _OutdatedIconMixin:
+    """Keeps the tree icon in step with the mark the object carries."""
+
+    def updateData(self, obj, prop):
+        # The property is an output of execute(), so it arrives without the
+        # object having otherwise changed; nothing else would repaint the row.
+        if prop == "Outdated" and self.ViewObject is not None:
+            self.ViewObject.signalChangeIcon()
+
+
+class VPGeometryGroup(_OutdatedIconMixin, view_base_femobject.VPBaseFemObject):
     """
     View provider for GeometryGroup. Adds the geo-feature-group extension
     so children are claimed; rendering is handled by ViewProviderFemGeometry.
@@ -164,7 +218,12 @@ class VPGeometryGroup(view_base_femobject.VPBaseFemObject):
         vobj.addExtension("Gui::ViewProviderGeoFeatureGroupExtensionPython")
 
     def getIcon(self):
-        return ":/icons/fem-post-geo-box.svg"
+        return _geometry_icon(self.Object)
+
+    def setupContextMenu(self, vobj, menu):
+        add_update_actions(menu)
+        # Falsy keeps the standard entries
+        return False
 
     def dumps(self):
         return None
@@ -201,6 +260,9 @@ class VPGeometryStep(view_base_femobject.VPBaseFemObject):
         down.setEnabled(index < len(steps) - 1)
         down.triggered.connect(self.move_down)
 
+        if add_update_actions(menu):
+            menu.insertSeparator(menu.actions()[2])
+
         # Falsy keeps the standard entries, the edit action among them
         return False
 
@@ -211,7 +273,7 @@ class VPGeometryStep(view_base_femobject.VPBaseFemObject):
         move_step(self.Object, 1)
 
 
-class VPGeometryImport(VPGeometryStep):
+class VPGeometryImport(_OutdatedIconMixin, VPGeometryStep):
     """
     View provider for GeometryImport. Rendering is handled by
     ViewProviderFemGeometry (C++ / ViewProviderFemGeometryPython).
@@ -221,7 +283,7 @@ class VPGeometryImport(VPGeometryStep):
         super().__init__(vobj)
 
     def getIcon(self):
-        return ":/icons/fem-post-geo-box.svg"
+        return _geometry_icon(self.Object)
 
     def setEdit(self, vobj, mode=0):
         return super().setEdit(vobj, mode, task_geometry._ImportTaskPanel, hide_mesh=False)

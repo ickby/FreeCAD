@@ -6,6 +6,8 @@
         <!-- gui command icons -->
         <file>icons/FEM_Analysis.svg</file>
         <file>icons/FEM_AnalysisImport.svg</file>
+        <file>icons/FEM_AnalysisImport-outdated.svg</file>
+        <file>icons/FEM_AnalysisImport-nomesh.svg</file>
         <file>icons/FEM_ClippingPlaneAdd.svg</file>
         <file>icons/FEM_ClippingPlaneRemoveAll.svg</file>
 
@@ -125,6 +127,10 @@
         <!-- geometry preprocessing -->
         <file>icons/FEM_GeometryPartition.svg</file>
         <file>icons/FEM_GeometryShellBuilder.svg</file>
+        <file>icons/FEM_GeometryUpdate.svg</file>
+        <file>icons/FEM_GeometryUpdateMesh.svg</file>
+        <file>icons/FEM_GeometryUpdateLinked.svg</file>
+        <file>icons/fem-post-geo-box-outdated.svg</file>
 
         <!-- object icons without gui command but with task panel action -->
         <file>icons/fem-post-geo-box.svg</file>

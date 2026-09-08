@@ -42,6 +42,7 @@
 #include <Base/Parameter.h>
 #include <Base/Tools.h>
 #include <Gui/Application.h>
+#include <Gui/BitmapFactory.h>
 #include <Gui/Control.h>
 #include <Gui/Inventor/Draggers/SoTransformDragger.h>
 #include <Gui/Document.h>
@@ -1004,6 +1005,19 @@ void ViewProviderFemAnalysisImport::dragFinishCB(void* data, SoDragger*)
     self->m_dragger->clearIncrementCounts();
 }
 
+QIcon ViewProviderFemAnalysisImport::getIcon() const
+{
+    if (auto* importObj = getObject<Fem::FemAnalysisImport>()) {
+        if (importObj->SourceGeometryOutdated.getValue()) {
+            return Gui::BitmapFactory().pixmap("FEM_AnalysisImport-outdated");
+        }
+        if (importObj->SourceMeshMissing.getValue()) {
+            return Gui::BitmapFactory().pixmap("FEM_AnalysisImport-nomesh");
+        }
+    }
+    return Gui::ViewProviderDocumentObject::getIcon();
+}
+
 void ViewProviderFemAnalysisImport::updateData(const App::Property* prop)
 {
     Gui::ViewProviderDocumentObject::updateData(prop);
@@ -1032,6 +1046,13 @@ void ViewProviderFemAnalysisImport::updateData(const App::Property* prop)
     // travels up to the analysis and along our link to it, and the recompute
     // that follows raises this. Nested instances come with it, because they
     // are members of that analysis too.
+    if (prop == &importObj->SourceGeometryOutdated || prop == &importObj->SourceMeshMissing) {
+        // Both are outputs of execute() and arrive on their own, with nothing
+        // else about the instance changed, so nothing else would repaint the row.
+        signalChangeIcon();
+        return;
+    }
+
     if (prop == &importObj->SourceRevision) {
         rebuildRenderTree();
         rebuildInheritedSymbols();

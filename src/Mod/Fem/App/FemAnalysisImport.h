@@ -72,6 +72,34 @@ public:
      */
     App::PropertyInteger SourceRevision;
 
+    /**
+     * The geometry of the source analysis is behind the model it was built
+     * from, and so is everything this instance shows of it.
+     *
+     * Geometry and mesh are read from the source and nothing is kept here, so
+     * an instance is only ever as current as the analysis it points at. The
+     * mark the source raised for itself is therefore carried on to the analysis
+     * that imports it, which is where a user standing in front of an instance
+     * can see that what it draws is out of date - and read there by the update
+     * command, because updating the source is the only thing that repairs it.
+     *
+     * A source that imports further analyses answers for them too: its own
+     * instances have already been asked by the time this is written, the
+     * dependency graph running a source before the analysis that imports it.
+     */
+    App::PropertyBool SourceGeometryOutdated;
+
+    /**
+     * The source analysis publishes no mesh.
+     *
+     * Either nobody has set a mesher up over there, which no update can repair,
+     * or its geometry was updated and took the mesh with it, which a remesh of
+     * the source does repair. Both leave this instance drawing a geometry with
+     * nothing to compute on, so both are worth saying; telling them apart is
+     * left to the command, which can see whether the source has meshers at all.
+     */
+    App::PropertyBool SourceMeshMissing;
+
     const char* getViewProviderName() const override
     {
         return "FemGui::ViewProviderFemAnalysisImport";
@@ -79,6 +107,13 @@ public:
 
     App::DocumentObjectExecReturn* execute() override;
     short mustExecute() const override;
+
+    /**
+     * Both markers are derived from the source analysis on every execute, so a
+     * document that has just been restored has to be asked once as well - the
+     * alternative is a tree that looks healthy until something recomputes.
+     */
+    void onDocumentRestored() override;
 
     /** Geometry of the linked source analysis, or nullptr. */
     FemGeometry* sourceGeometry() const;
@@ -104,6 +139,9 @@ public:
     Part::TopoShape placedSubShape(const char* subname) const;
 
 private:
+    /// Read the state of the source analysis into the two markers.
+    void updateSourceMarkers();
+
     FemAnalysisImport* nestedImportByName(const char* name) const;
     Part::TopoShape subShapeInFrame(const char* subname, Base::Matrix4D& mat) const;
     Part::TopoShape shapeFromSource(const char* subname, const Base::Matrix4D& mat) const;

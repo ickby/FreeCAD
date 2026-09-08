@@ -63,6 +63,13 @@ FemGeometry::FemGeometry()
         App::Prop_None,
         "Per-toplevel-element analysis dimension overrides (key=element name, value=0..3)"
     );
+    ADD_PROPERTY_TYPE(
+        Outdated,
+        (false),
+        "FEM",
+        App::PropertyType(App::Prop_Output | App::Prop_ReadOnly),
+        "The step is behind the geometry it was built from and waits for an update"
+    );
 }
 
 FemGeometry::~FemGeometry() = default;

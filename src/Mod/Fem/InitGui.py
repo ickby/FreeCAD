@@ -95,13 +95,17 @@ class FemWorkbench(Workbench):
 
     def Activated(self):
         import femguiutils.view_panel as vp
+        import femguiutils.update_watcher as uw
 
         vp.setup_visualization_panel()
+        uw.install()
 
     def Deactivated(self):
         import femguiutils.view_panel as vp
+        import femguiutils.update_watcher as uw
 
         vp.unsetup_visualization_panel()
+        uw.remove()
 
 
 FreeCADGui.addWorkbench(FemWorkbench())

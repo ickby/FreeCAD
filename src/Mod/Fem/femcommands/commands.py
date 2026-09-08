@@ -157,6 +157,128 @@ class _GeometryShellBuilder(CommandManager):
         self.do_activated = "add_geometry_set_edit"
 
 
+class _GeometryUpdateMesh(CommandManager):
+    "The FEM_GeometryUpdateMesh command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.pixmap = "FEM_GeometryUpdateMesh"
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_GeometryUpdateMesh", "Update Geometry and Mesh")
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_GeometryUpdateMesh",
+            "Rebuilds the analysis geometry from the changed model and meshes it again",
+        )
+        self.is_active = "with_outdated_geometry"
+
+    def Activated(self):
+        import FemGui
+        from femtools import geometryupdate
+
+        analysis = FemGui.getActiveAnalysis()
+        FreeCAD.ActiveDocument.openTransaction("Update geometry and mesh")
+        report = geometryupdate.update_geometry_and_mesh(analysis)
+        FreeCAD.ActiveDocument.commitTransaction()
+        FreeCAD.Console.PrintMessage(geometryupdate.report_text([report]) + "\n")
+
+
+class _GeometryUpdate(CommandManager):
+    "The FEM_GeometryUpdate command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.pixmap = "FEM_GeometryUpdate"
+        self.menutext = Qt.QT_TRANSLATE_NOOP("FEM_GeometryUpdate", "Update Geometry")
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_GeometryUpdate",
+            "Rebuilds the analysis geometry from the changed model. "
+            "The meshes made for the old geometry are cleared",
+        )
+        self.is_active = "with_outdated_geometry"
+
+    def Activated(self):
+        import FemGui
+        from femtools import geometryupdate
+
+        analysis = FemGui.getActiveAnalysis()
+        FreeCAD.ActiveDocument.openTransaction("Update geometry")
+        geometryupdate.update_geometry(analysis)
+        FreeCAD.ActiveDocument.commitTransaction()
+
+
+class _GeometryUpdateLinked(CommandManager):
+    "The FEM_GeometryUpdateLinked command definition"
+
+    def __init__(self):
+        super().__init__()
+        self.pixmap = "FEM_GeometryUpdateLinked"
+        self.menutext = Qt.QT_TRANSLATE_NOOP(
+            "FEM_GeometryUpdateLinked", "Update Linked Analyses Too"
+        )
+        self.tooltip = Qt.QT_TRANSLATE_NOOP(
+            "FEM_GeometryUpdateLinked",
+            "Rebuilds and meshes the analyses imported here as well, then this one",
+        )
+        self.is_active = "with_stale_source"
+
+    def Activated(self):
+        import FemGui
+        from femtools import geometryupdate
+
+        analysis = FemGui.getActiveAnalysis()
+        FreeCAD.ActiveDocument.openTransaction("Update linked analyses")
+        reports = geometryupdate.update_with_sources(analysis)
+        FreeCAD.ActiveDocument.commitTransaction()
+        # Most of what was rebuilt is not on screen, so what happened to it has
+        # to be said rather than left for the user to discover.
+        FreeCAD.Console.PrintMessage(geometryupdate.report_text(reports) + "\n")
+
+
+class _GeometryUpdateGroup:
+    """
+    Group command for the three sizes an update comes in.
+
+    Listed by what they cost, which is also how they nest: each entry is the one
+    before it and more. What the button does before anyone has chosen is the
+    second of them, because updating the geometry alone leaves the analysis
+    without a mesh - a thing to choose deliberately, not to be handed by
+    default. Afterwards the button keeps whichever was used last.
+    """
+
+    def GetCommands(self):
+        return [
+            "FEM_GeometryUpdate",
+            "FEM_GeometryUpdateMesh",
+            "FEM_GeometryUpdateLinked",
+        ]
+
+    def GetDefaultCommand(self):
+        return 1
+
+    def GetResources(self):
+        # Deliberately no Pixmap of its own. A group that names one wears it
+        # whatever is selected inside, and the button would then look the same
+        # for all three - while pressing it runs only one of them. Left out,
+        # the group shows the icon of the entry it would run, and follows the
+        # choice as it is made.
+        return {
+            "MenuText": Qt.QT_TRANSLATE_NOOP("FEM_GeometryUpdateGroup", "Update Geometry"),
+            "ToolTip": Qt.QT_TRANSLATE_NOOP(
+                "FEM_GeometryUpdateGroup",
+                "Lets the analysis geometry follow the model it was built from",
+            ),
+        }
+
+    def IsActive(self):
+        # The group offers whatever its entries can do: grey means there is
+        # nothing to update anywhere, which is the answer to the question the
+        # user came to the toolbar with.
+        for name in ("FEM_GeometryUpdate", "FEM_GeometryUpdateMesh", "FEM_GeometryUpdateLinked"):
+            command = FreeCADGui.Command.get(name)
+            if command is not None and command.isActive():
+                return True
+        return False
+
+
 class _ClippingPlaneAdd(CommandManager):
     "The FEM_ClippingPlaneAdd command definition"
 
@@ -1520,6 +1642,10 @@ FreeCADGui.addCommand("FEM_AnalysisImport", _AnalysisImport())
 FreeCADGui.addCommand("FEM_GeometryImport", _GeometryImport())
 FreeCADGui.addCommand("FEM_GeometryPartition", _GeometryPartition())
 FreeCADGui.addCommand("FEM_GeometryShellBuilder", _GeometryShellBuilder())
+FreeCADGui.addCommand("FEM_GeometryUpdate", _GeometryUpdate())
+FreeCADGui.addCommand("FEM_GeometryUpdateMesh", _GeometryUpdateMesh())
+FreeCADGui.addCommand("FEM_GeometryUpdateLinked", _GeometryUpdateLinked())
+FreeCADGui.addCommand("FEM_GeometryUpdateGroup", _GeometryUpdateGroup())
 FreeCADGui.addCommand("FEM_ClippingPlaneAdd", _ClippingPlaneAdd())
 FreeCADGui.addCommand("FEM_ClippingPlaneRemoveAll", _ClippingPlaneRemoveAll())
 FreeCADGui.addCommand("FEM_ConstantVacuumPermittivity", _ConstantVacuumPermittivity())

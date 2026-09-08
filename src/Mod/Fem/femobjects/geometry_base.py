@@ -52,6 +52,105 @@ def assign_shape(obj, shape):
     obj.Shape = shape
 
 
+# What a step publishes, plus the settings that say nothing about its shape.
+# Everything else a step carries is an input the user edits, and editing one is
+# the user asking for the result to follow. Naming the outputs rather than the
+# inputs keeps a step that gains a setting working without a change here.
+#
+# Properties whose name starts with an underscore are excluded wholesale: they
+# are FreeCAD's own bookkeeping, and some of them are written after a document
+# has been restored, when the restore state that would otherwise excuse them is
+# already gone. _ElementMapVersion is the one that matters here - taken for an
+# edit, it has every step of every chain rebuild itself on the first recompute
+# after a file is opened.
+_NOT_AN_INPUT = frozenset(
+    {
+        "Shape",
+        "Outdated",
+        "DimensionOverride",
+        "Placement",
+        "Label",
+        "Label2",
+        "Visibility",
+        "Proxy",
+        "ExpressionEngine",
+    }
+)
+
+
+def _is_input(prop, outputs=()):
+    return prop not in _NOT_AN_INPUT and prop not in outputs and not prop.startswith("_")
+
+
+def request_update(obj):
+    """
+    Ask a geometry step to follow its sources at the next recompute.
+
+    A step reached by a change from outside the analysis keeps the shape it has,
+    because rebuilding costs the chain below it and every mesh made against the
+    result. This is how the update command says that the user has now asked for
+    exactly that. The recompute has to be enforced: nothing about the step
+    itself changed, so the document would otherwise see no reason to run it.
+    """
+    proxy = getattr(obj, "Proxy", None)
+    if proxy is not None:
+        proxy._rebuild_requested = True
+    obj.enforceRecompute()
+
+
+def should_rebuild(proxy, obj):
+    """
+    Whether a step has to do its work again, or may pass on what it has.
+
+    A step is executed for anything at all that happens to a dependency, and
+    almost none of it is a new input: the shape it was built from is the same
+    one, and its own settings are untouched. Doing the work anyway costs a full
+    boolean per step on every recompute of the CAD model, so a step asks here
+    first. Three things say yes - nothing has been built yet, the user changed
+    a setting or asked for an update, or the step before published a new shape.
+
+    What the step before published is compared by identity, not by geometry:
+    the same shape handed on again is the same TopoDS_Shape, and a rebuilt one
+    is never the same object even when it comes back geometrically identical.
+    That is a pointer comparison, and it is the question actually being asked -
+    "is my input the one I built from" - where comparing the geometry would
+    cost about as much as rebuilding and still answer something else.
+
+    Identity is also the only comparison that survives a restore. The revision
+    counter FemGeometry keeps would be the obvious thing to compare, but it is
+    raised while a document is being restored and the order in which objects
+    are restored is not fixed, so a step can record a count that its base has
+    already moved past - and then rebuild on the first recompute after opening
+    a file, taking every mesh made against the old shape with it. A shape, by
+    contrast, does not change while a document is being read.
+    """
+    if obj.Shape.isNull():
+        return True
+    if getattr(proxy, "_rebuild_requested", False):
+        return True
+    return not _same_shape(_base_shape(obj), getattr(proxy, "_built_from", None))
+
+
+def note_built(proxy, obj):
+    """Record what a step has just been built against. Follows every execute."""
+    proxy._built_from = _base_shape(obj)
+    proxy._rebuild_requested = False
+
+
+def _base_shape(obj):
+    base = obj.Base
+    return base.Shape if base else None
+
+
+def _same_shape(one, other):
+    """Whether two step inputs are the same shape, either of them possibly absent."""
+    if one is None or other is None:
+        return one is None and other is None
+    if one.isNull() or other.isNull():
+        return one.isNull() and other.isNull()
+    return one.isSame(other)
+
+
 def _get_features_without_compounds(shape):
     result = shape.Solids
     result += shape.getChildShapes("Shell", "Solids")
@@ -67,12 +166,36 @@ class GeometryBase(base_fempythonobject.BaseFemPythonObject):
 
     Type = "Fem::GeometryBase"
 
+    # Properties a step writes itself, as results of its own execute rather
+    # than as settings anyone made. A step has to say which its own are: they
+    # are ordinary properties, indistinguishable from a setting from outside,
+    # and taken for one they leave the step asking to be rebuilt every time it
+    # is built - which rebuilds the chain and clears the meshes on the next
+    # recompute that comes along, whatever brought it.
+    OUTPUTS = ()
+
     def __init__(self, obj):
         super().__init__(obj)
 
     def setup_properties(self, obj):
         for prop in self._get_properties():
             prop.add_to_object(obj)
+
+    def onChanged(self, obj, prop):
+        """
+        Note that the user has edited what this step is built from.
+
+        A step cannot tell from execute() alone why it was reached, and the two
+        reasons ask for opposite answers: a source that recomputed outside the
+        analysis is followed only when the user says so, while a setting the
+        user just changed is that saying. This is the only place the difference
+        is visible, so it is recorded here and read there.
+
+        The restore pass writes every saved property and must not be mistaken
+        for an edit - a document that is being opened has asked for nothing.
+        """
+        if _is_input(prop, self.OUTPUTS) and "Restore" not in obj.State:
+            self._rebuild_requested = True
 
     def onDocumentRestored(self, obj):
         """
@@ -91,6 +214,15 @@ class GeometryBase(base_fempythonobject.BaseFemPythonObject):
                 obj.getPropertyByName(prop.name)
             except Base.PropertyError:
                 prop.add_to_object(obj)
+
+        # The shape saved with this step is the one built from the shape saved
+        # beside it, so what its base holds now is what it was built from.
+        # Learning that here and not at the first execute matters: a step that
+        # waited to be told would have no way of telling a base that has since
+        # been rebuilt from one that never moved, and would skip the work that
+        # a deliberate update had just asked it for.
+        self._built_from = _base_shape(obj)
+        self._rebuild_requested = False
 
     def _get_properties(self):
         return [
@@ -117,6 +249,14 @@ class GeometryGroup(base_fempythonobject.BaseFemPythonObject):
     def onDocumentRestored(self, obj):
         self._keep_visibility_out_of_the_recompute(obj)
 
+        # A saved group holds the result of its last step, saved beside it -
+        # the same geometry written to the file twice, and restored as two
+        # shapes that are equal and not identical. Taking note of the one the
+        # step holds is what stops the first recompute after opening a file
+        # from reading that difference as a new result, republishing it, and
+        # clearing every mesh made against a geometry that never changed.
+        self._published = self._last_shape(obj)
+
     @staticmethod
     def _keep_visibility_out_of_the_recompute(obj):
         # Showing or hiding a member says nothing about the shape, and the group
@@ -132,14 +272,41 @@ class GeometryGroup(base_fempythonobject.BaseFemPythonObject):
                 return
             if not hasattr(obj.Group[0], "Base"):
                 return
-            obj.Group[0].Base = None
-            last = obj.Group[0]
-            for child in obj.Group[1:]:
-                child.Base = last
+
+            # Only where the order actually differs. Writing a link touches the
+            # step that receives it whether or not the value changed, and a step
+            # reads a touch of its own input as the user having edited it - so
+            # rewiring a chain that is already wired that way, which is what a
+            # restored document does, would have every step rebuild itself on
+            # the first recompute after opening the file.
+            last = None
+            for child in obj.Group:
+                if child.Base != last:
+                    child.Base = last
                 last = child
 
+    @staticmethod
+    def _last_shape(obj):
+        """What the chain ends on, which is what this group publishes."""
+        return obj.Group[-1].Shape if obj.Group else Part.Shape()
+
     def execute(self, obj):
-        assign_shape(obj, obj.Group[-1].Shape if obj.Group else Part.Shape())
+        # Published by identity, not by content: the last step hands on the very
+        # shape it holds, so the same object arriving again is the same result
+        # and writing it a second time would be seen downstream as a geometry
+        # that changed - which costs every mesh made against it.
+        last = self._last_shape(obj)
+        if not _same_shape(last, getattr(self, "_published", None)):
+            assign_shape(obj, last)
+            self._published = last
+
+        # The mark is raised by the step that decided it, and a step is only
+        # ever seen inside the chain. What the tree, the view panel and the
+        # update command look at is the analysis geometry as a whole, so the
+        # union is drawn here. Nothing has to be scheduled for it: the Group
+        # link makes this group a dependent of every member, so a member that
+        # has just marked itself brings us here in the same recompute.
+        obj.Outdated = any(getattr(member, "Outdated", False) for member in obj.Group)
 
 
 class GeometryImport(GeometryBase):
@@ -171,6 +338,32 @@ class GeometryImport(GeometryBase):
         return super()._get_properties() + prop
 
     def execute(self, obj):
+        """
+        Read the sources again, or note that they have moved without us.
+
+        This step is the only door through which the world outside the analysis
+        enters it, so it is where the decision belongs. Following a change to
+        the CAD model costs the whole chain of booleans below and every mesh
+        made against the result, and nobody asked for either, so what arrives
+        from outside is recorded and left. Keeping the Shape is what protects
+        the meshes: FemGeometry raises its revision when a new shape was
+        written, and the mesh group throws away what was meshed against the old
+        one, so a step that writes nothing costs nothing anywhere.
+
+        An edit to this step's own settings, and an update the user asked for,
+        both arrive as a rebuild request and are acted on at once - the user is
+        waiting for the result in both cases. A step that has nothing yet
+        builds too; a chain that has never run is not born out of date.
+        """
+        if not should_rebuild(self, obj):
+            obj.Outdated = True
+            return
+
+        self._rebuild(obj)
+        obj.Outdated = False
+        note_built(self, obj)
+
+    def _rebuild(self, obj):
         import_shapes = []
         for link in obj.Import:
             if link.isDerivedFrom("Sketcher::SketchObject"):

@@ -38,6 +38,7 @@ import Fem
 import ObjectsFem
 
 from femmesh import meshcomponents
+from femobjects import geometry_base
 
 from .support_utils import fcc_print
 
@@ -2775,7 +2776,9 @@ class TestExecuteDrivenOutputs(unittest.TestCase):
         A geometry chain classifies its result once, at the recompute.
 
         An unrelated property on a step leaves the shape as it was, so the group
-        hands the same shape on again and nothing behind it is reclassified.
+        hands the same shape on again and nothing behind it is reclassified. A
+        changed CAD model does not reach the shape at all until the user asks
+        for it, so the classification has to wait for the update too.
         """
         group = ObjectsFem.makeGeometryGroup(self.document, "Geometry")
         step = ObjectsFem.makeGeometryImport(self.document, "Import")
@@ -2793,9 +2796,18 @@ class TestExecuteDrivenOutputs(unittest.TestCase):
         self.document.recompute()
         self.assertEqual(group.getTopologyRevision(), revision)
 
-        # A changed input is a changed shape, and the topology follows it - but
-        # only once the document has recomputed to it.
+        # A changed input is a changed model, not yet a changed shape: the step
+        # keeps what it has and says that it is behind, so nothing downstream
+        # is reclassified and no mesh made against the old shape is lost.
         box.Length = 20
+        self.document.recompute()
+        self.assertTrue(step.Outdated)
+        self.assertEqual(group.getTopologyRevision(), revision)
+        self.assertAlmostEqual(group.Shape.BoundBox.XLength, 10)
+
+        # Asked for, it is a changed shape, and the topology follows it - but
+        # only once the document has recomputed to it.
+        geometry_base.request_update(step)
         self.document.recompute()
         self.assertNotEqual(group.getTopologyRevision(), revision)
         self.assertEqual(group.getComponentCount(), 1)
@@ -7559,3 +7571,332 @@ class TestGeometryShellBuilder(unittest.TestCase):
         self.assertEqual(
             sum(1 for a in sheets[0].Edges for b in sheets[1].Edges if a.isSame(b)), 0
         )
+
+
+class TestDeliberateGeometryUpdate(unittest.TestCase):
+    """
+    An analysis geometry follows the model it was built from only when asked.
+
+    A change to the CAD model reaches every step of the chain through the
+    dependency graph, and acting on it costs the user the whole chain of
+    booleans and every mesh made against the result. So what arrives from
+    outside is marked and left; what the user edits inside the analysis, and
+    what an update asks for, is acted on at once.
+    """
+
+    fcc_print("import TestDeliberateGeometryUpdate")
+
+    def setUp(self):
+        self.document = FreeCAD.newDocument(self.__class__.__name__)
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.document.Name)
+
+    # -- fixtures ----------------------------------------------------------
+
+    def _chain(self, name="Part", shape=None, partition=False):
+        """A source part with an analysis geometry reading it."""
+        part = self.document.addObject("Part::Feature", name)
+        part.Shape = shape if shape is not None else Part.makeBox(10, 10, 10)
+
+        group = ObjectsFem.makeGeometryGroup(self.document, f"{name}Geometry")
+        imp = ObjectsFem.makeGeometryImport(self.document, f"{name}Import")
+        imp.Import = [part]
+        members = [imp]
+
+        step = None
+        if partition:
+            step = ObjectsFem.makeGeometryPartition(self.document, f"{name}Partition")
+            members.append(step)
+
+        group.Group = members
+        self.document.recompute()
+        return part, group, imp, step
+
+    def _analysis(self, name, meshed=True):
+        """An analysis with a geometry, and a mesh unless one is not wanted."""
+        analysis = ObjectsFem.makeAnalysis(self.document, name)
+        part, group, imp, _ = self._chain(name)
+        analysis.addObject(group)
+
+        if meshed:
+            mesh_group = ObjectsFem.makeMeshShapeGroup(
+                self.document, f"{name}Mesh", geometry=group, analysis=analysis
+            )
+            child = self.document.addObject("Fem::FemMeshShapeBaseObjectPython", f"{name}Child")
+            mesh_group.Group = [child]
+            child.FemMesh = _make_tet_mesh()[0]
+
+        self.document.recompute()
+        return analysis, part, group, imp
+
+    # -- the mark ----------------------------------------------------------
+
+    def test_a_changed_source_leaves_everything_where_it_was(self):
+        """
+        The whole point: the model moved, the analysis did not.
+
+        The shape has to be the same object, not merely an equal one - it is
+        identity that keeps FemGeometry from rebuilding its component cache,
+        and the revision from moving.
+        """
+        part, group, imp, _ = self._chain()
+        before = imp.Shape
+        revision = group.getTopologyRevision()
+
+        part.Shape = Part.makeBox(20, 10, 10)
+        self.document.recompute()
+
+        self.assertTrue(imp.Outdated, "a source that moved has to be said")
+        self.assertTrue(imp.Shape.isSame(before), "the shape must not be rebuilt")
+        self.assertEqual(
+            group.getTopologyRevision(),
+            revision,
+            "an unchanged shape must not look like a new one to anything downstream",
+        )
+
+    def test_the_group_carries_the_mark_of_its_members(self):
+        """A step is only seen inside the chain; the group is what the user sees."""
+        part, group, imp, _ = self._chain(partition=True)
+        self.assertFalse(group.Outdated)
+
+        part.Shape = Part.makeBox(20, 10, 10)
+        self.document.recompute()
+        self.assertTrue(group.Outdated, "the mark of a member is the mark of the group")
+
+        geometryupdate = self._update_module()
+        geometryupdate.update_group(group)
+        self.assertFalse(group.Outdated, "and it goes when the member's does")
+
+    def test_a_new_chain_is_not_born_out_of_date(self):
+        """Nothing has been built yet, so there is nothing to hold on to."""
+        _, group, imp, _ = self._chain()
+        self.assertFalse(imp.Outdated)
+        self.assertFalse(group.Outdated)
+        self.assertFalse(imp.Shape.isNull())
+
+    # -- what is followed at once ------------------------------------------
+
+    def test_an_edited_setting_is_followed_at_once(self):
+        """
+        The user is waiting for the result of their own edit.
+
+        Only a change arriving from outside the analysis is deferred; a setting
+        of the step itself is the user asking for exactly this rebuild.
+        """
+        _, group, imp, _ = self._chain()
+        before = imp.Shape
+
+        imp.Embed = "Embed all"
+        self.document.recompute()
+
+        self.assertFalse(imp.Outdated, "an edit of our own is not a change we ignored")
+        self.assertFalse(imp.Shape.isSame(before), "and it has to reach the shape")
+
+    def test_the_update_rebuilds_and_takes_the_mesh_with_it(self):
+        """
+        The price of the update, paid once and deliberately.
+
+        A mesh is made for one shape and fits no other, so the update that
+        replaces the shape clears it - which is the reason the update is not
+        run on every recompute of the CAD model.
+        """
+        analysis, part, group, imp = self._analysis("Updated")
+        child = self.document.getObject("UpdatedChild")
+        self.assertGreater(child.FemMesh.NodeCount, 0)
+
+        part.Shape = Part.makeBox(20, 10, 10)
+        self.document.recompute()
+        self.assertTrue(imp.Outdated)
+        self.assertGreater(child.FemMesh.NodeCount, 0, "the mark alone costs no mesh")
+
+        geometryupdate = self._update_module()
+        geometryupdate.update_geometry(analysis)
+
+        self.assertFalse(imp.Outdated, "the update is what clears the mark")
+        self.assertAlmostEqual(imp.Shape.BoundBox.XLength, 20, delta=1e-6)
+        self.assertEqual(child.FemMesh.NodeCount, 0, "a mesh of a shape that is gone goes too")
+
+    # -- the work that is not done -----------------------------------------
+
+    def test_a_step_whose_input_did_not_change_does_no_work(self):
+        """
+        The mark saves the mesh; this saves the wait.
+
+        A step is executed for anything at all that happens to a dependency, so
+        the partition below an import that declined would re-run its boolean
+        against an input that did not change.
+        """
+        part, group, imp, step = self._chain(partition=True)
+        shape = step.Shape
+
+        part.Shape = Part.makeBox(20, 10, 10)
+        self.document.recompute()
+
+        self.assertTrue(step.Shape.isSame(shape), "the partition must not have run again")
+
+    def test_a_restored_document_rebuilds_nothing(self):
+        """
+        A saved step holds the shape built from the shape saved beside it.
+
+        The revision a step compares against lives in memory and starts afresh
+        with the session, so without a rule for it every chain would rebuild on
+        the first recompute after opening a file - and mark itself out of date
+        into the bargain.
+        """
+        part, group, imp, step = self._chain(partition=True)
+        path = os.path.join(tempfile.gettempdir(), "fem_update_restore.FCStd")
+        self.document.saveAs(path)
+        name = self.document.Name
+        FreeCAD.closeDocument(name)
+
+        self.document = FreeCAD.openDocument(path)
+        imp = self.document.getObject("PartImport")
+        step = self.document.getObject("PartPartition")
+        group = self.document.getObject("PartGeometry")
+        shapes = (imp.Shape, step.Shape)
+
+        self.document.recompute()
+
+        self.assertFalse(imp.Outdated, "opening a document has asked for nothing")
+        self.assertFalse(group.Outdated)
+        self.assertTrue(imp.Shape.isSame(shapes[0]), "nothing was rebuilt")
+        self.assertTrue(step.Shape.isSame(shapes[1]))
+
+        # And the first change after opening is still a change. A step that
+        # simply sat out its first execute would swallow this one.
+        self.document.getObject("Part").Shape = Part.makeBox(30, 10, 10)
+        self.document.recompute()
+        self.assertTrue(imp.Outdated, "the first change after opening still counts")
+        self.assertTrue(step.Shape.isSame(shapes[1]), "and still costs nothing downstream")
+
+        # As is the first update after opening: the partition has to follow the
+        # import here, having recorded what it was built from, not skipped it.
+        geometry_base.request_update(imp)
+        self.document.recompute()
+        self.assertFalse(imp.Outdated)
+        self.assertFalse(step.Shape.isSame(shapes[1]), "the partition has to follow the update")
+        self.assertAlmostEqual(step.Shape.BoundBox.XLength, 30, delta=1e-6)
+        os.remove(path)
+
+    def test_a_reopened_document_keeps_its_mesh_when_the_model_changes(self):
+        """
+        The whole promise, across a save: the model moved, the mesh did not.
+
+        Restoring is where it is easiest to lose. A document holds the result of
+        the last step and the group's copy of it, written to the file twice and
+        read back as two shapes that are equal without being identical, and a
+        group that told them apart by identity alone would republish on the
+        first recompute after opening - which reads downstream as a geometry
+        that changed, and takes every mesh with it.
+        """
+        analysis, part, group, imp = self._analysis("Kept")
+        child = self.document.getObject("KeptChild")
+        nodes = child.FemMesh.NodeCount
+        self.assertGreater(nodes, 0)
+
+        path = os.path.join(tempfile.gettempdir(), "fem_update_kept.FCStd")
+        self.document.saveAs(path)
+        name = self.document.Name
+        FreeCAD.closeDocument(name)
+        self.document = FreeCAD.openDocument(path)
+
+        group = self.document.getObject("KeptGeometry")
+        imp = self.document.getObject("KeptImport")
+        child = self.document.getObject("KeptChild")
+        revision = group.getTopologyRevision()
+
+        # By link, not by name: the analysis took the plain name first.
+        imp.Import[0].Shape = Part.makeBox(20, 10, 10)
+        self.document.recompute()
+
+        self.assertTrue(imp.Outdated, "the change still has to be noticed")
+        self.assertEqual(
+            group.getTopologyRevision(),
+            revision,
+            "a geometry that did not change must not look to anything as if it had",
+        )
+        self.assertEqual(child.FemMesh.NodeCount, nodes, "and the mesh has to survive it")
+        os.remove(path)
+
+    def test_a_step_writing_its_own_result_is_not_an_edit(self):
+        """
+        A step publishes results into properties of its own - the shell builder
+        writes a thickness per face - and those are indistinguishable from a
+        setting someone made. Taken for one, a step asks to be rebuilt every
+        time it is built, and the next recompute that comes along for any reason
+        rebuilds the chain and clears the meshes.
+        """
+        from femobjects import geometry_shellbuilder
+
+        outputs = geometry_shellbuilder.GeometryShellBuilder.OUTPUTS
+        self.assertIn("Thickness", outputs)
+        self.assertIn("Offset", outputs)
+        self.assertFalse(geometry_base._is_input("Thickness", outputs))
+        self.assertTrue(geometry_base._is_input("Method", outputs), "a setting still counts")
+        self.assertFalse(
+            geometry_base._is_input("_ElementMapVersion", outputs),
+            "FreeCAD's own bookkeeping is never an edit",
+        )
+
+    # -- what travels to an importing analysis -----------------------------
+
+    def test_the_mark_reaches_the_analysis_that_imports_it(self):
+        """
+        An instance holds nothing of its own, so it is only as current as its
+        source. What the source raised for itself is carried on to the analysis
+        that imports it - and on again, through an instance of an instance.
+        """
+        from femtools import importtools
+
+        source, source_part, _, source_imp = self._analysis("Source")
+        middle, _, _, _ = self._analysis("Middle")
+        top, _, _, _ = self._analysis("Top")
+
+        into_middle = ObjectsFem.makeAnalysisImport(self.document, "SourceInMiddle")
+        into_middle.Analysis = source
+        importtools.wire_import(middle, into_middle)
+
+        into_top = ObjectsFem.makeAnalysisImport(self.document, "MiddleInTop")
+        into_top.Analysis = middle
+        importtools.wire_import(top, into_top)
+        self.document.recompute()
+
+        self.assertFalse(into_middle.SourceGeometryOutdated)
+        self.assertFalse(into_top.SourceGeometryOutdated)
+
+        source_part.Shape = Part.makeBox(20, 10, 10)
+        self.document.recompute()
+
+        self.assertTrue(source_imp.Outdated, "the source analysis is the one that is behind")
+        self.assertTrue(into_middle.SourceGeometryOutdated, "and its instance says so")
+        self.assertTrue(
+            into_top.SourceGeometryOutdated,
+            "an instance of an instance is no more current than what it shows",
+        )
+
+    def test_a_source_without_a_mesh_is_marked_as_such(self):
+        """
+        Either nobody set a mesher up over there, or a geometry update took the
+        mesh with it. Both leave the instance drawing something with nothing to
+        compute on, and both are worth saying.
+        """
+        from femtools import importtools
+
+        source, _, _, _ = self._analysis("Bare", meshed=False)
+        host, _, _, _ = self._analysis("Host")
+
+        placed = ObjectsFem.makeAnalysisImport(self.document, "BareInHost")
+        placed.Analysis = source
+        importtools.wire_import(host, placed)
+        self.document.recompute()
+
+        self.assertTrue(placed.SourceMeshMissing, "a source with no mesh has to be said")
+
+    # -- helpers -----------------------------------------------------------
+
+    @staticmethod
+    def _update_module():
+        from femtools import geometryupdate
+
+        return geometryupdate

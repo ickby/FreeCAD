@@ -26,6 +26,9 @@
 #include <set>
 #include <string>
 
+#include <SMESHDS_Mesh.hxx>
+#include <SMESH_Mesh.hxx>
+
 #include "FemAnalysis.h"
 #include "FemAnalysisImport.h"
 #include "FemGeometry.h"
@@ -78,6 +81,20 @@ Fem::FemMeshShapeGroup* meshGroupOf(const Fem::FemAnalysis* analysis)
         }
     }
     return nullptr;
+}
+
+bool sourcePublishesMesh(const Fem::FemAnalysis* src)
+{
+    auto* meshGroup = meshGroupOf(src);
+    if (!meshGroup) {
+        return false;
+    }
+    if (const auto* smesh = meshGroup->getMergedMesh().getSMesh()) {
+        if (const auto* meshDS = smesh->GetMeshDS()) {
+            return meshDS->NbNodes() > 0;
+        }
+    }
+    return false;
 }
 
 bool importsAnalysisRecursive(
@@ -142,6 +159,22 @@ Fem::FemAnalysisImport::FemAnalysisImport()
         App::PropertyType(App::Prop_Output | App::Prop_Hidden | App::Prop_Transient),
         "Counter raised whenever this instance is recomputed"
     );
+
+    ADD_PROPERTY_TYPE(
+        SourceGeometryOutdated,
+        (false),
+        "FEM Import",
+        App::PropertyType(App::Prop_Output | App::Prop_Hidden | App::Prop_Transient),
+        "The geometry of the source analysis waits for an update"
+    );
+
+    ADD_PROPERTY_TYPE(
+        SourceMeshMissing,
+        (false),
+        "FEM Import",
+        App::PropertyType(App::Prop_Output | App::Prop_Hidden | App::Prop_Transient),
+        "The source analysis publishes no mesh"
+    );
 }
 
 Fem::FemAnalysisImport::~FemAnalysisImport() = default;
@@ -164,6 +197,10 @@ App::DocumentObjectExecReturn* Fem::FemAnalysisImport::execute()
     // Raised before the checks below, so that a source that has gone away
     // reaches the view as well; what it draws is out of date either way.
     SourceRevision.setValue(SourceRevision.getValue() + 1);
+
+    // Likewise before them: a source analysis without a mesh is precisely one
+    // of the states worth marking, and the check for it returns further down.
+    updateSourceMarkers();
 
     auto* src = Base::freecad_cast<Fem::FemAnalysis*>(Analysis.getValue());
     if (!src) {
@@ -203,6 +240,39 @@ App::DocumentObjectExecReturn* Fem::FemAnalysisImport::execute()
     }
 
     return App::DocumentObject::StdReturn;
+}
+
+void Fem::FemAnalysisImport::onDocumentRestored()
+{
+    App::GeoFeature::onDocumentRestored();
+    updateSourceMarkers();
+}
+
+void Fem::FemAnalysisImport::updateSourceMarkers()
+{
+    auto* src = Base::freecad_cast<Fem::FemAnalysis*>(Analysis.getValue());
+
+    bool outdated = false;
+    if (src) {
+        if (auto* geometry = Tools::getAnalysisGeometry(src)) {
+            outdated = geometry->Outdated.getValue();
+        }
+        // What the source imports in turn is part of what it shows, so a stale
+        // geometry two analyses down still reaches the one on screen. No
+        // recursion is needed to find it: the source recomputes before the
+        // analysis importing it, so its own instances have already answered.
+        if (!outdated) {
+            for (auto* imp : Tools::analysisImports(src)) {
+                if (imp->SourceGeometryOutdated.getValue()) {
+                    outdated = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    SourceGeometryOutdated.setValue(outdated);
+    SourceMeshMissing.setValue(src && !sourcePublishesMesh(src));
 }
 
 Fem::FemGeometry* Fem::FemAnalysisImport::sourceGeometry() const

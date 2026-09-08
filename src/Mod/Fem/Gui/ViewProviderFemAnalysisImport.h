@@ -28,6 +28,8 @@
 #include <string>
 #include <vector>
 
+#include <QIcon>
+
 #include <App/PropertyStandard.h>
 #include <Base/Color.h>
 #include <Base/Placement.h>
@@ -86,6 +88,19 @@ public:
     std::vector<std::string> getDisplayModes() const override;
     void setDisplayMode(const char* mode) override;
     void updateData(const App::Property* prop) override;
+
+    /**
+     * The instance icon, marked when the source analysis is not in order.
+     *
+     * An instance holds neither geometry nor mesh: what it draws is read from
+     * the source, so its own properties say nothing about whether it is
+     * current. The two markers do, and this is where a user meets them - in the
+     * tree, next to the instance, rather than in an analysis they would have to
+     * go looking for. A geometry that is behind is shown first: a source with
+     * no mesh is usually a source that was updated and not yet meshed, so the
+     * cause is the more useful of the two to name.
+     */
+    QIcon getIcon() const override;
     void onChanged(const App::Property* prop) override;
     void finishRestoring() override;
 

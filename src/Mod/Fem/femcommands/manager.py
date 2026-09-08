@@ -85,6 +85,18 @@ class CommandManager:
                 and self.active_analysis_in_active_doc()
                 and self.geometry_chain_has_input()
             )
+        elif self.is_active == "with_outdated_geometry":
+            active = (
+                FemGui.getActiveAnalysis() is not None
+                and self.active_analysis_in_active_doc()
+                and self.geometry_is_outdated()
+            )
+        elif self.is_active == "with_stale_source":
+            active = (
+                FemGui.getActiveAnalysis() is not None
+                and self.active_analysis_in_active_doc()
+                and self.source_analysis_is_stale()
+            )
         elif self.is_active == "with_results":
             active = (
                 FemGui.getActiveAnalysis() is not None
@@ -211,6 +223,26 @@ class CommandManager:
         from femtools import membertools
 
         return bool(membertools.get_member(analysis, "Fem::FemGeometry"))
+
+    def geometry_is_outdated(self):
+        """Whether this analysis' own geometry waits to follow its sources."""
+        from femtools import geometryupdate
+
+        return geometryupdate.is_outdated(FemGui.getActiveAnalysis())
+
+    def source_analysis_is_stale(self):
+        """
+        Whether an analysis imported here is behind, or has no mesh to import.
+
+        Kept apart from the state of this analysis' own geometry on purpose:
+        the two are repaired by different entries of the update tool, and an
+        analysis whose only problem is inherited cannot be helped by updating
+        itself. Offering only what can help is what tells the two apart on
+        screen, without a word of explanation.
+        """
+        from femtools import geometryupdate
+
+        return geometryupdate.has_stale_source(FemGui.getActiveAnalysis())
 
     def geometry_chain_has_input(self):
         analysis = FemGui.getActiveAnalysis()

@@ -75,6 +75,17 @@ MeasureHandler MeasureManager::getMeasureHandler(const App::MeasureSelectionItem
 
     // Resolve App::Link
     App::DocumentObject* sub = objT.getSubObject();
+
+    // Not every selection resolves. An object is free to answer nothing for a
+    // subname it does not understand, and the selection hands out unresolved
+    // names - mapped element names among them - that not every object reads.
+    // There is then no type to take a module from, and the honest answer is
+    // that no handler claims this selection; asking anyway crashes the tool
+    // for what is only an unusual pick.
+    if (!sub) {
+        return {};
+    }
+
     if (sub->isDerivedFrom<App::Link>()) {
         auto link = static_cast<App::Link*>(sub);
         sub = link->getLinkedObject(true);

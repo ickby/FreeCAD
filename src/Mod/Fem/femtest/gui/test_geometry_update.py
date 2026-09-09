@@ -87,6 +87,107 @@ class _FakeStep(analysisrun.Step):
         self.cancelled = True
 
 
+class TestAnalysisWatcherGui(unittest.TestCase):
+    """
+    The watcher that speaks before there is anything to speak about.
+
+    Its two states are the ones the others cannot reach: a document with no
+    analysis at all, and one with several where none has been chosen. Both are
+    states in which there is no active analysis, which is why the panel had to
+    stop insisting on one.
+    """
+
+    fcc_print("import TestAnalysisWatcherGui")
+
+    def setUp(self):
+        FreeCADGui.activateWorkbench("FemWorkbench")
+        self.document = FreeCAD.newDocument(self.__class__.__name__)
+        FreeCAD.setActiveDocument(self.document.Name)
+        self.study, self.geometry, self.mesh = update_watcher.watchers()
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.document.Name)
+
+    def _showing(self, watcher):
+        watcher.widget.refresh(watcher._analysis_of())
+        return [p.notification.key for p in watcher.widget.panels if not p.isHidden()]
+
+    def _panel(self, watcher, key):
+        for panel in watcher.widget.panels:
+            if panel.notification.key == key:
+                return panel
+        raise AssertionError(f"no notification {key!r}")
+
+    def test_an_empty_document_is_offered_an_analysis(self):
+        """
+        Nothing in the document at all, which is where a user starts. The other
+        watchers have nothing to say, and would have said nothing anyway.
+        """
+        self.assertEqual(self._showing(self.study), ["analysis-missing"])
+        self.assertEqual(self._showing(self.geometry), [])
+        self.assertEqual(self._showing(self.mesh), [])
+
+        panel = self._panel(self.study, "analysis-missing")
+        self.assertEqual([a.command for a, _ in panel.buttons], ["FEM_Analysis"])
+
+    def test_a_document_with_things_but_no_analysis_is_offered_one_too(self):
+        """Being busy with something else is not a reason to hide the first step."""
+        self.document.addObject("Part::Box", "Box")
+        self.document.recompute()
+        self.assertEqual(self._showing(self.study), ["analysis-missing"])
+
+    def test_a_lone_analysis_needs_no_choosing(self):
+        """
+        FreeCAD activates the only analysis of a document by itself, so the
+        chooser never sees this case and must not offer itself for it.
+        """
+        analysis = ObjectsFem.makeAnalysis(self.document, "Only")
+        FemGui.setActiveAnalysis(analysis)
+        self.document.recompute()
+        self.assertEqual(self._showing(self.study), [])
+
+    def test_several_analyses_and_no_choice_made(self):
+        """One button per analysis, named after it, in the document's order."""
+        first = ObjectsFem.makeAnalysis(self.document, "Beam")
+        second = ObjectsFem.makeAnalysis(self.document, "Bracket")
+        self.document.recompute()
+
+        self.assertEqual(self._showing(self.study), ["analysis-unchosen"])
+        panel = self._panel(self.study, "analysis-unchosen")
+        self.assertEqual([b.text() for _, b in panel.buttons], [first.Label, second.Label])
+
+    def test_choosing_one_answers_the_question(self):
+        """The point of the buttons: pressing one leaves nothing to report."""
+        ObjectsFem.makeAnalysis(self.document, "Beam")
+        second = ObjectsFem.makeAnalysis(self.document, "Bracket")
+        self.document.recompute()
+        self.assertEqual(self._showing(self.study), ["analysis-unchosen"])
+
+        panel = self._panel(self.study, "analysis-unchosen")
+        action = panel.buttons[1][0]
+        action.trigger(self.document)
+
+        self.assertEqual(FemGui.getActiveAnalysis(), second)
+        self.assertEqual(self._showing(self.study), [])
+
+    def test_the_buttons_follow_the_document(self):
+        """
+        The choices are not known when the watcher is built, so the row is
+        rebuilt from what the document holds at the time it is asked.
+        """
+        ObjectsFem.makeAnalysis(self.document, "Beam")
+        ObjectsFem.makeAnalysis(self.document, "Bracket")
+        self.document.recompute()
+        panel = self._panel(self.study, "analysis-unchosen")
+        self._showing(self.study)
+        self.assertEqual(len(panel.buttons), 2)
+
+        ObjectsFem.makeAnalysis(self.document, "Housing")
+        self.document.recompute()
+        self._showing(self.study)
+        self.assertEqual([b.text() for _, b in panel.buttons], ["Beam", "Bracket", "Housing"])
+
+
 class TestGeometryUpdateGui(unittest.TestCase):
     fcc_print("import TestGeometryUpdateGui")
 
@@ -107,7 +208,7 @@ class TestGeometryUpdateGui(unittest.TestCase):
         self.document.recompute()
         FemGui.setActiveAnalysis(self.analysis)
 
-        self.geometry, self.mesh = update_watcher.watchers()
+        self.study, self.geometry, self.mesh = update_watcher.watchers()
 
     def _add_mesher(self):
         """A mesh group with one mesher in it, and no mesh yet."""

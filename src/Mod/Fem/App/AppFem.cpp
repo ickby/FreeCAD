@@ -65,6 +65,7 @@
 #include "FemSolverObject.h"
 #include "FemShapeExtension.h"
 #include "HypothesisPy.h"
+#include "Measure.h"
 #include "WorkerExtension.h"
 
 #ifdef FC_USE_VTK
@@ -232,6 +233,9 @@ PyMOD_INIT_FUNC(Fem)
     Fem::PostFilterPython                     ::init();
 #endif
     // clang-format on
+
+    // connect to unified measurement facility
+    Fem::Measure::initialize();
 
     PyMOD_Return(femModule);
 }

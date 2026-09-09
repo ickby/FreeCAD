@@ -547,6 +547,23 @@ void Part::MeasureClient::initialize()
     App::MeasureManager::addMeasureHandler("Part", PartMeasureTypeCb);
 }
 
+/*
+ * What each kind of measurement does once it has a shape, per module.
+ *
+ * The measurement facility picks a handler by the module an object's type
+ * belongs to, so a module whose objects are measured by Part's code has to be
+ * named here for every kind of measurement it should support. The Measure
+ * module reads these lists when it loads and registers what they name.
+ *
+ * The modules beside "Part" are the ones whose objects Part's handlers can read
+ * unchanged. For PartDesign, Sketcher and Surface that is because their objects
+ * are Part features. "Fem" is here for a different reason: an analysis geometry
+ * is not a Part feature, but it answers for its own sub-shapes through
+ * getSubObject, which is all these handlers ask of it - they resolve what they
+ * were given through Part::Feature::getTopoShape rather than reading a Shape
+ * property. Fem::Measure::initialize() registers the matching element
+ * classification; a measurement needs both to appear.
+ */
 Part::CallbackRegistrationList Part::MeasureClient::reportLengthCB()
 {
     CallbackRegistrationList callbacks;
@@ -554,6 +571,7 @@ Part::CallbackRegistrationList Part::MeasureClient::reportLengthCB()
     callbacks.emplace_back("PartDesign", "Length", MeasureLengthHandler);
     callbacks.emplace_back("Sketcher", "Length", MeasureLengthHandler);
     callbacks.emplace_back("Surface", "Length", MeasureLengthHandler);
+    callbacks.emplace_back("Fem", "Length", MeasureLengthHandler);
     return callbacks;
 }
 
@@ -564,6 +582,7 @@ Part::CallbackRegistrationList Part::MeasureClient::reportPositionCB()
     callbacks.emplace_back("PartDesign", "Position", MeasurePositionHandler);
     callbacks.emplace_back("Sketcher", "Position", MeasurePositionHandler);
     callbacks.emplace_back("Surface", "Position", MeasurePositionHandler);
+    callbacks.emplace_back("Fem", "Position", MeasurePositionHandler);
     return callbacks;
 }
 
@@ -574,6 +593,7 @@ Part::CallbackRegistrationList Part::MeasureClient::reportAreaCB()
     callbacks.emplace_back("PartDesign", "Area", MeasureAreaHandler);
     callbacks.emplace_back("Sketcher", "Area", MeasureAreaHandler);
     callbacks.emplace_back("Surface", "Area", MeasureAreaHandler);
+    callbacks.emplace_back("Fem", "Area", MeasureAreaHandler);
     return callbacks;
 }
 
@@ -585,6 +605,7 @@ Part::CallbackRegistrationList Part::MeasureClient::reportAngleCB()
     callbacks.emplace_back("PartDesign", "Angle", MeasureAngleHandler);
     callbacks.emplace_back("Sketcher", "Angle", MeasureAngleHandler);
     callbacks.emplace_back("Surface", "Angle", MeasureAngleHandler);
+    callbacks.emplace_back("Fem", "Angle", MeasureAngleHandler);
     return callbacks;
 }
 
@@ -596,6 +617,7 @@ Part::CallbackRegistrationList Part::MeasureClient::reportDistanceCB()
     callbacks.emplace_back("PartDesign", "Distance", MeasureDistanceHandler);
     callbacks.emplace_back("Sketcher", "Distance", MeasureDistanceHandler);
     callbacks.emplace_back("Surface", "Distance", MeasureDistanceHandler);
+    callbacks.emplace_back("Fem", "Distance", MeasureDistanceHandler);
     return callbacks;
 }
 
@@ -607,5 +629,6 @@ Part::CallbackRegistrationList Part::MeasureClient::reportRadiusCB()
     callbacks.emplace_back("PartDesign", "Radius", MeasureRadiusHandler);
     callbacks.emplace_back("Sketcher", "Radius", MeasureRadiusHandler);
     callbacks.emplace_back("Surface", "Radius", MeasureRadiusHandler);
+    callbacks.emplace_back("Fem", "Radius", MeasureRadiusHandler);
     return callbacks;
 }

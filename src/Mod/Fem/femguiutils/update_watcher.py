@@ -58,8 +58,69 @@ def active_analysis():
     return analysis
 
 
+def active_document():
+    """The document on screen, or None."""
+    return FreeCAD.ActiveDocument
+
+
+def analyses_of(document):
+    """Every analysis in *document*, in the order the document holds them."""
+    if document is None:
+        return []
+    return [obj for obj in document.Objects if obj.isDerivedFrom("Fem::FemAnalysis")]
+
+
 def _tr(text):
     return FreeCAD.Qt.translate("FEM", text)
+
+
+def _for_analysis(condition):
+    """
+    A condition that only makes sense once there is an analysis to ask about.
+
+    The panel no longer insists on one - the states that report there being no
+    analysis at all would never be shown if it did - so the notifications that
+    do need one say so here rather than each guarding its own body.
+    """
+    return lambda analysis: analysis is not None and condition(analysis)
+
+
+def _analysis_notifications():
+    def activate(analysis):
+        return lambda document: FemGui.setActiveAnalysis(analysis)
+
+    def unchosen(document):
+        if len(analyses_of(document)) < 2:
+            return False
+        active = FemGui.getActiveAnalysis()
+        return active is None or active.Document != document
+
+    return [
+        Notification(
+            key="analysis-missing",
+            icon="FEM_StateAnalysisMissing",
+            message=_tr("This document has no analysis yet."),
+            aside=_tr("An analysis holds the geometry, the mesh and the solvers of one study."),
+            condition=lambda document: document is not None and not analyses_of(document),
+            actions=[Action(command="FEM_Analysis")],
+        ),
+        # Only ever seen with more than one: FreeCAD activates a lone analysis
+        # by itself, and remembers the choice per document once it is made, so
+        # this is the state where it has nothing to go on.
+        Notification(
+            key="analysis-unchosen",
+            icon="FEM_StateAnalysisUnchosen",
+            message=_tr("This document has several analyses and none of them is active."),
+            aside=_tr("Everything the workbench shows and edits belongs to the active one."),
+            condition=unchosen,
+            # Not known when the watcher is built: which analyses a document
+            # holds is the document's business and changes under us.
+            actions=lambda document: [
+                Action(text=analysis.Label, run=activate(analysis))
+                for analysis in analyses_of(document)
+            ],
+        ),
+    ]
 
 
 def _run_in_progress():
@@ -77,7 +138,7 @@ def _geometry_notifications():
             icon="FEM_StateGeometryMissing",
             message=_tr("This analysis has no geometry yet."),
             aside=_tr("Import a part or a sketch to build the analysis geometry from."),
-            condition=lambda analysis: not geometryupdate.has_geometry(analysis),
+            condition=_for_analysis(lambda analysis: not geometryupdate.has_geometry(analysis)),
             actions=[Action(command="FEM_GeometryImport")],
         ),
         Notification(
@@ -85,8 +146,8 @@ def _geometry_notifications():
             icon="FEM_StateGeometryOutdated",
             message=_tr("The geometry is behind the model it was built from."),
             aside=_tr("Updating rebuilds the chain and clears the mesh."),
-            condition=lambda analysis: (
-                not _run_in_progress() and geometryupdate.is_outdated(analysis)
+            condition=_for_analysis(
+                lambda analysis: not _run_in_progress() and geometryupdate.is_outdated(analysis)
             ),
             actions=[
                 Action(command="FEM_GeometryUpdate"),
@@ -98,7 +159,7 @@ def _geometry_notifications():
             icon="FEM_StateSourceBehind",
             message=_tr("An analysis imported here is behind its model."),
             aside=_tr("This geometry is current; the one it is built on is not."),
-            condition=geometryupdate.has_stale_source,
+            condition=_for_analysis(geometryupdate.has_stale_source),
             actions=[Action(command="FEM_GeometryUpdateLinked")],
         ),
     ]
@@ -185,8 +246,8 @@ def _mesh_notifications():
             icon="FEM_StateMeshMissing",
             message=_running_text,
             aside=_tr("This runs in a process of its own; FreeCAD stays usable meanwhile."),
-            condition=lambda analysis: _running(analysis) is not None,
-            busy=lambda analysis: _running(analysis) is not None,
+            condition=_for_analysis(lambda analysis: _running(analysis) is not None),
+            busy=lambda analysis: analysis is not None and _running(analysis) is not None,
             status=_elapsed_text,
             actions=[Action(text=_tr("Cancel"), run=cancel)],
         ),
@@ -195,7 +256,7 @@ def _mesh_notifications():
             icon="FEM_StateMeshCleared",
             message=_failed_text,
             aside=_tr("The mesher's own panel holds the output it left behind."),
-            condition=lambda analysis: _failed(analysis) is not None,
+            condition=_for_analysis(lambda analysis: _failed(analysis) is not None),
             actions=[
                 Action(text=_tr("Acknowledge"), run=acknowledge),
                 Action(text=_tr("Open mesher"), run=open_mesher),
@@ -205,10 +266,12 @@ def _mesh_notifications():
             key="mesh-missing",
             icon="FEM_StateMeshMissing",
             message=_tr("Nothing meshes this geometry yet."),
-            condition=lambda analysis: (
-                not analysisrun.active()
-                and geometryupdate.has_geometry(analysis)
-                and not analysismesh.has_meshers(analysis)
+            condition=_for_analysis(
+                lambda analysis: (
+                    not analysisrun.active()
+                    and geometryupdate.has_geometry(analysis)
+                    and not analysismesh.has_meshers(analysis)
+                )
             ),
             actions=[
                 # Short labels on purpose: the sentence above already says what
@@ -228,11 +291,13 @@ def _mesh_notifications():
             icon="FEM_StateMeshCleared",
             message=_tr("This analysis has no mesh yet."),
             aside=_tr("The meshers and their settings are set up; only the mesh is missing."),
-            condition=lambda analysis: (
-                not analysisrun.active()
-                and _failed(analysis) is None
-                and analysismesh.has_meshers(analysis)
-                and analysismesh.mesh_is_empty(analysis)
+            condition=_for_analysis(
+                lambda analysis: (
+                    not analysisrun.active()
+                    and _failed(analysis) is None
+                    and analysismesh.has_meshers(analysis)
+                    and analysismesh.mesh_is_empty(analysis)
+                )
             ),
             # No command meshes a whole analysis - there is a function for it,
             # and inventing a command to hang a button on would be the tail
@@ -245,6 +310,11 @@ def _mesh_notifications():
 def watchers():
     """The watchers this workbench installs, in the order they should appear."""
     return [
+        # The outermost stage first: without an analysis there is nothing for
+        # the other two to report, and this is the one that says so.
+        NotificationWatcher(
+            _tr("Analysis"), "FEM_Analysis", _analysis_notifications(), active_document
+        ),
         NotificationWatcher(
             _tr("Geometry"), "fem-post-geo-box", _geometry_notifications(), active_analysis
         ),

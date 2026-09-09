@@ -320,6 +320,11 @@ class Notification:
     states that have something to count: which mesher is running, how many are
     left, which ones failed.
 
+    *actions* may be a list, or a function of the context for the states whose
+    choices are not known when the watcher is built - which of the document's
+    analyses to activate, say. The panel rebuilds its buttons when the list
+    changes and leaves them alone when it does not.
+
     A state that is *work in progress* rather than a fact says so through
     *busy*, and the panel then shows an activity bar beside its buttons.
     *status* is the short line that goes with it - an elapsed time, a step
@@ -335,7 +340,7 @@ class Notification:
         self.icon = icon
         self.message = message
         self.aside = aside
-        self.actions = list(actions)
+        self.actions = actions if callable(actions) else list(actions)
         self._condition = condition
         self._busy = busy
         self._status = status
@@ -352,6 +357,9 @@ class Notification:
 
     def aside_for(self, analysis):
         return self.aside(analysis) if callable(self.aside) else self.aside
+
+    def actions_for(self, context):
+        return list(self.actions(context)) if callable(self.actions) else self.actions
 
     def is_busy(self, analysis):
         return bool(self._busy(analysis)) if callable(self._busy) else bool(self._busy)
@@ -404,23 +412,10 @@ class NotificationPanel(QtGui.QWidget):
         self.status.hide()
 
         self.buttons = []
-        button_row = _FlowLayout(spacing=6)
-        for action in notification.actions:
-            button = QtGui.QPushButton(action.text())
-            icon = action.icon()
-            if icon is not None:
-                button.setIcon(icon)
-            tooltip = action.tooltip()
-            if tooltip:
-                button.setToolTip(tooltip)
-            button.clicked.connect(lambda checked=False, a=action: self._run(a))
-            button.setSizePolicy(QtGui.QSizePolicy.Policy.Fixed, QtGui.QSizePolicy.Policy.Fixed)
-            button_row.addWidget(button)
-            self.buttons.append((action, button))
-        if self.buttons:
-            # Last is rightmost, which is where the platform puts the one the
-            # user most likely wants.
-            self.buttons[-1][1].setDefault(True)
+        self.button_row = _FlowLayout(spacing=6)
+        self._button_labels = None
+        if not callable(notification.actions):
+            self._set_buttons(notification.actions)
 
         # The activity bar and its clock sit on the same line as the buttons,
         # at the other end of it: work in progress on the left, what to do
@@ -430,7 +425,7 @@ class NotificationPanel(QtGui.QWidget):
         action_row.setSpacing(8)
         action_row.addWidget(self.activity, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
         action_row.addWidget(self.status, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
-        action_row.addLayout(button_row, 1)
+        action_row.addLayout(self.button_row, 1)
 
         text_column = QtGui.QVBoxLayout()
         text_column.setContentsMargins(0, 0, 0, 0)
@@ -453,13 +448,27 @@ class NotificationPanel(QtGui.QWidget):
         layout.addLayout(body)
         self.setLayout(layout)
 
-    def refresh(self, analysis, first_visible):
-        """Show or hide, and say which. *first_visible* drops the rule on top."""
-        self._analysis = analysis
-        applies = analysis is not None and self.notification.applies(analysis)
+    def refresh(self, context, first_visible):
+        """
+        Show or hide, and say which. *first_visible* drops the rule on top.
+
+        The context is whatever the watcher works on - an analysis for most of
+        them, the document for the one that reports there being no analysis at
+        all. Nothing is assumed about it here, not even that it exists: a
+        notification that only makes sense for an analysis says so in its own
+        condition, and the states worth reporting when there is none would
+        otherwise be the ones that could never be shown.
+        """
+        analysis = context
+        self._analysis = context
+        applies = self.notification.applies(context)
         self.setVisible(applies)
         if not applies:
             return False
+
+        actions = self.notification.actions_for(context)
+        if self._button_labels != [action.text() for action in actions]:
+            self._set_buttons(actions)
 
         self.separator.setVisible(not first_visible)
         # Re-read every time: a state that counts something - which mesher is
@@ -473,6 +482,42 @@ class NotificationPanel(QtGui.QWidget):
         for action, button in self.buttons:
             button.setEnabled(action.is_enabled(analysis))
         return True
+
+    def _set_buttons(self, actions):
+        """
+        Put this list of actions in the row, replacing whatever was there.
+
+        Rebuilding rather than editing in place: an action carries its own
+        label, icon and function, and matching those onto existing buttons one
+        by one would be more work than making them again for a row that is
+        never more than a handful wide.
+        """
+        for _action, button in self.buttons:
+            self.button_row.removeWidget(button)
+            button.setParent(None)
+            button.deleteLater()
+        self.buttons = []
+
+        for action in actions:
+            button = QtGui.QPushButton(action.text())
+            icon = action.icon()
+            if icon is not None:
+                button.setIcon(icon)
+            tooltip = action.tooltip()
+            if tooltip:
+                button.setToolTip(tooltip)
+            button.clicked.connect(lambda checked=False, a=action: self._run(a))
+            button.setSizePolicy(QtGui.QSizePolicy.Policy.Fixed, QtGui.QSizePolicy.Policy.Fixed)
+            self.button_row.addWidget(button)
+            self.buttons.append((action, button))
+
+        # Last is rightmost, which is where the platform puts the one the user
+        # most likely wants - but only where an author put it there. A computed
+        # list is a set of equals, and marking whichever came last as the
+        # default would recommend an analysis for no reason but its position.
+        if self.buttons and not callable(self.notification.actions):
+            self.buttons[-1][1].setDefault(True)
+        self._button_labels = [action.text() for action in actions]
 
     def update_status(self, analysis):
         """

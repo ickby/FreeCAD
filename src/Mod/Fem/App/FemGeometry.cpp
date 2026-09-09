@@ -38,6 +38,7 @@
 #include "FemTopology.h"
 
 #include <App/Document.h>
+#include <App/ElementNamingUtils.h>
 #include <App/FeaturePythonPyImp.h>
 #include <Base/Console.h>
 #include <Mod/Part/App/PartPyCXX.h>
@@ -131,6 +132,19 @@ const App::PropertyComplexGeoData* FemGeometry::getPropertyOfGeometry() const
 
 std::vector<Part::TopoShape> FemGeometry::getSubShapes(std::string subname) const
 {
+    // A mapped element name is answered by the shape itself, which is the only
+    // thing that knows how the name maps onto the element it stands for. It has
+    // to come first: the dots it carries are part of the name, and the split
+    // below would read them as a path and find several segments where there is
+    // one name.
+    if (Data::isMappedElement(subname.c_str())) {
+        auto mapped = Shape.getShape().getSubTopoShape(subname.c_str(), /*silent*/ true);
+        if (mapped.isNull()) {
+            return {};
+        }
+        return {mapped};
+    }
+
     auto path = std::stringstream(subname);
     std::string segment;
     std::vector<std::string> seglist;
@@ -194,7 +208,16 @@ App::DocumentObject* FemGeometry::getSubObject(
     // extension is what knows the way there. Answering such a path with an
     // element of our own leaves whoever asked one object short of where they
     // clicked, and a picked face of a step reads as a face of the result.
-    if (substr.find('.') != std::string::npos) {
+    //
+    // A mapped element name is the exception. It is one name however many dots
+    // it carries, and it names an element of this shape, not a way down to a
+    // step - which is exactly what makes it worth having: it survives a rebuild
+    // of the chain, where Face7 becomes whichever face is seventh next time.
+    // Read as a path it sends the lookup into a child that cannot exist, and
+    // the answer is no object at all. Anything that asks for the unresolved
+    // name of a picked face gets one of these, so the tools that measure or
+    // attach to analysis geometry stand or fall here.
+    if (!Data::isMappedElement(substr.c_str()) && substr.find('.') != std::string::npos) {
         return App::GeoFeature::getSubObject(substr.c_str(), pyObj, pmat, transform, depth);
     }
 

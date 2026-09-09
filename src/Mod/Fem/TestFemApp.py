@@ -51,6 +51,9 @@ from femtest.app.test_preprocess import TestAnalysisImport as FemTest23
 from femtest.app.test_preprocess import TestMeshTopology as FemTest27
 from femtest.app.test_preprocess import TestExecuteDrivenOutputs as FemTest28
 from femtest.app.test_preprocess import TestGeometryShellBuilder as FemTest30
+from femtest.app.test_preprocess import TestElementSetsFromGroups as FemTest31
+from femtest.app.test_preprocess import TestDeliberateGeometryUpdate as FemTest32
+from femtest.app.test_preprocess import TestImportPlacement as FemTest33
 from femtest.app.test_selection_rules import TestSelectionRules as FemTest26
 from femtest.app.test_gmsh import TestGMSHEntityOrder as FemTest24
 from femtest.app.test_netgen import TestNetgenEntityOrder as FemTest25
@@ -86,3 +89,6 @@ False if FemTest27.__name__ else True
 False if FemTest28.__name__ else True
 False if FemTest29.__name__ else True
 False if FemTest30.__name__ else True
+False if FemTest31.__name__ else True
+False if FemTest32.__name__ else True
+False if FemTest33.__name__ else True

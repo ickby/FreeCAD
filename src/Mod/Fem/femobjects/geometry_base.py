@@ -151,6 +151,85 @@ def _same_shape(one, other):
     return one.isSame(other)
 
 
+def path_from_root(obj):
+    """
+    Where *obj* sits in the document, as a top-level object and a path to it.
+
+    A shape is only meaningful somewhere. An object inside a Part is drawn
+    where that Part puts it, and one inside a Part inside a Part where both
+    of them do, so the shape a user sees is the shape plus everything above
+    it. The way up is unambiguous - FreeCAD lets an object belong to at most
+    one geometry group - which is why the path can be rebuilt from the object
+    and does not have to be remembered from the selection that picked it.
+
+    Returns the object itself and an empty path when it is already at the top.
+    """
+    root = obj
+    path = []
+    group = obj.getParentGeoFeatureGroup()
+    while group is not None:
+        path.insert(0, root.Name)
+        root = group
+        group = group.getParentGeoFeatureGroup()
+    return root, (".".join(path) + "." if path else "")
+
+
+def global_shape(obj):
+    """
+    The shape of *obj* as the user sees it, in the global coordinate system.
+
+    Part.getShape is FreeCAD's resolver for exactly this: given a root object
+    and a path down from it, it follows links, link arrays, bodies and nested
+    containers, and applies every transformation it meets on the way. Handed
+    the path from the top it therefore answers in global coordinates - which
+    is the only coordinate system an analysis has, so it is the one its
+    geometry is kept in.
+
+    Going through the resolver rather than reading the Shape property is also
+    what makes a link importable at all: App::Link is not a GeoFeature and has
+    no geometry property to read, but it does have a shape to draw, and this
+    is how that shape is asked for.
+    """
+    root, sub = path_from_root(obj)
+    return Part.getShape(root, sub, needSubElement=False, transform=True)
+
+
+def container_placement(obj):
+    """
+    The placement of everything *obj* sits inside; identity at the top level.
+
+    For the shapes that cannot come through the resolver because they are not
+    the object's Shape - a sketch's internal faces - this is what the resolver
+    would have applied to them.
+    """
+    placement = Base.Placement()
+    group = obj.getParentGeoFeatureGroup()
+    while group is not None:
+        placement = group.Placement.multiply(placement)
+        group = group.getParentGeoFeatureGroup()
+    return placement
+
+
+def containers_of(obj):
+    """
+    Every geometry group *obj* sits inside, innermost first.
+
+    Worth knowing beyond the placement it accumulates: a container decides
+    where its contents are drawn, and moving one touches only the container -
+    its contents do not recompute, because everywhere else in FreeCAD that
+    transform is applied when drawing rather than baked into a shape. An
+    analysis geometry does bake it in, so a Part that moves leaves the geometry
+    behind without anything saying so. Nothing here answers that yet; see the
+    note on GeometryImport.execute().
+    """
+    groups = []
+    group = obj.getParentGeoFeatureGroup()
+    while group is not None:
+        groups.append(group)
+        group = group.getParentGeoFeatureGroup()
+    return groups
+
+
 def _get_features_without_compounds(shape):
     result = shape.Solids
     result += shape.getChildShapes("Shell", "Solids")
@@ -354,6 +433,26 @@ class GeometryImport(GeometryBase):
         both arrive as a rebuild request and are acted on at once - the user is
         waiting for the result in both cases. A step that has nothing yet
         builds too; a chain that has never run is not born out of date.
+
+        Open: a container that moves is not noticed. What is imported is read
+        where the user sees it, which includes the placement of every Part the
+        source sits inside - but moving a Part touches only the Part. Its
+        contents do not recompute, because everywhere else in FreeCAD that
+        transform is applied when drawing instead of being baked into a shape,
+        so nothing reaches this step and the geometry stays where it was
+        without saying that it is behind. The same goes for a source newly
+        moved into a Part.
+
+        Two ways out, and they are not the same design. Naming the containers
+        in a link property of this step would put it in their InList, so a Part
+        that moves would reach it exactly as a changed source does - but the
+        link can only be written when this step last built, so the first wrap
+        into a Part is still missed. Recording the global placement each source
+        was read at, and comparing on demand, catches both - but then being
+        behind is a question asked of the step rather than a property it
+        carries, and everything that reads Outdated today would have to ask
+        instead. That is a decision about what the mark is, not an oversight
+        here.
         """
         if not should_rebuild(self, obj):
             obj.Outdated = True
@@ -366,13 +465,26 @@ class GeometryImport(GeometryBase):
     def _rebuild(self, obj):
         import_shapes = []
         for link in obj.Import:
+            if link is None:
+                continue
+
+            if link.isDerivedFrom("Sketcher::SketchObject") and link.MakeInternals:
+                # The faces a sketch builds from its own closed regions are not
+                # part of its Shape, so they cannot come through the resolver;
+                # what the resolver would have applied to them is applied here.
+                internal = link.InternalShape.copy()
+                internal.Placement = container_placement(link).multiply(internal.Placement)
+                import_shapes += internal.Faces
+                continue
+
+            shape = global_shape(link)
+            if shape.isNull():
+                continue
+
             if link.isDerivedFrom("Sketcher::SketchObject"):
-                if link.MakeInternals:
-                    import_shapes += link.InternalShape.Faces
-                else:
-                    import_shapes += link.Shape.Wires
-            elif link.isDerivedFrom("App::GeoFeature"):
-                import_shapes += _get_features_without_compounds(link.getPropertyOfGeometry())
+                import_shapes += shape.Wires
+            else:
+                import_shapes += _get_features_without_compounds(shape)
 
         base_obj = obj.Base
         base_shape = base_obj.Shape if base_obj else Part.Shape()

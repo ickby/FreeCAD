@@ -7573,6 +7573,150 @@ class TestGeometryShellBuilder(unittest.TestCase):
         )
 
 
+class TestImportPlacement(unittest.TestCase):
+    """
+    An import brings a shape in where the user sees it.
+
+    The analysis has one coordinate system, the global one, so what it imports
+    has to be moved into it: a part inside a Part is drawn where that Part puts
+    it, a link is drawn where the link puts it, and neither of those is where
+    the shape sits in its own frame.
+    """
+
+    fcc_print("import TestImportPlacement")
+
+    def setUp(self):
+        self.document = FreeCAD.newDocument(self.__class__.__name__)
+
+    def tearDown(self):
+        FreeCAD.closeDocument(self.document.Name)
+
+    # -- fixtures ----------------------------------------------------------
+
+    def _box(self, name, position, size=10):
+        box = self.document.addObject("Part::Box", name)
+        box.Length = box.Width = box.Height = size
+        box.Placement = FreeCAD.Placement(FreeCAD.Vector(*position), FreeCAD.Rotation())
+        return box
+
+    def _part(self, name, position, *members):
+        part = self.document.addObject("App::Part", name)
+        part.Placement = FreeCAD.Placement(FreeCAD.Vector(*position), FreeCAD.Rotation())
+        for member in members:
+            part.addObject(member)
+        return part
+
+    def _link(self, name, target, position):
+        link = self.document.addObject("App::Link", name)
+        link.LinkedObject = target
+        link.LinkPlacement = FreeCAD.Placement(FreeCAD.Vector(*position), FreeCAD.Rotation())
+        return link
+
+    def _imported(self, *objects):
+        """The shape an import step builds from *objects*."""
+        group = ObjectsFem.makeGeometryGroup(self.document)
+        imp = ObjectsFem.makeGeometryImport(self.document)
+        imp.Import = list(objects)
+        group.Group = [imp]
+        self.document.recompute()
+        return group.Shape
+
+    def _centre(self, shape):
+        centre = shape.BoundBox.Center
+        return (round(centre.x, 6), round(centre.y, 6), round(centre.z, 6))
+
+    # -- what is imported --------------------------------------------------
+
+    def test_a_part_at_the_top_comes_in_where_it_stands(self):
+        """The simple case, and the one that must not change."""
+        box = self._box("Box", (100, 0, 0))
+        self.assertEqual(self._centre(self._imported(box)), (105, 5, 5))
+
+    def test_a_part_inside_a_container_comes_in_where_it_is_drawn(self):
+        """
+        The whole point. The box sits at (10,0,0) in its own frame and the
+        user sees it 200 further along, because the Part it lives in is.
+        """
+        box = self._box("Box", (10, 0, 0))
+        self._part("Container", (0, 200, 0), box)
+        self.assertEqual(self._centre(self._imported(box)), (15, 205, 5))
+
+    def test_containers_stack(self):
+        """A Part inside a Part: every frame on the way up counts."""
+        box = self._box("Box", (1, 2, 3))
+        inner = self._part("Inner", (0, 0, 10), box)
+        self._part("Outer", (0, 600, 0), inner)
+        self.assertEqual(self._centre(self._imported(box)), (6, 607, 18))
+
+    def test_a_link_is_imported_where_the_link_puts_it(self):
+        """
+        A link draws the shape somewhere else, and that somewhere is what the
+        analysis wants. It is also the case the old import could not do at all:
+        App::Link is no GeoFeature and has no geometry property to read.
+        """
+        box = self._box("Box", (100, 0, 0))
+        link = self._link("Link", box, (0, 0, 300))
+        self.assertEqual(self._centre(self._imported(link)), (5, 5, 305))
+
+    def test_a_link_inside_a_container(self):
+        """Both frames, one from the link and one from the Part holding it."""
+        box = self._box("Box", (100, 0, 0))
+        link = self._link("Link", box, (0, 0, 50))
+        self._part("Container", (400, 0, 0), link)
+        self.assertEqual(self._centre(self._imported(link)), (405, 5, 55))
+
+    def test_a_link_to_a_container(self):
+        """
+        A link to a whole Part draws that Part's contents at the link, and the
+        Part's own placement gives way to the link's - which is what the user
+        sees and therefore what is imported.
+        """
+        box = self._box("Box", (10, 0, 0))
+        part = self._part("Container", (0, 200, 0), box)
+        link = self._link("Link", part, (0, 0, 700))
+        self.assertEqual(self._centre(self._imported(link)), (15, 5, 705))
+
+    def test_rotated_containers(self):
+        """Rotations compose the same way, and are what a translation test cannot catch."""
+        box = self._box("Box", (0, 0, 0))
+        box.Placement = FreeCAD.Placement(
+            FreeCAD.Vector(10, 0, 0), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 30)
+        )
+        inner = self.document.addObject("App::Part", "Inner")
+        inner.Placement = FreeCAD.Placement(
+            FreeCAD.Vector(0, 5, 0), FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 45)
+        )
+        inner.addObject(box)
+        outer = self.document.addObject("App::Part", "Outer")
+        outer.Placement = FreeCAD.Placement(
+            FreeCAD.Vector(0, 0, 3), FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), 90)
+        )
+        outer.addObject(inner)
+        self.document.recompute()
+
+        # What FreeCAD itself resolves the path to, which is what is drawn.
+        expected = Part.getShape(outer, "Inner.Box.", needSubElement=False, transform=True)
+        self.assertEqual(self._centre(self._imported(box)), self._centre(expected))
+
+    def test_two_imports_meet_in_the_same_frame(self):
+        """
+        The reason this matters at all: parts from different frames have to
+        arrive in one, or they are assembled wrongly.
+        """
+        near = self._box("Near", (0, 0, 0))
+        far = self._box("Far", (0, 0, 0))
+        self._part("Container", (100, 0, 0), far)
+        shape = self._imported(near, far)
+        centres = sorted(self._centre(solid) for solid in shape.Solids)
+        self.assertEqual(centres, [(5, 5, 5), (105, 5, 5)])
+
+    def test_a_geometry_that_never_moved_is_imported_unchanged(self):
+        """No containers, no links: nothing to apply, and nothing applied."""
+        box = self._box("Box", (0, 0, 0))
+        shape = self._imported(box)
+        self.assertEqual(self._centre(shape), self._centre(box.Shape))
+
+
 class TestDeliberateGeometryUpdate(unittest.TestCase):
     """
     An analysis geometry follows the model it was built from only when asked.

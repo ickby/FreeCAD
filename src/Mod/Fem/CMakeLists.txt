@@ -773,6 +773,7 @@ if(BUILD_FEM_VTK_PYTHON)
 endif(BUILD_FEM_VTK_PYTHON)
 
 SET(FemGuiBenchmarks_SRCS
+    femtest/perf/mesh_load.py
     femtest/perf/post_pipeline.py
     femtest/perf/view_pipeline.py
 )

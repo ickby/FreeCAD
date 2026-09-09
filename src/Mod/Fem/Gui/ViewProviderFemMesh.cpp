@@ -45,10 +45,12 @@
 #include <SMESH_Mesh.hxx>
 
 #include <App/DocumentObject.h>
+#include <Base/BaseClass.h>
 #include <Base/BoundBox.h>
 #include <Base/Console.h>
 #include <Base/TimeInfo.h>
 #include <Mod/Fem/App/FemMeshObject.h>
+#include <Mod/Fem/App/FemPerfLog.h>
 
 #include "ViewProviderFemMesh.h"
 #include "ViewProviderFemMeshPy.h"
@@ -363,6 +365,9 @@ void ViewProviderFemMesh::attach(App::DocumentObject* pcObj)
 
 void ViewProviderFemMesh::setDisplayMode(const char* ModeName)
 {
+    // Every mode this class offers draws the scene it builds, so choosing one
+    // is where a build that was put off has to be caught up on.
+    ensureLegacyRepresentation();
     setDisplayMaskMode(ModeName);
     ViewProviderGeometryObject::setDisplayMode(ModeName);
 }
@@ -382,22 +387,50 @@ std::vector<std::string> ViewProviderFemMesh::getDisplayModes() const
 void ViewProviderFemMesh::updateData(const App::Property* prop)
 {
     if (prop->isDerivedFrom<Fem::PropertyFemMesh>()) {
-        ViewProviderFEMMeshBuilder builder;
-        resetColorByNodeId();
-        resetDisplacementByNodeId();
-        builder.createMesh(
-            prop,
-            pcCoords,
-            pcFaces,
-            pcLines,
-            vFaceElementIdx,
-            vNodeElementIdx,
-            onlyEdges,
-            ShowInner.getValue(),
-            MaxFacesShowInner.getValue()
-        );
+        legacySceneStale = true;
+        if (legacyRepresentationNeeded()) {
+            ensureLegacyRepresentation();
+        }
     }
     Gui::ViewProviderGeometryObject::updateData(prop);
+}
+
+void ViewProviderFemMesh::ensureLegacyRepresentation() const
+{
+    if (!legacySceneStale) {
+        return;
+    }
+    const_cast<ViewProviderFemMesh*>(this)->buildLegacyRepresentation();
+}
+
+void ViewProviderFemMesh::buildLegacyRepresentation()
+{
+    // Checked rather than assumed: this runs on every display mode change now,
+    // not only when the mesh property was the thing that changed, so an object
+    // that carries no mesh has to be able to reach here and be turned away.
+    auto* meshObject = Base::freecad_cast<Fem::FemMeshObject*>(getObject());
+    if (!meshObject) {
+        return;
+    }
+    // Cleared first: the build is the answer to the mesh that is there now, and
+    // the resets below reach back into this class.
+    legacySceneStale = false;
+
+    FEM_PERF_SCOPE("mesh.legacyCoin");
+    ViewProviderFEMMeshBuilder builder;
+    resetColorByNodeId();
+    resetDisplacementByNodeId();
+    builder.createMesh(
+        &meshObject->FemMesh,
+        pcCoords,
+        pcFaces,
+        pcLines,
+        vFaceElementIdx,
+        vNodeElementIdx,
+        onlyEdges,
+        ShowInner.getValue(),
+        MaxFacesShowInner.getValue()
+    );
 }
 
 void ViewProviderFemMesh::onChanged(const App::Property* prop)
@@ -430,19 +463,12 @@ void ViewProviderFemMesh::onChanged(const App::Property* prop)
         }
     }
     else if (prop == &ShowInner) {
-        // recalc mesh with new settings
-        ViewProviderFEMMeshBuilder builder;
-        builder.createMesh(
-            &(static_cast<Fem::FemMeshObject*>(this->pcObject)->FemMesh),
-            pcCoords,
-            pcFaces,
-            pcLines,
-            vFaceElementIdx,
-            vNodeElementIdx,
-            onlyEdges,
-            ShowInner.getValue(),
-            MaxFacesShowInner.getValue()
-        );
+        // The setting decides which faces the scene holds, so the scene has to
+        // be made again - now if it is being looked at, otherwise when it is.
+        legacySceneStale = true;
+        if (legacyRepresentationNeeded()) {
+            ensureLegacyRepresentation();
+        }
     }
     else if (prop == &LineWidth) {
         pcDrawStyle->lineWidth = LineWidth.getValue();

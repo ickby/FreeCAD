@@ -98,6 +98,14 @@ public:
     void syncRepresentation();
 
 protected:
+    /**
+     * The mesh of a preprocessing workflow is drawn by the renderer, so the
+     * scene the base class builds from the mesh is not what is on screen and
+     * making it would be a second of work for nobody. It is still what the old
+     * display modes show, and the base class builds it on the way into one.
+     */
+    bool legacyRepresentationNeeded() const override;
+
     Fem::FemAnalysis* findAnalysis() const;
     Fem::FemGeometry* findGeometry() const;
     void updateMeshFromProperty();

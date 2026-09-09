@@ -92,6 +92,22 @@ SMESH_Gen* FemMesh::_mesh_gen = nullptr;
 
 TYPESYSTEM_SOURCE(Fem::FemMesh, Base::Persistence)
 
+/**
+ * The meshes are made in what SMESH calls embedded mode.
+ *
+ * Outside it, SMESHDS_Mesh writes every node and every element it is given into
+ * a SMESHDS_Script - the log SALOME replays to a remote client to tell it how a
+ * mesh was changed. Each logged number becomes a node of a std::list, so half a
+ * million elements cost some seven million allocations and a couple of hundred
+ * megabytes that are held for as long as the mesh is, and the log is never read:
+ * nothing in FreeCAD asks a mesh for its script or its log, and SMESH itself only
+ * consults the mode in three places in the mesher plugins, where the non-embedded
+ * branch does no more than log a move it has already made.
+ *
+ * operator= has always created its mesh this way. The constructors did not, which
+ * is why reading a file into a mesh and merging children into one were paying for
+ * a recording nobody would ever play back.
+ */
 FemMesh::FemMesh()
     : myMesh(nullptr)
 #if SMESH_VERSION_MAJOR < 9
@@ -99,9 +115,9 @@ FemMesh::FemMesh()
 #endif
 {
 #if SMESH_VERSION_MAJOR >= 9
-    myMesh = getGenerator()->CreateMesh(false);
+    myMesh = getGenerator()->CreateMesh(true);
 #else
-    myMesh = getGenerator()->CreateMesh(myStudyId, false);
+    myMesh = getGenerator()->CreateMesh(myStudyId, true);
 #endif
 }
 
@@ -112,9 +128,9 @@ FemMesh::FemMesh(const FemMesh& mesh)
 #endif
 {
 #if SMESH_VERSION_MAJOR >= 9
-    myMesh = getGenerator()->CreateMesh(false);
+    myMesh = getGenerator()->CreateMesh(true);
 #else
-    myMesh = getGenerator()->CreateMesh(myStudyId, false);
+    myMesh = getGenerator()->CreateMesh(myStudyId, true);
 #endif
     copyMeshData(mesh);
 }
@@ -192,6 +208,11 @@ FemMesh& FemMesh::operator=(FemMesh&& mesh) noexcept
     return *this;
 }
 
+// What this costs per element, and the ways of making it cheaper, are written
+// down at copyMeshData(): the two insert elements the same way and the same
+// three answers apply to both. Whichever is done here has to keep the order the
+// appended ids come out in, because cellSources and the id vectors below are
+// read positionally by the callers.
 void FemMesh::appendMeshData(
     const FemMesh& mesh,
     const std::string& sourceName,
@@ -432,6 +453,46 @@ void FemMesh::appendMeshData(
     appendMeshDS->Modified();
 }
 
+/**
+ * Copy a whole mesh, element by element.
+ *
+ * Both this and appendMeshData() cost about 1.3 microseconds per element, which
+ * on half a million of them is most of a second each. That is not one hot spot
+ * but four layers of similar size, measured by reading the call chain rather
+ * than a profiler:
+ *
+ *  - reading the source element, some 300-500 ns: NbNodes() and GetNode() go
+ *    through vtkUnstructuredGrid::GetCell, which fills a cached cell object and
+ *    copies its coordinates, and every node is then looked up again;
+ *  - SMESH_MeshEditor::AddElement, some 50 ns, which also appends to a list of
+ *    created elements that only its destructor reads;
+ *  - the SMESHDS layer, some 40 ns, turning node pointers into ids and back;
+ *  - the insertion itself, some 430-640 ns, nearly all of it in VTK: keeping the
+ *    point-to-cell links up to date reallocates one point's cell list per point
+ *    of the element, at exactly the size needed, so there is no amortisation.
+ *
+ * Growth is not the problem - every vector involved grows geometrically - and
+ * reserving up front buys nothing measurable.
+ *
+ * Three ways out, in the order they should be tried:
+ *
+ *  - without touching SMESH, about twice as fast: read the source through the
+ *    grid (GetCellType and GetCellPoints on the element's VTK id) instead of
+ *    through the element API, and insert with SMDS_Mesh::AddVolumeFromVtkIdsWithID
+ *    and its siblings, which skips the editor and the SMESHDS round trip;
+ *  - with a small addition to the vendored SMESH, about four times: let a bulk
+ *    load insert cells without maintaining the links, and fill the links for the
+ *    appended block in one pass afterwards;
+ *  - with a larger one, eight to ten times: an importer that block-copies the
+ *    points, the connectivity and the cell types and then rebuilds the SMDS
+ *    index structures in a single pass. SMESHDS_Mesh::compactMesh and
+ *    SMDS_UnstructuredGrid::compactGrid already do most of that and are the
+ *    model to follow. Past that point the group membership sets dominate.
+ *
+ * A straight vtkUnstructuredGrid::DeepCopy is a trap: SMDS assumes the links
+ * object is a vtkCellLinks, which VTK 9 does not guarantee, and its BuildLinks
+ * releases a reference it expects to have taken itself.
+ */
 void FemMesh::copyMeshData(const FemMesh& mesh)
 {
     FEM_PERF_SCOPE("mesh.copy");

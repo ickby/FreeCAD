@@ -141,11 +141,13 @@ public:
 
     const std::vector<unsigned long>& getVisibleElementFaces() const
     {
+        ensureLegacyRepresentation();
         return vFaceElementIdx;
     }
 
     const std::vector<unsigned long>& getVisibleNodes() const
     {
+        ensureLegacyRepresentation();
         return vNodeElementIdx;
     }
 
@@ -159,6 +161,30 @@ private:
 protected:
     /// get called by the container whenever a property has been changed
     void onChanged(const App::Property* prop) override;
+
+    /**
+     * Whether the scene this class builds from the mesh is going to be looked
+     * at.
+     *
+     * Building it is not cheap: every face of every volume becomes a helper of
+     * its own, and the helpers are sorted so that the faces lying inside the
+     * mesh can be dropped - on half a million volumes that is three million
+     * helpers and a second of work. A subclass that draws the mesh some other
+     * way answers false, and the build is then put off until a display mode
+     * that shows this scene is chosen, or until something reads it.
+     */
+    virtual bool legacyRepresentationNeeded() const
+    {
+        return true;
+    }
+
+    /**
+     * Build the scene from the mesh property unless it is already up to date.
+     *
+     * Const because having the representation is not a change to the view
+     * provider; only when the work of making it happens is.
+     */
+    void ensureLegacyRepresentation() const;
 
     void setColorByNodeIdHelper(const std::vector<Base::Color>&);
     void setDisplacementByNodeIdHelper(const std::vector<Base::Vector3d>& DispVector, long startId);
@@ -194,7 +220,12 @@ protected:
 
     bool onlyEdges;
 
+    /// Set when the mesh changed and the scene has not been made to match yet.
+    mutable bool legacySceneStale {true};
+
 private:
+    void buildLegacyRepresentation();
+
     class Private;
 };
 

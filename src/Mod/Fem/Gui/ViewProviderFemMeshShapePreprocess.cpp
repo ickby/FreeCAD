@@ -70,6 +70,16 @@ bool ViewProviderFemMeshShapePreprocess::preprocessActive() const
     return false;
 }
 
+bool ViewProviderFemMeshShapePreprocess::legacyRepresentationNeeded() const
+{
+    // Every mesh change goes on to syncRepresentation(), which puts the display
+    // mask back on the preprocess representation, so a mesh that belongs to the
+    // workflow is never showing the old scene by the time it would have been
+    // rebuilt. Choosing one of the old display modes still shows it, and the
+    // base class builds it on the way into the mode.
+    return !preprocessActive();
+}
+
 void ViewProviderFemMeshShapePreprocess::attach(App::DocumentObject* pcObject)
 {
     ViewProviderFemMeshShapeBase::attach(pcObject);

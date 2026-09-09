@@ -172,13 +172,13 @@ class _GeometryUpdateMesh(CommandManager):
 
     def Activated(self):
         import FemGui
-        from femtools import geometryupdate
+        from femtools import analysisrun, geometryupdate
 
         analysis = FemGui.getActiveAnalysis()
-        FreeCAD.ActiveDocument.openTransaction("Update geometry and mesh")
-        report = geometryupdate.update_geometry_and_mesh(analysis)
-        FreeCAD.ActiveDocument.commitTransaction()
-        FreeCAD.Console.PrintMessage(geometryupdate.report_text([report]) + "\n")
+        # Meshing takes minutes and runs in a process of its own, so this
+        # returns as soon as the work is under way. What it is doing, and the
+        # way to stop it, are reported by the task panel.
+        analysisrun.start(geometryupdate.plan_for(analysis))
 
 
 class _GeometryUpdate(CommandManager):
@@ -222,15 +222,10 @@ class _GeometryUpdateLinked(CommandManager):
 
     def Activated(self):
         import FemGui
-        from femtools import geometryupdate
+        from femtools import analysisrun, geometryupdate
 
         analysis = FemGui.getActiveAnalysis()
-        FreeCAD.ActiveDocument.openTransaction("Update linked analyses")
-        reports = geometryupdate.update_with_sources(analysis)
-        FreeCAD.ActiveDocument.commitTransaction()
-        # Most of what was rebuilt is not on screen, so what happened to it has
-        # to be said rather than left for the user to discover.
-        FreeCAD.Console.PrintMessage(geometryupdate.report_text(reports) + "\n")
+        analysisrun.start(geometryupdate.plan_with_sources(analysis))
 
 
 class _GeometryUpdateGroup:

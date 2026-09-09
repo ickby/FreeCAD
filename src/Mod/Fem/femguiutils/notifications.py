@@ -131,6 +131,81 @@ class _FlowLayout(QtGui.QLayout):
         return max(0, y - rect.y() - spacing)
 
 
+class _ActivityBar(QtGui.QWidget):
+    """
+    A bar that says work is happening, painted here rather than by the style.
+
+    Qt's own indeterminate QProgressBar leaves its animation to the style, and
+    this application runs with UI effects switched off: the bar then sits
+    perfectly still, which says the opposite of what it is there for - at any
+    size, as the styles were asked. Painting it costs a timer and a dozen
+    lines, and the colours come from the palette like everything else in the
+    panel, so it follows the user's theme.
+
+    Indeterminate on purpose. Neither a mesher nor a solver reports how far
+    along it is, and a bar that filled up would be inventing it.
+    """
+
+    def __init__(self, width=64, height=6, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(width, height)
+        self.phase = 0.0
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self.advance)
+
+    def advance(self):
+        """One frame on. Public so that it can be stepped without a clock."""
+        self.phase = (self.phase + 0.022) % 1.0
+        self.update()
+
+    # Running only while it can be seen: a panel that is hidden, or a whole
+    # task view that is, has no business spending frames.
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._timer.stop()
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+
+        radius = self.height() / 2.0
+        palette = self.palette()
+        painter.setBrush(palette.color(QtGui.QPalette.ColorRole.Mid))
+        painter.drawRoundedRect(QtCore.QRectF(self.rect()), radius, radius)
+
+        # A chunk a third as wide, entering at the left and leaving at the
+        # right; the same thing Qt's own busy bar does when it is allowed to.
+        span = self.width() / 3.0
+        left = self.phase * (self.width() + span) - span
+        painter.setBrush(palette.color(QtGui.QPalette.ColorRole.Highlight))
+        painter.drawRoundedRect(
+            QtCore.QRectF(left, 0.0, span, float(self.height())), radius, radius
+        )
+
+
+def _dim(widget):
+    """
+    Step a widget's text back, in the theme's own ink.
+
+    The palette's disabled colour rather than one of ours: it is the shade this
+    theme already uses for text that is there to be glanced at, and it follows
+    the user's theme like everything else in the panel.
+    """
+    palette = widget.palette()
+    palette.setColor(
+        QtGui.QPalette.ColorRole.WindowText,
+        palette.color(QtGui.QPalette.ColorGroup.Disabled, QtGui.QPalette.ColorRole.WindowText),
+    )
+    widget.setPalette(palette)
+    return widget
+
+
 def _wrapping_label(text):
     """
     A label that gives way when the dock is narrowed.
@@ -240,15 +315,30 @@ class Notification:
     panel is there at all. *message* says what is true rather than what to
     press; *aside* is the consequence of pressing, for the cases where it is
     not obvious - that updating a geometry costs the mesh, say.
+
+    Either text may be a function of the analysis instead of a string, for the
+    states that have something to count: which mesher is running, how many are
+    left, which ones failed.
+
+    A state that is *work in progress* rather than a fact says so through
+    *busy*, and the panel then shows an activity bar beside its buttons.
+    *status* is the short line that goes with it - an elapsed time, a step
+    name - kept apart from the message because it changes every second while
+    the message does not. Nothing here knows about meshing: a solver reporting
+    a run of its own needs the same two things and can say so the same way.
     """
 
-    def __init__(self, key, icon, message, condition, aside=None, actions=()):
+    def __init__(
+        self, key, icon, message, condition, aside=None, actions=(), busy=None, status=None
+    ):
         self.key = key
         self.icon = icon
         self.message = message
         self.aside = aside
         self.actions = list(actions)
         self._condition = condition
+        self._busy = busy
+        self._status = status
 
     def applies(self, analysis):
         try:
@@ -256,6 +346,18 @@ class Notification:
         except (AttributeError, ReferenceError, RuntimeError):
             # A document closing under us is not a reason to break the panel.
             return False
+
+    def message_for(self, analysis):
+        return self.message(analysis) if callable(self.message) else self.message
+
+    def aside_for(self, analysis):
+        return self.aside(analysis) if callable(self.aside) else self.aside
+
+    def is_busy(self, analysis):
+        return bool(self._busy(analysis)) if callable(self._busy) else bool(self._busy)
+
+    def status_for(self, analysis):
+        return self._status(analysis) if callable(self._status) else (self._status or "")
 
 
 class NotificationPanel(QtGui.QWidget):
@@ -273,6 +375,7 @@ class NotificationPanel(QtGui.QWidget):
     def __init__(self, notification, parent=None):
         super().__init__(parent)
         self.notification = notification
+        self.busy = False
         self._analysis = None
 
         self.separator = QtGui.QFrame()
@@ -287,21 +390,18 @@ class NotificationPanel(QtGui.QWidget):
             QtCore.Qt.AlignmentFlag.AlignTop | QtCore.Qt.AlignmentFlag.AlignLeft
         )
 
-        self.message = _wrapping_label(notification.message)
+        self.message = _wrapping_label("")
 
         self.aside = None
         if notification.aside:
-            self.aside = _wrapping_label(notification.aside)
-            # The theme's own disabled ink, so the second line steps back
-            # without a colour of our choosing being written down anywhere.
-            palette = self.aside.palette()
-            palette.setColor(
-                QtGui.QPalette.ColorRole.WindowText,
-                palette.color(
-                    QtGui.QPalette.ColorGroup.Disabled, QtGui.QPalette.ColorRole.WindowText
-                ),
-            )
-            self.aside.setPalette(palette)
+            self.aside = _dim(_wrapping_label(""))
+
+        self.activity = _ActivityBar()
+        self.activity.hide()
+
+        self.status = QtGui.QLabel()
+        _dim(self.status)
+        self.status.hide()
 
         self.buttons = []
         button_row = _FlowLayout(spacing=6)
@@ -322,13 +422,23 @@ class NotificationPanel(QtGui.QWidget):
             # user most likely wants.
             self.buttons[-1][1].setDefault(True)
 
+        # The activity bar and its clock sit on the same line as the buttons,
+        # at the other end of it: work in progress on the left, what to do
+        # about it on the right.
+        action_row = QtGui.QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(8)
+        action_row.addWidget(self.activity, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        action_row.addWidget(self.status, 0, QtCore.Qt.AlignmentFlag.AlignVCenter)
+        action_row.addLayout(button_row, 1)
+
         text_column = QtGui.QVBoxLayout()
         text_column.setContentsMargins(0, 0, 0, 0)
         text_column.setSpacing(9)
         text_column.addWidget(self.message)
         if self.aside is not None:
             text_column.addWidget(self.aside)
-        text_column.addLayout(button_row)
+        text_column.addLayout(action_row)
 
         body = QtGui.QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
@@ -352,9 +462,28 @@ class NotificationPanel(QtGui.QWidget):
             return False
 
         self.separator.setVisible(not first_visible)
+        # Re-read every time: a state that counts something - which mesher is
+        # running, which ones failed - says something different on every pass.
+        self.message.setText(self.notification.message_for(analysis))
+        if self.aside is not None:
+            self.aside.setText(self.notification.aside_for(analysis) or "")
+        self.busy = self.notification.is_busy(analysis)
+        self.activity.setVisible(self.busy)
+        self.update_status(analysis)
         for action, button in self.buttons:
             button.setEnabled(action.is_enabled(analysis))
         return True
+
+    def update_status(self, analysis):
+        """
+        The line that changes while nothing else does.
+
+        Kept apart from refresh() so that a clock can tick once a second
+        without every condition in the panel being asked again.
+        """
+        text = self.notification.status_for(analysis) if analysis is not None else ""
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
 
     def _run(self, action):
         if self._analysis is not None:
@@ -373,6 +502,15 @@ class NotificationWidget(QtGui.QWidget):
     def __init__(self, notifications, parent=None):
         super().__init__(parent)
         self.panels = [NotificationPanel(n) for n in notifications]
+        self._analysis = None
+
+        # Only while something is actually running, and only the status line:
+        # a clock that ticks is the cheapest way to say that a process is still
+        # alive, and re-asking every condition once a second to do it would be
+        # the most expensive.
+        self._clock = QtCore.QTimer(self)
+        self._clock.setInterval(1000)
+        self._clock.timeout.connect(self._tick)
 
         layout = QtGui.QVBoxLayout()
         layout.setContentsMargins(0, 2, 0, 2)
@@ -385,11 +523,25 @@ class NotificationWidget(QtGui.QWidget):
 
     def refresh(self, analysis):
         """Bring every panel up to date; answer whether any of them is showing."""
+        self._analysis = analysis
         shown = 0
+        busy = False
         for panel in self.panels:
             if panel.refresh(analysis, first_visible=(shown == 0)):
                 shown += 1
+                busy = busy or panel.busy
+
+        if busy and not self._clock.isActive():
+            self._clock.start()
+        elif not busy and self._clock.isActive():
+            self._clock.stop()
+
         return shown > 0
+
+    def _tick(self):
+        for panel in self.panels:
+            if panel.busy and not panel.isHidden():
+                panel.update_status(self._analysis)
 
 
 class NotificationWatcher:

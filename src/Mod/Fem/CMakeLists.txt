@@ -615,6 +615,7 @@ SET(FemTools_SRCS
     femtools/constants.py
     femtools/errors.py
     femtools/femutils.py
+    femtools/analysisrun.py
     femtools/geometryupdate.py
     femtools/geomtools.py
     femtools/importtools.py

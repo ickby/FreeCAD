@@ -62,6 +62,12 @@ def _tr(text):
     return FreeCAD.Qt.translate("FEM", text)
 
 
+def _run_in_progress():
+    from femtools import analysisrun
+
+    return analysisrun.active()
+
+
 def _geometry_notifications():
     from femtools import geometryupdate
 
@@ -79,7 +85,9 @@ def _geometry_notifications():
             icon="FEM_StateGeometryOutdated",
             message=_tr("The geometry is behind the model it was built from."),
             aside=_tr("Updating rebuilds the chain and clears the mesh."),
-            condition=geometryupdate.is_outdated,
+            condition=lambda analysis: (
+                not _run_in_progress() and geometryupdate.is_outdated(analysis)
+            ),
             actions=[
                 Action(command="FEM_GeometryUpdate"),
                 Action(command="FEM_GeometryUpdateMesh"),
@@ -96,23 +104,111 @@ def _geometry_notifications():
     ]
 
 
+def _running(analysis):
+    """The run in progress on *analysis*, or None."""
+    from femtools import analysisrun
+
+    run = analysisrun.current()
+    if run is None or not run.running or not run.touches(analysis):
+        return None
+    return run
+
+
+def _failed(analysis):
+    """The run that ended with failures on *analysis* and has not been seen yet."""
+    from femtools import analysisrun
+
+    run = analysisrun.current()
+    if run is None or run.running or not run.failures or not run.touches(analysis):
+        return None
+    return run
+
+
+def _running_text(analysis):
+    run = _running(analysis)
+    if run is None:
+        return ""
+    step = run.current
+    at, total = run.position
+    if total > 1:
+        return _tr("Meshing {} ({} of {})").format(step.label if step else "", at, total)
+    return _tr("Meshing {}").format(step.label if step else "")
+
+
+def _elapsed_text(analysis):
+    """How long the run has been going, as a clock rather than a number."""
+    run = _running(analysis)
+    if run is None:
+        return ""
+    seconds = int(run.elapsed)
+    if seconds >= 3600:
+        return "{}:{:02d}:{:02d}".format(seconds // 3600, (seconds % 3600) // 60, seconds % 60)
+    return "{}:{:02d}".format(seconds // 60, seconds % 60)
+
+
+def _failed_text(analysis):
+    run = _failed(analysis)
+    if run is None:
+        return ""
+    names = ", ".join(step.label for step, _ in run.failures)
+    return _tr("Meshing failed: {}").format(names)
+
+
 def _mesh_notifications():
     from femmesh import analysismesh
-    from femtools import geometryupdate
+    from femtools import analysisrun, geometryupdate
 
     def mesh_now(analysis):
-        report = analysismesh.mesh_analysis(analysis)
-        if report.failed:
-            names = ", ".join(label for label, _ in report.failed)
-            FreeCAD.Console.PrintError(f"Meshing failed for {names}\n")
+        analysisrun.start(geometryupdate.mesh_steps(analysis))
+
+    def cancel(analysis):
+        run = _running(analysis)
+        if run is not None:
+            run.cancel()
+
+    def open_mesher(analysis):
+        run = _failed(analysis)
+        if run is None:
+            return
+        mesher = getattr(run.failures[0][0], "mesher", None)
+        if mesher is not None:
+            # Where the log of the run that failed is waiting, and where the
+            # settings that caused it can be changed.
+            FreeCADGui.ActiveDocument.setEdit(mesher)
+
+    def acknowledge(analysis):
+        analysisrun.clear()
 
     return [
+        Notification(
+            key="mesh-running",
+            icon="FEM_StateMeshMissing",
+            message=_running_text,
+            aside=_tr("This runs in a process of its own; FreeCAD stays usable meanwhile."),
+            condition=lambda analysis: _running(analysis) is not None,
+            busy=lambda analysis: _running(analysis) is not None,
+            status=_elapsed_text,
+            actions=[Action(text=_tr("Cancel"), run=cancel)],
+        ),
+        Notification(
+            key="mesh-failed",
+            icon="FEM_StateMeshCleared",
+            message=_failed_text,
+            aside=_tr("The mesher's own panel holds the output it left behind."),
+            condition=lambda analysis: _failed(analysis) is not None,
+            actions=[
+                Action(text=_tr("Acknowledge"), run=acknowledge),
+                Action(text=_tr("Open mesher"), run=open_mesher),
+            ],
+        ),
         Notification(
             key="mesh-missing",
             icon="FEM_StateMeshMissing",
             message=_tr("Nothing meshes this geometry yet."),
             condition=lambda analysis: (
-                geometryupdate.has_geometry(analysis) and not analysismesh.has_meshers(analysis)
+                not analysisrun.active()
+                and geometryupdate.has_geometry(analysis)
+                and not analysismesh.has_meshers(analysis)
             ),
             actions=[
                 # Short labels on purpose: the sentence above already says what
@@ -123,13 +219,20 @@ def _mesh_notifications():
                 Action(command="FEM_MeshNetgenFromShape", text=_tr("Netgen")),
             ],
         ),
+        # Deliberately not "the mesh was cleared by the update": the same state
+        # is reached by a mesher that was just created, by one whose run failed
+        # and by one the user cancelled, and the panel cannot tell them apart.
+        # What it can say is what is true of all of them.
         Notification(
-            key="mesh-cleared",
+            key="mesh-empty",
             icon="FEM_StateMeshCleared",
-            message=_tr("The mesh was cleared when the geometry was updated."),
-            aside=_tr("The mesher and its settings were kept."),
+            message=_tr("This analysis has no mesh yet."),
+            aside=_tr("The meshers and their settings are set up; only the mesh is missing."),
             condition=lambda analysis: (
-                analysismesh.has_meshers(analysis) and analysismesh.mesh_is_empty(analysis)
+                not analysisrun.active()
+                and _failed(analysis) is None
+                and analysismesh.has_meshers(analysis)
+                and analysismesh.mesh_is_empty(analysis)
             ),
             # No command meshes a whole analysis - there is a function for it,
             # and inventing a command to hang a button on would be the tail
@@ -240,9 +343,21 @@ _observers = []
 
 
 def refresh():
-    """Bring every installed watcher, and the box around it, up to date."""
-    for watcher in _installed:
-        watcher.refresh()
+    """
+    Bring every installed watcher, and the box around it, up to date.
+
+    Tolerant of the widgets having been deleted underneath: the task view owns
+    them once they are handed over, and anything that clears the task watchers
+    - another workbench activating, say - takes them with it while this list
+    still holds the Python side. What is left then is a shell, and the only
+    sensible thing to do with it is to let go.
+    """
+    for watcher in list(_installed):
+        try:
+            watcher.refresh()
+        except RuntimeError:
+            _installed.clear()
+            return
 
 
 def install():
@@ -267,11 +382,21 @@ def install():
     FreeCADGui.addDocumentObserver(gui_observer)
     _observers[:] = [app_observer, gui_observer]
 
+    # A run moving from one mesher to the next changes nothing in the document,
+    # so it has to say so itself.
+    from femtools import analysisrun
+
+    analysisrun.add_listener(coalescer.request)
+    _observers.append(coalescer)
+
 
 def remove():
     if _observers:
+        from femtools import analysisrun
+
         FreeCAD.removeDocumentObserver(_observers[0])
         FreeCADGui.removeDocumentObserver(_observers[1])
+        analysisrun.remove_listener(_observers[2].request)
         _observers.clear()
     _installed.clear()
     FreeCADGui.Control.clearTaskWatcher()

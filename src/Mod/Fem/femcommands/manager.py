@@ -89,12 +89,14 @@ class CommandManager:
             active = (
                 FemGui.getActiveAnalysis() is not None
                 and self.active_analysis_in_active_doc()
+                and not self.analysis_run_in_progress()
                 and self.geometry_is_outdated()
             )
         elif self.is_active == "with_stale_source":
             active = (
                 FemGui.getActiveAnalysis() is not None
                 and self.active_analysis_in_active_doc()
+                and not self.analysis_run_in_progress()
                 and self.source_analysis_is_stale()
             )
         elif self.is_active == "with_results":
@@ -223,6 +225,18 @@ class CommandManager:
         from femtools import membertools
 
         return bool(membertools.get_member(analysis, "Fem::FemGeometry"))
+
+    def analysis_run_in_progress(self):
+        """
+        Whether a mesh or an update is already under way somewhere.
+
+        Updating a geometry while its meshers are running would clear exactly
+        what they are writing, so the commands that could do it are switched
+        off for the duration rather than left to race.
+        """
+        from femtools import analysisrun
+
+        return analysisrun.active()
 
     def geometry_is_outdated(self):
         """Whether this analysis' own geometry waits to follow its sources."""

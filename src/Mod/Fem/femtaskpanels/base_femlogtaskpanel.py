@@ -83,6 +83,26 @@ class _BaseLogTaskPanel(base_femtaskpanel._BaseTaskPanel, ABC):
             self.text_log = None
             self.text_time = None
 
+        self._show_kept_log(obj)
+
+    def _show_kept_log(self, obj):
+        """
+        Put back what a run outside this panel left behind.
+
+        A mesher started from the task panel of the analysis reports only that
+        it failed; the output that says why belongs here, in the panel that
+        already knows how to show a log. It is offered once, on opening, and
+        the next run overwrites it - it describes one run in one session, and
+        is kept on the proxy rather than in a property for exactly that reason.
+        """
+        kept = getattr(getattr(obj, "Proxy", None), "_last_log", "")
+        if kept and self.text_log:
+            self.write_log(kept, QtGui.QColor(getOutputWinColor("Logging")))
+            self.write_log(
+                FreeCAD.Qt.translate("FEM", "-- output of the last run --\n"),
+                QtGui.QColor(getOutputWinColor("Text")),
+            )
+
     def setup_connections(self):
         QtCore.QObject.connect(self._thread, QtCore.SIGNAL("started()"), self.thread_started)
         QtCore.QObject.connect(self._thread, QtCore.SIGNAL("finished()"), self.thread_finished)

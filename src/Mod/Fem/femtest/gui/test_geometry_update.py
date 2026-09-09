@@ -45,6 +45,7 @@ import FemGui
 import ObjectsFem
 
 from femguiutils import notifications, update_watcher
+from femtools import analysisrun
 from femobjects import geometry_base
 from femtools import geometryupdate
 
@@ -54,6 +55,36 @@ from femtest.app.test_preprocess import _make_tet_mesh
 
 def _tet_mesh():
     return _make_tet_mesh()[0]
+
+
+class _FakeStep(analysisrun.Step):
+    """
+    A step that waits to be told, standing in for a mesher.
+
+    Meshing is a process on the machine and a minute of wall clock; what these
+    tests are about is the order the steps run in and what the panel says while
+    they do, so the waiting is made explicit instead.
+    """
+
+    def __init__(self, analysis, label):
+        self.analysis = analysis
+        self.label = label
+        self.started = False
+        self.cancelled = False
+        self._run = None
+
+    def start(self, run):
+        self.started = True
+        self._run = run
+
+    def finish(self):
+        self._run.step_finished()
+
+    def fail(self, reason="something went wrong"):
+        self._run.step_failed(self, reason)
+
+    def cancel(self):
+        self.cancelled = True
 
 
 class TestGeometryUpdateGui(unittest.TestCase):
@@ -78,6 +109,16 @@ class TestGeometryUpdateGui(unittest.TestCase):
 
         self.geometry, self.mesh = update_watcher.watchers()
 
+    def _add_mesher(self):
+        """A mesh group with one mesher in it, and no mesh yet."""
+        mesh_group = ObjectsFem.makeMeshShapeGroup(
+            self.document, "Mesh", geometry=self.group, analysis=self.analysis
+        )
+        gmsh = ObjectsFem.makeMeshGmsh(self.document, "MeshGmsh")
+        mesh_group.Group = [gmsh]
+        self.document.recompute()
+        return gmsh
+
     def _panel(self, watcher, key):
         for panel in watcher.widget.panels:
             if panel.notification.key == key:
@@ -93,6 +134,7 @@ class TestGeometryUpdateGui(unittest.TestCase):
         return [p.notification.key for p in watcher.widget.panels if not p.isHidden()]
 
     def tearDown(self):
+        analysisrun.clear()
         FreeCAD.closeDocument(self.document.Name)
 
     def test_a_watcher_with_nothing_to_say_is_not_there(self):
@@ -199,7 +241,7 @@ class TestGeometryUpdateGui(unittest.TestCase):
         mesh_group.Group = [gmsh]
         self.document.recompute()
 
-        self.assertEqual(self._showing(self.mesh), ["mesh-cleared"], "a mesher with no mesh")
+        self.assertEqual(self._showing(self.mesh), ["mesh-empty"], "a mesher with no mesh")
         gmsh.FemMesh = _tet_mesh()
         self.document.recompute()
         self.assertEqual(self._showing(self.mesh), [], "and nothing once it has one")
@@ -228,7 +270,7 @@ class TestGeometryUpdateGui(unittest.TestCase):
         self.document.recompute()
         geometryupdate.update_group(self.group)
         self.assertEqual(gmsh.FemMesh.NodeCount, 0)
-        self.assertEqual(self._showing(self.mesh), ["mesh-cleared"])
+        self.assertEqual(self._showing(self.mesh), ["mesh-empty"])
 
         # Meshing again, and deliberately without a recompute after it: this is
         # the moment the panel used to get stuck at.
@@ -261,6 +303,216 @@ class TestGeometryUpdateGui(unittest.TestCase):
         self.assertGreater(
             mesh_group.FemMesh.NodeCount, 0, "the merge has to be published, not left stale"
         )
+
+    # -- runs ---------------------------------------------------------------
+
+    def test_a_run_takes_its_steps_one_at_a_time(self):
+        """
+        The point of a run: nothing else starts until the step in hand is done,
+        because two meshers writing at once would race for the same merge.
+        """
+        first = _FakeStep(self.analysis, "First")
+        second = _FakeStep(self.analysis, "Second")
+        run = analysisrun.start([first, second])
+
+        self.assertTrue(run.running)
+        self.assertTrue(first.started)
+        self.assertFalse(second.started, "the second waits for the first")
+        self.assertEqual(run.position, (1, 2))
+
+        first.finish()
+        self.assertTrue(second.started)
+        self.assertEqual(run.position, (2, 2))
+
+        second.finish()
+        self.assertFalse(run.running)
+        self.assertTrue(run.finished)
+
+    def test_a_failed_step_does_not_stop_the_rest(self):
+        """One mesher failing is no reason to leave the others unmeshed."""
+        first = _FakeStep(self.analysis, "First")
+        second = _FakeStep(self.analysis, "Second")
+        run = analysisrun.start([first, second])
+
+        first.fail()
+        self.assertTrue(second.started, "the rest still runs")
+        second.finish()
+
+        self.assertEqual([step.label for step, _ in run.failures], ["First"])
+        self.assertTrue(run.finished)
+
+    def test_cancelling_stops_the_queue_not_only_the_step(self):
+        """
+        What a user pressing Cancel means. What finished stays finished; what
+        had not started never does.
+        """
+        first = _FakeStep(self.analysis, "First")
+        second = _FakeStep(self.analysis, "Second")
+        third = _FakeStep(self.analysis, "Third")
+        run = analysisrun.start([first, second, third])
+
+        first.finish()
+        run.cancel()
+
+        self.assertTrue(second.cancelled, "the one in hand is stopped")
+        self.assertFalse(third.started, "and the rest never starts")
+        self.assertTrue(run.cancelled)
+        self.assertFalse(run.running)
+
+    def test_only_one_run_at_a_time(self):
+        """Two would race for the same meshes."""
+        first = _FakeStep(self.analysis, "First")
+        run = analysisrun.start([first])
+        self.assertIsNotNone(run)
+
+        self.assertIsNone(analysisrun.start([_FakeStep(self.analysis, "Other")]))
+        first.finish()
+
+    def test_the_update_commands_stand_back_while_a_run_is_going(self):
+        """
+        Updating a geometry while its meshers run would clear exactly what they
+        are writing, so the commands that could do it are switched off.
+        """
+        self.source.Shape = Part.makeBox(30, 10, 10)
+        self.document.recompute()
+        self.assertTrue(FreeCADGui.Command.get("FEM_GeometryUpdateMesh").isActive())
+
+        step = _FakeStep(self.analysis, "Meshing")
+        analysisrun.start([step])
+        self.assertFalse(FreeCADGui.Command.get("FEM_GeometryUpdateMesh").isActive())
+        self.assertFalse(FreeCADGui.Command.get("FEM_GeometryUpdate").isActive())
+
+        step.finish()
+        self.assertTrue(FreeCADGui.Command.get("FEM_GeometryUpdateMesh").isActive())
+
+    def test_a_run_says_what_it_is_doing_and_offers_to_stop(self):
+        """
+        The panel reports the run rather than the document while one is going -
+        the derived states would be describing the very thing being worked on.
+        """
+        step = _FakeStep(self.analysis, "MeshGmsh")
+        analysisrun.start([step, _FakeStep(self.analysis, "MeshNetgen")])
+
+        self.assertEqual(self._showing(self.mesh), ["mesh-running"])
+        panel = self._panel(self.mesh, "mesh-running")
+        self.assertIn("MeshGmsh", panel.message.text())
+        self.assertIn("1 of 2", panel.message.text())
+        self.assertEqual([b.text() for _, b in panel.buttons], ["Cancel"])
+
+        self.assertEqual(self._showing(self.geometry), [], "and the geometry holds its tongue")
+        step.finish()
+
+    def test_a_failure_stays_until_it_is_acknowledged(self):
+        """
+        An error the user never saw is an error that did not happen. It waits,
+        and the panel offers the mesher that produced it.
+        """
+        self._add_mesher()
+        step = _FakeStep(self.analysis, "MeshGmsh")
+        analysisrun.start([step])
+        step.fail()
+
+        self.assertEqual(self._showing(self.mesh), ["mesh-failed"])
+        panel = self._panel(self.mesh, "mesh-failed")
+        self.assertIn("MeshGmsh", panel.message.text())
+        self.assertEqual([b.text() for _, b in panel.buttons], ["Acknowledge", "Open mesher"])
+
+        action = panel.buttons[0][0]
+        action.trigger(self.analysis)
+        self.assertEqual(
+            self._showing(self.mesh),
+            ["mesh-empty"],
+            "acknowledged; what is left is the plain truth that there is no mesh",
+        )
+
+    def test_a_new_run_replaces_what_the_last_one_left(self):
+        """
+        A failure answered by running the thing again is not a failure any
+        more, so it does not need acknowledging first.
+        """
+        gmsh = self._add_mesher()
+        first = _FakeStep(self.analysis, "MeshGmsh")
+        analysisrun.start([first])
+        first.fail()
+        self.assertEqual(self._showing(self.mesh), ["mesh-failed"])
+
+        second = _FakeStep(self.analysis, "MeshGmsh")
+        analysisrun.start([second])
+        self.assertEqual(self._showing(self.mesh), ["mesh-running"])
+
+        gmsh.FemMesh = _tet_mesh()
+        second.finish()
+        self.assertEqual(self._showing(self.mesh), [])
+
+    def test_a_run_elsewhere_is_not_this_analysis_business(self):
+        """A run spans the analyses it was given, and reports to those only."""
+        other = ObjectsFem.makeAnalysis(self.document, "Elsewhere")
+        step = _FakeStep(other, "Meshing")
+        analysisrun.start([step])
+
+        self.assertNotIn("mesh-running", self._showing(self.mesh))
+        step.finish()
+
+    def test_a_notification_can_say_that_it_is_work_in_progress(self):
+        """
+        The activity bar and its clock belong to the notification system, not
+        to meshing: a solver reporting a run of its own says it the same way,
+        with the same two hooks and no widget of its own.
+        """
+        ticks = []
+        note = notifications.Notification(
+            key="working",
+            icon="FEM_StateMeshMissing",
+            message="Working",
+            condition=lambda analysis: True,
+            busy=lambda analysis: True,
+            status=lambda analysis: "0:%02d" % len(ticks),
+        )
+        widget = notifications.NotificationWidget([note])
+        panel = widget.panels[0]
+
+        widget.refresh(self.analysis)
+        self.assertTrue(panel.busy)
+        self.assertFalse(panel.activity.isHidden(), "the activity bar is shown")
+        self.assertEqual(panel.status.text(), "0:00")
+
+        # It moves under its own steam: this application runs with UI effects
+        # off, so a bar that left its animation to the style would stand still.
+        before = panel.activity.phase
+        panel.activity.advance()
+        self.assertNotEqual(panel.activity.phase, before)
+
+        # The clock updates without every condition being asked again.
+        ticks.append(1)
+        panel.update_status(self.analysis)
+        self.assertEqual(panel.status.text(), "0:01")
+
+    def test_a_notification_that_is_not_working_shows_no_bar(self):
+        """The bar is the exception, and a plain state must not carry one."""
+        note = notifications.Notification(
+            key="plain",
+            icon="FEM_StateMeshMissing",
+            message="Nothing is happening",
+            condition=lambda analysis: True,
+        )
+        widget = notifications.NotificationWidget([note])
+        widget.refresh(self.analysis)
+
+        panel = widget.panels[0]
+        self.assertFalse(panel.busy)
+        self.assertTrue(panel.activity.isHidden())
+        self.assertTrue(panel.status.isHidden())
+
+    def test_the_running_notification_counts_the_seconds(self):
+        """What the user sees while a mesh is going: a bar, and a clock."""
+        step = _FakeStep(self.analysis, "MeshGmsh")
+        analysisrun.start([step])
+        self._showing(self.mesh)
+
+        panel = self._panel(self.mesh, "mesh-running")
+        self.assertTrue(panel.busy)
+        self.assertRegex(panel.status.text(), r"^\d+:\d\d$")
+        step.finish()
 
     def test_an_action_needs_a_command_or_a_function_but_not_both(self):
         """
@@ -299,7 +551,7 @@ class TestGeometryUpdateGui(unittest.TestCase):
         self.document.recompute()
         self._showing(self.mesh)
 
-        panel = self._panel(self.mesh, "mesh-cleared")
+        panel = self._panel(self.mesh, "mesh-empty")
         action, button = panel.buttons[0]
         self.assertIsNone(action.command, "no command meshes a whole analysis")
         self.assertTrue(button.text())

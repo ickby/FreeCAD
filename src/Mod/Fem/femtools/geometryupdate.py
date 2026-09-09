@@ -175,6 +175,49 @@ def update_with_sources(analysis):
     return reports
 
 
+def mesh_steps(analysis):
+    """One step per mesher of *analysis*, in the order the group holds them."""
+    from femmesh import analysismesh
+    from femtools import analysisrun
+
+    return [analysisrun.MeshStep(m) for m in analysismesh.meshers_of(analysis)]
+
+
+def plan_for(analysis, with_mesh=True):
+    """
+    The steps that would bring one analysis up to date.
+
+    The geometry step is left out when there is nothing behind: a plan says
+    what has to happen, so a run built from it reports only work it is really
+    doing.
+    """
+    from femtools import analysisrun
+
+    steps = []
+    if is_outdated(analysis):
+        steps.append(analysisrun.GeometryStep(analysis))
+    if with_mesh:
+        steps.extend(mesh_steps(analysis))
+    return steps
+
+
+def plan_with_sources(analysis):
+    """
+    The same for every analysis this one imports, deepest first.
+
+    One queue rather than one per analysis, and strictly in order: a source
+    that is rebuilt takes the meshes of everything importing it with it, so a
+    caller meshed before its source is meshed twice - and, since the steps now
+    run one after another rather than all at once, the order is the only thing
+    keeping them out of each other's way.
+    """
+    steps = []
+    for source in source_analyses(analysis):
+        steps.extend(plan_for(source))
+    steps.extend(plan_for(analysis))
+    return steps
+
+
 def report_text(reports):
     """One line per analysis, for the report window."""
     lines = []

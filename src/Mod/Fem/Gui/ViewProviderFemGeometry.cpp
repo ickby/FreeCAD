@@ -70,24 +70,6 @@ std::vector<VTKCellType> cells_2d = {
 };
 
 /**
- * True for FemGeometry toplevel names that address a volume (Solid1, Shell2, …).
- * TopoShape::getElementTypeAndIndex only matches Face/Edge/Vertex and returns an
- * empty kind for these, so the name has to be split here.
- */
-bool isVolumeElementName(const std::string& element)
-{
-    std::size_t digits = element.size();
-    while (digits > 0 && std::isdigit(static_cast<unsigned char>(element[digits - 1]))) {
-        --digits;
-    }
-    if (digits == 0 || digits == element.size()) {
-        return false;
-    }
-    const std::string kind = element.substr(0, digits);
-    return kind == "Solid" || kind == "Shell" || kind == "CompSolid" || kind == "Compound";
-}
-
-/**
  * Document-wide selection observer (Path-style).
  * Avoid SelectionObserver MI on the FeaturePython view provider.
  */

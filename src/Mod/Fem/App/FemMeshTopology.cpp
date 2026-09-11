@@ -119,7 +119,8 @@ MeshTopology Fem::buildMeshTopology(
     std::vector<int> candidates(modelIds.begin(), modelIds.end());
     std::sort(candidates.begin(), candidates.end());
 
-    const auto elementIdRange = static_cast<std::size_t>(std::max(meshDS->MaxElementID(), 0)) + 1;
+    const auto maxElementId = meshDS->MaxElementID();
+    const auto elementIdRange = static_cast<std::size_t>(maxElementId > 0 ? maxElementId : 0) + 1;
 
     // MaxNodeID() is only brought up to date when the mesh is compacted, and a
     // mesh that has just been merged never is, so it answers zero and the flat

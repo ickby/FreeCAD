@@ -22450,9 +22450,11 @@ packages:
   license: LGPL-2.1-only
   license_family: LGPL
   purls: []
-<<<<<<< HEAD
-  size: 24745172
-  timestamp: 1729330315091
+  run_exports:
+    weak:
+    - occt >=7.8.1,<7.8.2.0a0
+  size: 24816612
+  timestamp: 1718828645656
 - conda: https://conda.anaconda.org/conda-forge/win-64/openblas-0.3.33-pthreads_h4a7f399_0.conda
   sha256: d644bed8b9dc67dc78533029c51e13bf6f89ce87c5392ecde259b24893298f90
   md5: 832c0d489b91b7a8756107727b8d6cd7
@@ -22464,13 +22466,6 @@ packages:
   run_exports: {}
   size: 264863
   timestamp: 1776999792607
-=======
-  run_exports:
-    weak:
-    - occt >=7.8.1,<7.8.2.0a0
-  size: 24816612
-  timestamp: 1718828645656
->>>>>>> 3aa5c42298 (FEM: Use occt with vtk also on windows)
 - conda: https://conda.anaconda.org/conda-forge/win-64/opencamlib-2023.01.11-py311h821223c_8.conda
   sha256: 70206211c32e7fd2a02576f91761f19e6179e99979fb9b71d7dd9dcc91a817a1
   md5: ebc9e68bfe3cfe0968167f16352e2b82

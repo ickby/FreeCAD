@@ -677,6 +677,77 @@ def _unconfigured(obj, method):
     return _unconfigured_for(method, obj.Points, obj.Tool)
 
 
+# Partitioning a face with a drawn sketch: what it would take.
+#
+# Investigated and set aside; none of it is implemented. The workflow wanted is
+# to pick a face in the partition panel, draw on it, and have the drawing split
+# that face. Written down because the investigation settled several things that
+# are not visible from the code.
+#
+# The receiving half already exists, and a sketch method would only have to
+# produce a tool shape. _split_sub_elements() slices face targets with any tool,
+# imprints with replaceShape and checks the measure afterwards, and
+# _shortest_path_tool() shows what kind of tool a face split wants: a curve
+# built in the face's UV space and given a shape by toShape(face.Surface), so it
+# lies exactly on the surface. Sketch wires drawn in the plane of a planar face
+# lie on it already; for a curved face, face.makeParallelProjection(wire, dir)
+# returns edges on the surface. Sketching in UV space would cover any face
+# uniformly but is the wrong answer - a dimension in UV is not a length, so
+# "10 mm from that edge" stops being expressible. Either way the wire has to
+# divide the face: one that ends mid-face gives OCC nothing or a dangling seam,
+# and the measure check catches deletion but not a silent no-op.
+#
+# Where the sketch may take its plane from is decided by the dependency graph.
+# Attaching to the geometry group is a cycle, because the group publishes what
+# this step produces. Attaching to the step *before* this one is not: the input
+# comes from there, so import -> sketch -> partition -> group is acyclic.
+#
+# Sketcher will not attach to an analysis geometry as it stands. It requires a
+# Part::Feature and FemGeometry is a plain App::GeoFeature: evaluateSupport()
+# rejects it, rebuildExternalGeometry() throws Base::TypeError at the end of its
+# type chain, and validateExternalLinks() does an unchecked
+# static_cast<const Part::Feature*> and then reads Shape - undefined behaviour,
+# not a clean failure. Attachment itself would work (AttachEngine only wants an
+# App::GeoFeature and resolves through Part::Feature::getTopoShape, which
+# FemGeometry answers), but external geometry would not.
+#
+# Two ways round that were worked out, both avoiding any change to Sketcher.
+#
+# Frozen sketch. MapMode "Deactivated" and a placement written from the target
+# face; AttachExtension::positionBySupport() returns false before touching the
+# placement in that mode, so nothing moves it afterwards. Nothing links back to
+# the geometry, so the cycle is impossible by construction. The face's own edges
+# are copied in as construction geometry, transformed into the sketch frame the
+# way _plane_solid_pieces() already transforms elements, converted to the nine
+# types the solver accepts (point, line segment, circle, ellipse, the four arcs,
+# B-spline - anything else through Curve.toBSpline), and pinned with a Block
+# constraint so they behave like external geometry instead of being draggable.
+# SketchObject::buildShape() skips construction geometry, so the copies can
+# never leak into the tool. The cost is drift: the step has to store the baked
+# placement, compare it against the face's current plane and raise Outdated
+# itself, which is the same update-on-request policy the rest of the chain runs
+# on. Only edges lying in the sketch plane can be copied, so nothing outside the
+# target face is available to constrain against.
+#
+# Helper feature. A hidden Part::Feature republishing the target face from the
+# preceding step, with the sketch attached to it by FlatFace. Being a genuine
+# Part::Feature it makes every Sketcher limitation above go away, external
+# geometry included, and it follows the chain if it is given the same
+# should_rebuild discipline as a step. It costs one object per sketch that has
+# to be claimed in the tree and kept out of the import source pickers. Worth
+# noting that a helper holding only the one face offers exactly the edges the
+# frozen copies do - the difference is read-only and self-refreshing versus
+# editable and refreshed by hand. A helper holding the whole base shape is the
+# only one of the two that can reference geometry beyond the face being cut,
+# which is the question that decides between them.
+#
+# The cheap step in this direction, if freehand partitioning turns out to be
+# what is wanted before a sketch is: extend METHOD_SHORTEST_PATH from two picks
+# to a chain of them, replacing Line2dSegment with a 2D polyline or B-spline in
+# the same UV space. That reuses everything here and needs no sketch at all,
+# at the price of having no constraints or dimensions.
+
+
 def _tool_shape(base_obj, base_shape, method, elements, *, points, tool, parameter):
     """
     The cutting tool for method, or raise if the configuration is wrong.

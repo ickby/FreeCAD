@@ -108,6 +108,35 @@ def _tool_rule():
     )
 
 
+# Driving a sketch from this panel: what was found, and set aside.
+#
+# The wanted flow is to pick a face here, draw on it, and come back. See the
+# note above _tool_shape() in femobjects/geometry_partition.py for the geometry
+# half; this is what the task panel side would cost.
+#
+# Two panels cannot be open at once. Gui::TaskView::TaskView keeps one dialog
+# per document and asserts on a second, and ViewProviderSketch::setEdit() checks
+# for an open dialog and offers to close it before it will edit. So entering the
+# sketch means this panel goes away first. Coming back when the user leaves the
+# sketch is what Gui.addDocumentObserver() is for: slotResetEdit fires when the
+# sketch's edit mode ends, and the observer can reopen this panel. Failing that,
+# closing the sketch simply leaves the user in the tree and a double click
+# reopens the step, which is the version to build first.
+#
+# Keeping both in one panel is possible and was rejected as too invasive. The
+# Sketcher tool commands gate on isSketchInEdit(), which only asks whether
+# doc->getInEdit() is a ViewProviderSketch in edit mode - the task panel plays
+# no part - and setEdit() adopts an already-open TaskDlgEditSketch belonging to
+# the same view provider instead of creating its own. So a dialog deriving from
+# TaskDlgEditSketch could push this panel's widgets into the protected Content
+# list and be shown before setEdit is called, giving one panel with both. It
+# needs FemGui to link SketcherGui, it couples to protected members and to that
+# adopt-the-open-dialog behaviour, and the Sketcher toolbars are not present
+# outside the Sketcher workbench, so the few tools worth having (line, polyline,
+# arc, trim, a constraint or two) would have to be buttons here running the
+# commands by name.
+
+
 class _PartitionTaskPanel(base_femtaskpanel._BaseTaskPanel):
     """Task panel for partitioning geometry in the analysis chain."""
 
